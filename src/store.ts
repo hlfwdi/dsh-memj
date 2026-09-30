@@ -213,54 +213,110 @@ export function byUpdatedDesc(
   return a.id.localeCompare(b.id)
 }
 
-/** 同一份 options 的**在飞**扫描（仅用于合并并发；扫描一结束就删）。 */
-const inFlightScans = new Map<string, Promise<LibrarySnapshot>>()
+/**
+ * **磁盘全量扫描**的在飞登记（仅用于合并并发；扫描一结束就清空）。
+ * ⚠️ **只登记一份**（不带 options 键）：磁盘扫描与 options 无关 —— 见 `scanLibrary` 的注释。
+ */
+let inFlightScanAll: Promise<UnfilteredSnapshot> | undefined
+
+/** 未经 options 过滤的原始扫描结果（`applyScanOptions` 的输入）。 */
+interface UnfilteredSnapshot {
+  /** 全部项目（**含归档**），顺序为文档遍历序（排序在过滤之后做）。 */
+  projects: ProjectRecord[]
+  /** 全部封面（**含归档 + history**）。 */
+  covers: ParsedCover[]
+  /** 硬校验问题（**永远不过滤**：归档封面的问题照报，决策 133）。 */
+  issues: CoverIssue[]
+  /** `themes/` 目录里的主题 id（已去掉 `THEME-` 前缀与后缀）。 */
+  themeFiles: string[]
+}
 
 /**
  * 扫描整个库（项目文档 + 全部封面 + 主题清单）。
  *
  * ⚠️ 这是**唯一的全量扫描入口**，`memj_info` / `memj_search` / `rebuild` 都用它。
  *
- * ⭐⭐ **并发合并（2026-09-30 加，纯性能、零语义变化）**：
- *    网页首页一次并发发 7 个接口，而**每个接口各自**调一次本函数。
- *    库已长到 **900KB 文档 / 414 封面**（单次扫描 ~250ms）⇒
- *    Node 单线程把这 7 次排成一条队 ⇒ **首屏要等 4~5 秒**（实测：covers 4103ms、health 2094ms，
- *    而它们单独跑只有 1000ms / 357ms）。
+ * ⭐⭐ **一次磁盘扫描 + 按 options 内存过滤**（2026-09-30 改造，第二次性能修正）：
  *
- * 🔴 **只合并"同时发生"的调用**（`Map` 键 = options 组合），**扫描一结束就删登记项**
+ *    **① 为什么要合并**：网页首页一次并发发 7 个接口，而**每个接口各自**调一次本函数。
+ *       库已长到 **900KB 文档 / 414 封面**（单次扫描 ~190ms）⇒
+ *       Node 单线程把这 7 次排成一条队 ⇒ **首屏要等 4~5 秒**
+ *       （实测：`/covers` 并发 4103ms、连 421B 的 `/health` 都要 2094ms，
+ *       而它们单独跑只有 1000ms / 357ms）。
+ *
+ *    **② 为什么合并的粒度是"整个库"、而不是"每种 options 一份"**：
+ *       那 7 个接口用了 **3 种 options**（`{}` / `{H}` / `{A}`），按 options 分组合并
+ *       ⇒ **仍要扫 3 轮库**（实测端到端：全部 API 完成 1889ms，而单次扫描只要 ~190ms
+ *       ⇒ 绝大部分时间花在"重复读同一批文件"上）。
+ *       ⇒ 现在**磁盘只扫一次（永远全量）**，各调用方要的视图由 `applyScanOptions`
+ *         在**内存里**过滤出来 —— ⭐ 过滤是纯内存 O(n)（<1ms），扫描是 ~190ms 的 IO。
+ *
+ *    **③ 为什么这样是安全的**：`scanLibrary(options)` 的**对外语义一字未变** ——
+ *       调用方拿到的仍是"已按自己 options 过滤好的快照" ⇒ **38 处调用点一行不用改**。
+ *       等价性全部由 `applyScanOptions` 承担（它必须逐字段对齐，见该函数的注释）。
+ *
+ * 🔴 **只合并"同时发生"的调用**（单个在飞登记），**扫描一结束就清空**
  *    ⇒ **不跨请求保留结果**，所以**不会**让界面看到旧数据
  *    —— 这是它与"TTL 缓存"的本质区别（本项目有「缓存导致刷新半生效」的前车之鉴）。
- *
- * ⚠️ 键里带上 options 组合：`includeArchived` / `includeHistory` 不同的调用
- *    **不能共享**同一份快照（它们要的根本不是同一批数据）。
- * @param options - 见 `ScanOptions`（默认排除归档物）。
- * @returns 库快照。
+ * @param options - 见 `ScanOptions`（默认排除归档物与历史条目）。
+ * @returns 库快照（**已按 options 过滤**）。
  */
 export async function scanLibrary(options: ScanOptions = {}): Promise<LibrarySnapshot> {
-  const key = `${options.includeArchived === true ? 'A' : ''}${options.includeHistory === true ? 'H' : ''}`
-  const running = inFlightScans.get(key)
-  if (running !== undefined) return running
-  const p = scanLibraryUncached(options)
-  // ⚠️ 登记必须在**拿到 promise 之后、await 之前**：中间这段是同步的，不会有别的调用插进来。
-  inFlightScans.set(key, p)
+  const p = inFlightScanAll ?? (inFlightScanAll = scanAllUnfiltered())
+  let full: UnfilteredSnapshot
   try {
-    return await p
+    full = await p
   } finally {
-    // 🔴 **必须删**：留着就退化成"永久缓存"（写操作之后界面会看到旧数据）。
-    inFlightScans.delete(key)
+    // 🔴 **必须清**：留着就退化成"永久缓存"（写操作之后界面会看到旧数据）。
+    inFlightScanAll = undefined
   }
+  return applyScanOptions(full, options)
 }
 
 /**
- * `scanLibrary` 的**未合并**实现 —— 真正的全量扫描。
+ * 按 options 把**全量扫描结果**过滤成调用方要的视图。
  *
- * ⚠️ **不要直接调它**（绕过合并 ⇒ 首页又变回 7 次扫描）；只有 `scanLibrary` 包装器该调。
+ * 🔴🔴 **本函数是"零语义变化"的全部关键**：它必须与旧实现（在扫描循环里逐条过滤）
+ *    **在每个字段上逐一对齐**，否则 38 处调用点会看到不同的库。三处必须特别小心：
+ *
+ *     · **项目排序**：旧实现是"**先过滤、再排序**"（`projects.sort` 只作用于已收集的那些）
+ *       ⇒ 这里也必须先过滤再排 —— 不能"对全量排完再过滤"（`byUpdatedDesc` 的空串兜底
+ *       比较会因此变序）；
+ *     · ⭐ **`themeIds` 必须从【过滤后的 covers】推导**：旧实现的 `themeIdSet` 只遍历
+ *       **已过滤**的 covers ⇒ 若在这里遍历全量，默认视图会**冒出"只在归档/历史封面里
+ *       出现过的主题"**（数字与列表都会变，正是本项目最忌讳的"数字悄悄变"）；
+ *     · **`issues` 不过滤**（决策 133：归档封面的硬校验问题照报，保持硬校验一致）。
+ * @param full - `scanAllUnfiltered()` 的结果。
  * @param options - 见 `ScanOptions`。
  * @returns 库快照。
  */
-async function scanLibraryUncached(options: ScanOptions = {}): Promise<LibrarySnapshot> {
+function applyScanOptions(full: UnfilteredSnapshot, options: ScanOptions): LibrarySnapshot {
   const includeArchived = options.includeArchived === true
   const includeHistory = options.includeHistory === true
+  // ⭐ 先过滤、再排序（与旧实现一致）。
+  const projects = includeArchived
+    ? [...full.projects]
+    : full.projects.filter((p) => p.frontmatter.archivedAt === '')
+  projects.sort(byUpdatedDesc)
+  const covers = full.covers.filter(
+    (c) =>
+      (includeArchived || c.cover.archivedAt === '') && (includeHistory || c.cover.kind !== 'history'),
+  )
+  const themeIdSet = new Set<string>()
+  for (const c of covers) for (const t of c.cover.theme) themeIdSet.add(t)
+  for (const id of full.themeFiles) if (id !== '') themeIdSet.add(id)
+  return { projects, covers, issues: full.issues, themeIds: [...themeIdSet].sort() }
+}
+
+/**
+ * `scanLibrary` 的**未过滤**实现 —— 真正读盘的扫描。
+ *
+ * 🔴 **它不做任何 options 过滤**（全收：含归档项目、含归档封面、含 history 封面）；
+ *    过滤是 `applyScanOptions` 的事。
+ * ⚠️ **不要直接调它**（绕过合并 ⇒ 首页又变回多次扫描）；只有 `scanLibrary` 该调。
+ * @returns 未过滤的扫描结果。
+ */
+async function scanAllUnfiltered(): Promise<UnfilteredSnapshot> {
   const projects: ProjectRecord[] = []
   const covers: ParsedCover[] = []
   const issues: CoverIssue[] = []
@@ -272,56 +328,37 @@ async function scanLibraryUncached(options: ScanOptions = {}): Promise<LibrarySn
     const text = (await readTextIfExists(join(projectsDir(), file))) ?? ''
     const { data } = splitFrontmatter(text)
     const frontmatter = normalizeProjectFrontmatter(data, id)
-    // ⭐ **项目层过滤**（决策 133）：归档项目不进 `projects`（=> 项目列表 / 项目操作看不见它）。
-    if (includeArchived || frontmatter.archivedAt === '') {
-      projects.push({ id, frontmatter, text })
-    }
+    // ⭐ **全收**（含归档项目）—— 归档过滤交给 `applyScanOptions`。
+    projects.push({ id, frontmatter, text })
 
-    // 🔴🔴 **无论项目是否归档，都必须解析它的封面**——这是本功能最容易搞错的一步。
-    //     用户明确裁定「**归档项目时，旗下知识不归档**，封面里的挂靠信息也不变更」，
-    //     而**封面物理上就存在这个项目文档里**（`parseCovers(text, file)`）
-    //     ⇒ 若按"归档项目就跳过整个文档"来做，它旗下的封面会**一起消失**，
-    //       正好与用户的要求相反。
-    //     ⇒ ⭐ **项目层的过滤与封面层的过滤是两件独立的事**，不能合并成一个 continue。
+    // 🔴🔴 **无论项目是否归档，都必须解析它的封面**（判据一字未改）：
+    //     用户明确裁定「**归档项目时，旗下知识不归档**」，而**封面物理上就存在这个项目文档里**
+    //     ⇒ 若按"归档项目就跳过整个文档"来做，它旗下的封面会**一起消失**，正好与要求相反。
+    //     ⇒ ⭐ **项目层的过滤与封面层的过滤是两件独立的事**，现在分别在 `applyScanOptions`
+    //       里各做各的（原来是在这里各写一个条件）。
     const parsed = parseCovers(text, file)
-    // ⭐⭐ **历史归档过滤**（决策 136）：`kind: 'history'` 不参与检索/列表。
-    //    🔴 与归档过滤**正交**（两件事各是一个维度）⇒ 两个独立的条件。
-    const visible = parsed.covers.filter(
-      (c) =>
-        (includeArchived || c.cover.archivedAt === '') &&
-        (includeHistory || c.cover.kind !== 'history'),
-    )
-    covers.push(...visible)
+    // ⭐ **全收**（含归档封面与 `history` 封面）—— 同样交给 `applyScanOptions`。
+    covers.push(...parsed.covers)
     // ⚠️ `issues` **不过滤**：归档封面的硬校验问题照报（决策 133：硬校验保持一致）。
     issues.push(...parsed.issues)
   }
 
-  // ⭐⭐ **项目列表按 `updatedAt` 倒序**（最近更新的排最前）——
-  //    🔴 **做在这里是刻意的**：项目列表有四个消费方（网页项目页/网页下拉框/
-  //       `get-handoff` 弹窗/该命令的无参机读清单）⇒ 在唯一全量扫描入口排一次，
-  //       四个消费方**自动一致**；排在各消费方 ⇒ 同一语义会有 N 份实现（栽过多次）。
-  //    ⚠️ 判据与"空串排最后/必须确定性"的细节见 `byUpdatedDesc`。
-  //    ⚠️ 原来是 `a.id.localeCompare(b.id)`（字母序）——那个顺序对人不友好，
-  //       尤其 `get-handoff` 的弹窗：最近在做的项目要翻到底才找得到。
-  projects.sort(byUpdatedDesc)
+  // ⚠️ **这里不排序**：项目排序发生在 `applyScanOptions` 的"**过滤之后**"
+  //    —— 必须与旧实现同序（旧实现只对"已收集的项目"排序，空串兜底比较会因集合不同而变序）。
 
-  // 主题 id：**以封面里出现过的为准**（§2.4 铁律 4「不预先登记」）。
-  // THEME 文档本身是派生物，它存在与否不构成"主题存在"的定义；
-  // 但为了让"已建但暂无封面"的主题也不丢，这里把两侧并起来。
-  const themeIdSet = new Set<string>()
-  for (const c of covers) for (const t of c.cover.theme) themeIdSet.add(t)
-  const themeFiles = await listFiles(themesDir(), (n) => n.startsWith('THEME-') && n.endsWith(MD_SUFFIX))
-  for (const f of themeFiles) {
+  // 主题 id 的"文件侧"来源（`themes/` 目录）—— ⚠️ **封面侧的主题**由
+  // `applyScanOptions` 在**过滤后**并进来（否则默认视图会冒出只在归档/历史封面里出现过的主题）。
+  const themeFiles: string[] = []
+  const themeFileNames = await listFiles(
+    themesDir(),
+    (n) => n.startsWith('THEME-') && n.endsWith(MD_SUFFIX),
+  )
+  for (const f of themeFileNames) {
     const id = f.slice('THEME-'.length, -MD_SUFFIX.length)
-    if (id !== '') themeIdSet.add(id)
+    if (id !== '') themeFiles.push(id)
   }
 
-  return {
-    projects,
-    covers,
-    issues,
-    themeIds: [...themeIdSet].sort(),
-  }
+  return { projects, covers, issues, themeFiles }
 }
 
 /**

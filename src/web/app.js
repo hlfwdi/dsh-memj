@@ -2852,11 +2852,36 @@ function fillSelect(id, pairs, allLabel) {
 /** 拉全部数据并渲染。 */
 async function load() {
   try {
+    // ⭐⭐ **首屏优先：`covers` 一到就先把列表画出来**（2026-09-30，性能）。
+    //
+    // 🔴 **为什么**：下面那个 `Promise.all` 要等**全部 7 个**接口才渲染，而列表本身
+    //    只依赖 `covers`（实测 ~1s）；其余接口（health / themes / archived…）让首屏
+    //    多等约 0.6s —— 那段时间屏幕上**什么都还没有**（用户报的就是这个感觉）。
+    //
+    // ⭐ **只请求一次**：这里把 `covers` 的 promise 存下来，下面 `Promise.all` **复用同一个**
+    //    —— 否则会重复拉一次 310KB，还要再付一次 414 条的"存在性检查"。
+    //
+    // ⚠️ 下面 `Promise.all` 之后**仍会统一重画一次**（保持既有语义：下拉框、归档列表、
+    //    顶栏统计都到齐后再画一遍，各页数据因此保持一致）。
+    // ⚠️ 首屏这次渲染**吞掉自己的异常**：真正决定成败的是下面那个 `Promise.all`
+    //    （它失败才走 `catch` 弹 toast），首屏渲染失败不该改变错误语义。
+    const coversP = getJson('/covers')
+    void coversP
+      .then((covers) => {
+        state.covers = covers.covers ?? []
+        state.broken = covers.brokenLinks ?? []
+        state.invalid = covers.invalid ?? []
+        renderKbList()
+        renderInvalid()
+        renderBroken()
+      })
+      .catch(() => {})
+
     const [health, projects, themes, covers, noms, arcE, arcP] = await Promise.all([
       getJson('/health'),
       getJson('/projects'),
       getJson('/themes'),
-      getJson('/covers'),
+      coversP,
       getJson('/nominations'),
       // ⭐ 归档清单（决策 133）——**两个子页各一份**，与活跃清单分开拉。
       getJson('/archived?kind=entry'),
