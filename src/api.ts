@@ -28,7 +28,7 @@ import {
   specOf,
 } from './prompts.ts'
 import { promptOverridesPath } from './paths.ts'
-import { readTextIfExists } from './files.ts'
+import { fileExistsStat, readTextIfExists } from './files.ts'
 import {
   fixCoverBlock,
   fixExternalRef,
@@ -208,8 +208,17 @@ async function listCoversWithLinkCheck(
 
   for (const { cover, sourceFile, line } of snapshot.covers) {
     const abs = resolveRef(cover.ref, cover.ext)
-    const doc = abs === undefined ? undefined : await loadEntryDoc(cover.ref, cover.ext)
-    if (doc === undefined && cover.ext) {
+    // ⭐⭐ **只 `stat` 判存在**（2026-09-30，为性能）：原来这里**无条件**调 `loadEntryDoc`
+    //    ⇒ 414 张封面各读一次**全文** + 解析 frontmatter（实测约占 `/covers` 的 700/1000ms）。
+    //    🔴 而正文**只在"需要回退值"时**才真的用得上 —— 见下面的 `needFallback`。
+    const exists = abs === undefined ? false : await fileExistsStat(abs)
+    // 🔴 回退值只有三处用途：标题为空、或两个时间缺任一 ⇒ 才值得为它读全文。
+    //    ⚠️ 本判据必须与下面 `covers.push` 里的**取用方式严格对齐**，否则会静默少读/多读。
+    const needFallback =
+      exists &&
+      (cover.title.trim() === '' || (cover.updatedAt ?? '') === '' || (cover.createdAt ?? '') === '')
+    const doc = needFallback ? await loadEntryDoc(cover.ref, cover.ext) : undefined
+    if (!exists && cover.ext) {
       brokenLinks.push({ id: cover.id, ref: cover.ref, project: cover.project, sourceFile, line })
     }
     covers.push({
@@ -225,7 +234,9 @@ async function listCoversWithLinkCheck(
       ext: cover.ext,
       // ⭐ 标题优先取封面（决策 98）；`doc?.title` 已含"frontmatter → 正文回退"。
       title: cover.title.trim() !== '' ? cover.title : (doc?.title ?? ''),
-      missing: doc === undefined,
+      // ⚠️ 判据从 `doc === undefined` 改成 `!exists`（只 stat，2026-09-30）——
+      //    语义差别仅在"文件在、但读不动"这个边界（旧：算缺；新：算在）。
+      missing: !exists,
       // ⭐ 时间（决策 119 / 123）：列表要**按更新时间倒序**、并显示小字时间。
       // 🔴🔴 **必须"封面优先"**（决策 139 修）：
       //    原来只从**正文文档的 frontmatter** 取 ⇒ **外链条目的时间恒为空**

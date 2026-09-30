@@ -213,15 +213,52 @@ export function byUpdatedDesc(
   return a.id.localeCompare(b.id)
 }
 
+/** 同一份 options 的**在飞**扫描（仅用于合并并发；扫描一结束就删）。 */
+const inFlightScans = new Map<string, Promise<LibrarySnapshot>>()
+
 /**
  * 扫描整个库（项目文档 + 全部封面 + 主题清单）。
  *
  * ⚠️ 这是**唯一的全量扫描入口**，`memj_info` / `memj_search` / `rebuild` 都用它。
- * 库规模是几十份文档量级（§11.11），全量扫描完全够用；将来库大了再谈索引。
+ *
+ * ⭐⭐ **并发合并（2026-09-30 加，纯性能、零语义变化）**：
+ *    网页首页一次并发发 7 个接口，而**每个接口各自**调一次本函数。
+ *    库已长到 **900KB 文档 / 414 封面**（单次扫描 ~250ms）⇒
+ *    Node 单线程把这 7 次排成一条队 ⇒ **首屏要等 4~5 秒**（实测：covers 4103ms、health 2094ms，
+ *    而它们单独跑只有 1000ms / 357ms）。
+ *
+ * 🔴 **只合并"同时发生"的调用**（`Map` 键 = options 组合），**扫描一结束就删登记项**
+ *    ⇒ **不跨请求保留结果**，所以**不会**让界面看到旧数据
+ *    —— 这是它与"TTL 缓存"的本质区别（本项目有「缓存导致刷新半生效」的前车之鉴）。
+ *
+ * ⚠️ 键里带上 options 组合：`includeArchived` / `includeHistory` 不同的调用
+ *    **不能共享**同一份快照（它们要的根本不是同一批数据）。
  * @param options - 见 `ScanOptions`（默认排除归档物）。
  * @returns 库快照。
  */
 export async function scanLibrary(options: ScanOptions = {}): Promise<LibrarySnapshot> {
+  const key = `${options.includeArchived === true ? 'A' : ''}${options.includeHistory === true ? 'H' : ''}`
+  const running = inFlightScans.get(key)
+  if (running !== undefined) return running
+  const p = scanLibraryUncached(options)
+  // ⚠️ 登记必须在**拿到 promise 之后、await 之前**：中间这段是同步的，不会有别的调用插进来。
+  inFlightScans.set(key, p)
+  try {
+    return await p
+  } finally {
+    // 🔴 **必须删**：留着就退化成"永久缓存"（写操作之后界面会看到旧数据）。
+    inFlightScans.delete(key)
+  }
+}
+
+/**
+ * `scanLibrary` 的**未合并**实现 —— 真正的全量扫描。
+ *
+ * ⚠️ **不要直接调它**（绕过合并 ⇒ 首页又变回 7 次扫描）；只有 `scanLibrary` 包装器该调。
+ * @param options - 见 `ScanOptions`。
+ * @returns 库快照。
+ */
+async function scanLibraryUncached(options: ScanOptions = {}): Promise<LibrarySnapshot> {
   const includeArchived = options.includeArchived === true
   const includeHistory = options.includeHistory === true
   const projects: ProjectRecord[] = []

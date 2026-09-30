@@ -12,7 +12,7 @@
  */
 
 import { randomBytes } from 'node:crypto'
-import { mkdir, readFile, readdir, rename, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
 /** 确保目录存在（递归）。 */
@@ -127,5 +127,30 @@ export async function pathExists(path: string): Promise<boolean> {
     } catch {
       return false
     }
+  }
+}
+
+/**
+ * ⭐ **只 `stat` 的轻量存在性判断**（2026-09-30 新增，为性能）。
+ *
+ * 🔴 **为什么不能直接用上面那个 `pathExists`**：它的实现是 `readFile(path)` ——
+ *    **会把整个文件读进内存**（只是不解码、不解析）。在"逐条判断几百个条目"的
+ *    循环里，那等于几百次全文 IO。
+ *
+ * ⭐ 用途：只需要"在不在"、**不需要内容**的场景。首个用户是 `/covers` 的
+ *    「缺正文 / 外链断链」判断 —— 414 张封面各读一次全文 ≈ 700ms（实测）。
+ *
+ * ⚠️ **语义差别（用之前先想清楚）**：本函数判的是**存在**；
+ *    `pathExists` 判的是**可读**（权限不足时它 `false`、本函数 `true`）。
+ *    ⇒ **不要拿它去替换既有的 `pathExists` 调用**，两者在"文件在但读不动"时会分叉。
+ * @param path - 文件路径。
+ * @returns 能 `stat` 到 ⇒ `true`。
+ */
+export async function fileExistsStat(path: string): Promise<boolean> {
+  try {
+    await stat(path)
+    return true
+  } catch {
+    return false
   }
 }
