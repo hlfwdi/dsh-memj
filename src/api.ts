@@ -193,7 +193,7 @@ async function readPromptDetail(key: string): Promise<{
  * @returns 封面清单与断链项。
  */
 async function listCoversWithLinkCheck(
-  opts: { includeArchived?: boolean; includeHistory?: boolean } = {},
+  opts: { includeArchived?: boolean; includeHistory?: boolean; onlyArchived?: boolean } = {},
 ): Promise<{
   covers: unknown[]
   brokenLinks: Array<{ id: string; ref: string; project: string; sourceFile: string; line: number }>
@@ -207,6 +207,18 @@ async function listCoversWithLinkCheck(
   const brokenLinks: Array<{ id: string; ref: string; project: string; sourceFile: string; line: number }> = []
 
   for (const { cover, sourceFile, line } of snapshot.covers) {
+    // ⭐⭐ **预筛：只要归档条目时，先按封面字段跳过活跃的**（2026-09-30，为性能）。
+    //
+    // 🔴 **为什么这很重要**：`/archived` **只要 5 条归档**，却在旧写法里调
+    //    `listCoversWithLinkCheck({ includeArchived: true })` ⇒ **对全部 414 条**
+    //    各做一次存在性检查，**然后才筛出归档** ⇒ 白付 409 次文件检查；
+    //    更糟的是它与 `/covers` **同时**做同一批检查、互相争抢
+    //    （实测：两个接口都被拖到 ~1.48s，而扫描共享后只要 ~200ms）。
+    // ⭐ **归档判据就在封面上**（`cover.archivedAt`）—— **不碰文件就能筛** ⇒
+    //    这一步是纯内存的，零 IO。
+    // ⚠️ `invalid`（= `snapshot.issues`）**不受本预筛影响**：它在循环之外取，
+    //    仍是**全量**硬校验问题（决策 133 的口径不变）。
+    if (opts.onlyArchived === true && (cover.archivedAt ?? '') === '') continue
     const abs = resolveRef(cover.ref, cover.ext)
     // ⭐⭐ **只 `stat` 判存在**（2026-09-30，为性能）：原来这里**无条件**调 `loadEntryDoc`
     //    ⇒ 414 张封面各读一次**全文** + 解析 frontmatter（实测约占 `/covers` 的 700/1000ms）。
@@ -505,10 +517,11 @@ export async function handleApi(
           }))
         return { status: 200, body: { ok: true, kind, projects } }
       }
-      const data = await listCoversWithLinkCheck({ includeArchived: true })
-      const covers = (data.covers as Array<{ archivedAt?: string }>)
-        .filter((c) => (c.archivedAt ?? '') !== '')
-      return { status: 200, body: { ok: true, kind, covers, invalid: data.invalid } }
+      // ⭐⭐ **只要归档的**（`onlyArchived`）⇒ 存在性检查从 414 次降到归档那几条。
+      //    🔴 原来传 `{ includeArchived: true }` 再在下面 `.filter(...)` —— 那是
+      //       "**先全量检查、再筛**"，白付 409 次文件检查（详见该函数的注释）。
+      const data = await listCoversWithLinkCheck({ includeArchived: true, onlyArchived: true })
+      return { status: 200, body: { ok: true, kind, covers: data.covers, invalid: data.invalid } }
     }
 
     // ══════════════════════════════════════════════════════════════════════
