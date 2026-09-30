@@ -838,6 +838,40 @@ check('🔴 同一个父节下的同名子节 ⇒ **报**同名小节',
 check('  报警里带父节名（`父节 › 子节` 形态）',
   dupReal.message.includes('目标 › 一、通用方法'), dupReal.message.slice(0, 320))
 
+// ⑩ ⭐⭐ 同一条检查也必须覆盖**整份 `doc` 路径**（2026-09-30 接上）
+//
+// 背景：⑨ 那条检查原先只挂在**按节路径**的分支里 ⇒ 整份 `doc` 路径**漏检**；
+//   而"把别节标题抄进 doc"这个坑**两条路径都会踩** ⇒ 现已移出分支、两条路径共用同一套判据。
+// ⚠️ 下面这两条正是那个缺口的**回归防线** —— 补缺口之前，它们要么写不出来、要么是**假绿**
+//   （第一版用例就是拿整份 doc 构造的，当时断言恒真，因此才发现了这个缺口）。
+const wholeLegal = await runHandoff({
+  project: 'dsh-memj',
+  doc: [
+    '## 目标', '', '整份新目标', '',
+    '### 一、通用方法', '', '甲', '',
+    '## 当前进度', '', '整份新进度', '',
+    '### 一、通用方法', '', '乙',
+  ].join('\n'),
+}, { sessionId: 'sess-dup-whole-legal', turn: 11, config: CFG })
+check('⭐⭐ 整份 doc 路径：跨顶层节的同名子节 ⇒ **不报**',
+  wholeLegal.ok === true && !wholeLegal.message.includes('同名小节'),
+  wholeLegal.message.slice(0, 240))
+
+const wholeReal = await runHandoff({
+  project: 'dsh-memj',
+  doc: [
+    '## 目标', '', '整份新目标2', '',
+    '### 一、通用方法', '', '甲', '',
+    '### 一、通用方法', '', '乙', '',
+    '## 当前进度', '', '整份新进度2',
+  ].join('\n'),
+}, { sessionId: 'sess-dup-whole-real', turn: 12, config: CFG })
+check('🔴 整份 doc 路径：同一个父节下的同名子节 ⇒ **报**',
+  wholeReal.ok === true && wholeReal.message.includes('同名小节'),
+  wholeReal.message.slice(0, 240))
+check('  整份 doc 路径的报警同样带父节名',
+  wholeReal.message.includes('目标 › 一、通用方法'), wholeReal.message.slice(0, 320))
+
 console.log(`\n═══ 端到端结果：通过 ${pass} / 失败 ${fail} ═══`)
 console.log(`库根保留在: ${lib}（供人工查看；测试结束会删除）`)
 rmSync(lib, { recursive: true, force: true })
