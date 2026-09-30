@@ -1,0 +1,10 @@
+# dsh-memj —— host-only 插件。
+#
+# 本插件只挂 host 半边（工具 / 协议注入 / 斜杠命令 / API 路由），
+# 没有 client 半边，故不需要 `dsh.client` 声明。
+#
+# `dsh.bundle.patch` 是**必需**的：package.json 里声明了它，
+# 缺文件会在 profile 加载期**硬失败**（dsh-app-boot 读 overlay 时直接抛）。
+- insert:
+    - id: memj
+      name: dsh-memj

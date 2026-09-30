@@ -1,0 +1,210 @@
+/**
+ * 一次性跑完全部测试与一致性检查。
+ *
+ * 分三类：
+ *  - **常规四件套**：离线核心 / host 契约 / 端到端 / client 契约；
+ *  - **kind 专项**：`kind` 影响校验与聚合路径，单独两个脚本；
+ *  - **一致性**：协议文本与设计文档 §6 逐字节一致、工具 description 可重新生成。
+ *
+ * 用法：node scripts/run-all-tests.mjs
+ *
+ * ⚠️ **必须在 `pnpm run build` 之后跑**——这些脚本都 import `lib/` 的产物。
+ */
+import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
+
+const here = dirname(fileURLToPath(import.meta.url))
+
+/** 测试与检查清单：[显示名, 脚本, 参数]。 */
+const SUITES = [
+  // ── 常规四件套 ──
+  ['离线核心', 'test-core.mjs', []],
+  ['host 契约', 'probe-host.mjs', []],
+  ['端到端', 'test-handoff.mjs', []],
+  ['client 契约', 'probe-client.mjs', []],
+  // ── kind 专项（2026-09-18 并入）──
+  ['kind·内部重建', 'test-kind-rebuild.mjs', []],
+  ['kind·rebuild 工具', 'test-rebuild-tool.mjs', []],
+  // ── 写回完整性（2026-09-19 并入：§8.7 的四个实测缺陷）──
+  ['写回完整性', 'test-rewrite-integrity.mjs', []],
+  // ── 网页 API 与修复写通道（2026-09-19 并入：§8.2 / §8.6）──
+  ['网页 API', 'test-web-api.mjs', []],
+  // ── 新建主题双模式（2026-09-19 并入：决策 95/96/97）──
+  ['主题双模式', 'test-theme-mode.mjs', []],
+  // ── handoff 分步（2026-09-19 并入：决策 101/102）──
+  ['handoff 分步', 'test-handoff-step.mjs', []],
+  // ── host 硬校验闸门（2026-09-19 并入：决策 103）──
+  ['host 闸门', 'test-gate.mjs', []],
+  // ── 提示词切分（2026-09-19 并入：决策 105）──
+  //    ⭐ 它防的是"切分时把某条规范**彻底弄丢**"——按文本片段逐条断言，
+  //    并验证"同一条信息不再两处都有"。
+  ['提示词切分', 'test-prompt-split.mjs', []],
+  // ── 「取交接」命令（2026-09-19 并入：决策 110）──
+  //    ⭐ 重点：三档差异 + **第 3 档去重** + 档位语义解析。
+  ['取交接', 'test-get-handoff.mjs', []],
+  // ── ⭐⭐ 封面删改通道（决策 114）──
+  //    ⭐ 重点：**安全底线**（非空不删 / 改名先建后删 / 置 global 必须登记提名）。
+  ['封面删改通道', 'test-edit-channel.mjs', []],
+  // ── ⭐⭐ 历史归档：自动截断（决策 136）──
+  //    ⭐ 重点：只截**最早的**小节、原文逐字进条目、**指针用完整 UUID**、
+  //    history **不进默认检索**但**能按 id 读回**、三种"不截"情况如实报。
+  //    ⚠️ 本套件**不需要 git**（它测的是截断，不是版本维护）。
+  ['历史归档', 'test-history.mjs', []],
+  // ── ⭐⭐ 英文召回索引（设计文档 §9）──
+  //    ⭐ 重点：`descHash` 保鲜判据、**漏翻判据的反证**（原文引号包裹的示例串
+  //    不该判漏翻）、以及 🔴 **防递归的静态反证：`en-index` 代码里不得出现 `sessionId`**
+  //    （否则会被 `llm/stream` 监听器判成会话步 ⇒ 自己触发自己）。
+  //    ⚠️ 本套件**不需要起服务**（纯函数 + 构建产物静态检查）。
+  ['英文索引', 'test-en-index.mjs', []],
+  // ── ⭐⭐ 主动注入（设计文档 §5/§6/§7）──
+  //    ⭐ 重点：范围解析（**未绑定项目必须不退化成全量**）、输出校验（越界编号丢弃）、
+  //    提示词分段（**清单独占 system、K 只在 user**，这是前缀缓存的前提）、
+  //    触发判据（**`chunk.block.type` 不是 `blockType`** ——写错会成静默死代码）、
+  //    以及 🔴 **两条静态反证**：`active-recall` 代码里不得出现 `sessionId`（防递归）、
+  //    额度只在"真正发生的调用"上计（**被抑制的不计**）。
+  //    ⚠️ 本套件**不需要起服务**（纯函数 + 构建产物静态检查）。
+  ['主动注入', 'test-active-inject.mjs', []],
+  // ── ⭐⭐⭐ 召回日志（2026-09-27；用户要求"维护个日志记录每次调用详情"）──
+  //    ⭐ 重点：A 档（结论 + **三个总控分数** + **阈值快照**）、B 档（请求快照，可重放）、
+  //    C 档（注入正文逐字）、**坏行不毁整份**、以及 ⚠️ **用库副本**（绝不碰生产库）。
+  ['召回日志', 'probe-recall-log.mjs', []],
+  // ── ⭐⭐⭐ 上下文裁取 + token 预算（用户 2026-09-26 方案）──
+  //    ⭐ 重点：**turn 口径**（⚠️ memj 注入也是 user 角色 ⇒ 不能当 turn 边界）、
+  //    历史轮丢思考/工具、**当前轮保留 reasoning**（两个抑制判据靠它）、
+  //    裁剪顺序（从旧到新裁 → 只剩本轮是地板 → 才动候选池 → 候选池有下限）、
+  //    候选池按 `updatedAt` 从旧到新（**空值当最旧**）且**保持原清单顺序**、
+  //    两条通路的预算规则（JEV 50k 旋钮 / chat 窗口 60%）。
+  ['上下文与预算', 'test-active-context.mjs', []],
+  // ── ⭐⭐ 网页脚本语法体检（2026-09-26 真事故后补）──
+  //    🔴 那次的形态：`saveSettings` 里多了一个 `}` ⇒ 函数提前闭合 ⇒
+  //       后面的 `await` 掉到**模块顶层** ⇒ 整个 `app.js` 语法错、**一个字节都不执行**
+  //       ⇒ 页面照常打开、控件都在（HTML 是静态的），但**点 ⚙ 毫无反应**。
+  //    ⭐ 现有四套测试**一条都抓不到**（tsc 不查纯 JS；web-api 测服务端；
+  //      probe-client 测的是另一份 bundle；"元素存在"照样全绿）
+  //      ⇒ 本套件就是那道闸门的自动化版本。
+  //    ⚠️ 它还查 `lib/web/app.js` 与 `src/` **逐字节同步**（不同步 ⇒ 改了没生效）。
+  ['网页脚本语法', 'test-web-syntax.mjs', []],
+  // ── ⭐⭐⭐ 标签规范化工具（决策 162，2026-09-28）──
+  //    ⭐ 重点：**水位线语义**（无时间戳的必须 drop）、**A 层全库纯查表**
+  //    （词表的新决定要能传播到老条目 —— 这是本设计最关键的一层）、
+  //    alias 冲突拒绝、传递合并与环检测、安全阀。
+  //    🔴 两条静态反证：代码里不得出现 `sessionId`（防递归）、
+  //    词表模块不得有"重建"路径（它是 source data，重建会抹掉积累的判断）。
+  //    ⚠️ 本套件**不需要起服务**（纯函数 + 静态反证）。
+  ['标签规范化工具', 'test-tag-normalize.mjs', []],
+  // ── ⭐⭐⭐ 标签规范化【端到端】（决策 162）──
+  //    🔴 **为什么纯函数测试不够**：它只喂"两个词都在词表里"的映射，
+  //    **照不到"新词并进已有 canonical"这条最常见的路径** ——
+  //    而那正是我漏掉的一段（`applyMerges` 只遍历已有 canonical），
+  //    ⭐ **是这个带打桩 LLM 的端到端测试把它抓出来的**（3 条红）。
+  //    ⭐ 重点：A 层把词表决定**传播到水位线之外的老条目**、
+  //    写入**不碰 `updatedAt`**、preview 只看不改、**绝不传 sessionId**。
+  ['标签规范化E2E', 'test-tag-normalize-e2e.mjs', []],
+  // ── ⭐⭐⭐ 轮次结束自动规范化（决策 165）──
+  //    ⭐ 重点：**三层门**（开关关 ⇒ 不起 / 没 handoff ⇒ 不起 /
+  //    本次 handoff 之后已调过 ⇒ 不起），以及**静态反证**：
+  //    不得 `await run.result`（`turn-stopping` 是 serial 钩子，会拖住轮次）、
+  //    必须显式传 `agentOptions`（实测不给就继承 hy3 ⇒ 输出为空）。
+  ['标签自动规范化', 'test-tag-auto.mjs', []],
+  // ── ⭐⭐⭐ 层级事故回归（决策 166：用生产上真实出错的三处归并当反例）──
+  //    ⭐ 验的是**两项优化真的进了请求**：① 提示词的"层级自检 + 反面清单"
+  //    （点名 `agent vs 子代理` / `钩子 vs turn-stopping` / `会话 vs session`）；
+  //    ② user 消息里的**覆盖范围证据**（`agent` 跨多条 vs `子代理` 单条）。
+  //    ⚠️ 判据落在**真正发给模型的文本**上（本项目同族教训："算出的量 ≠ 发出的量"）。
+  ['标签层级回归', 'test-tag-level-guard.mjs', []],
+  // ── ⭐⭐⭐ 提示词运行期覆盖（2026-09-29：设置页【提示词】子页的地基）──
+  //    🔴 **为什么这组必须有**：覆盖值存在磁盘上，而**取值点在别的模块**里读它
+  //    （`text: () => promptText(...)` / 工具描述 getter）⇒
+  //    "写进去了但没人读"这类缺陷**不会有任何报错**，只表现为"我明明改了、没生效"。
+  //    ⭐ 所以【3】专门断言"改覆盖值 ⇒ **取值点立刻变**"（不是"文件里写着什么"）。
+  //    另含：校验四条规则、覆盖持久化（模拟重启）、恢复默认、历史备份与路径穿越防护。
+  ['提示词覆盖', 'test-prompt-override.mjs', []],
+  // ── ⭐⭐⭐ 裁决模型的思考等级（决策 168：用户要求"关到最低"）──
+  //    ⭐ 判据落在**真正发出去的 options** 上；最要紧的一条：
+  //    **"跟随主会话模型"时也照样传 `off`**（否则会继承主会话的 high 档）。
+  ['标签思考等级', 'test-tag-effort.mjs', []],
+  // ── ⭐⭐⭐ 知识评分（决策 177：轮末复盘，给"本来能帮上忙"的知识加分）──
+  //    ⭐ 三组反证都在里面（防递归 / 去重 / 滚动窗口逐事件判），
+  //      外加阳性对照（库内知识 `e1340d94`：要证明"什么都没发生"，先证明那动作真的跑了）。
+  //    ⚠️ 本批的**阈值判在档位之前**那条 bug 就是这套测试抓到的。
+  ['知识评分', 'test-hot-score.mjs', []],
+]
+
+/** 一致性检查（需要外部路径参数的单独列）。 */
+const DESIGN_DOC = 'D:\\dsh_test\\2026-09-02_13-51-19-115\\memj-design.md'
+const CHECKS = [
+  ['协议一致性', 'check-protocol.mjs', []],
+  // 🔴🔴 **顺序即语义：「描述一致性」必须在「描述可生成」之前**。
+  //    实测教训（本行就是这么写出来的）：`gen-descriptions.mjs` 会**重写**
+  //    `src/tool-descriptions.ts` ⇒ 若它排在前面，**人造漂移会当场被它覆盖**，
+  //    随后的一致性检查看到的是**刚生成的新产物** ⇒ **永远报 ✅、防线完全失效**
+  //    （实测：故意改坏一个字，全量仍 17/17 全绿）。
+  //    ⭐ 与 §4.2「先校验、后生成」同一原则：**校验必须在"会改写产物"的动作之前**。
+  ['描述一致性', 'check-descriptions.mjs', [DESIGN_DOC]],
+  ['描述可生成', 'gen-descriptions.mjs', [DESIGN_DOC]],
+  // ── ⭐⭐⭐ 挂靠依据核对（决策 156，2026-09-26）──
+  //    事故：三条**只对本项目有用**的知识因"话题听起来通用"挂上了跨项目主题
+  //    （**同一形态已发生两次**）⇒ 改成"必须引一句该主题 desc 里的话"。
+  //    ⚠️ 用户裁定：**警告，不拒收**（回执说清"缺什么 + 为什么"）。
+  ['挂靠依据核对', 'test-theme-why.mjs', []],
+]
+
+const results = []
+
+/**
+ * 跑一个脚本，返回 `{ name, ok, summary, detail }`。
+ *
+ * 🔴 **为什么失败时要留 `detail`**：原来失败只回"最后一行非空输出"，
+ * 而 Node 崩溃时那一行恰好是版本号（`Node.js v22.22.2`）——**真正的堆栈全被丢掉**。
+ * 实测代价：`封面删改通道`/`离线核心` 各出现过一次这种"闪现崩溃"，
+ * 因为只留下版本号而**查不出根因**（交接文档里记了"未复现、未查"）。
+ * ⇒ 失败时把**完整输出的尾部**一并带回来（截断到 40 行，够看堆栈）。
+ */
+function run(name, script, args) {
+  const r = spawnSync(process.execPath, [join(here, script), ...args], {
+    cwd: join(here, '..'),
+    encoding: 'utf8',
+  })
+  const out = `${r.stdout ?? ''}${r.stderr ?? ''}`
+  // 从输出里抓「通过 N / 失败 M」或最后一行的结论。
+  const m = /通过\s*(\d+)\s*\/\s*失败\s*(\d+)/.exec(out)
+  const ok = r.status === 0
+  const summary = m !== null
+    ? `通过 ${m[1]} / 失败 ${m[2]}`
+    : (out.trim().split('\n').filter((l) => l.trim() !== '').pop() ?? '').slice(0, 70)
+  const detail = ok
+    ? ''
+    : out.trim().split('\n').slice(-40).join('\n')
+  return { name, ok, summary, detail }
+}
+
+console.log('════════ 常规 + kind 专项 ════════')
+for (const [name, script, args] of SUITES) {
+  const r = run(name, script, args)
+  results.push(r)
+  console.log(`  ${r.ok ? '✅' : '❌'} ${name.padEnd(18)} ${r.summary}`)
+}
+
+console.log('\n════════ 一致性检查 ════════')
+for (const [name, script, args] of CHECKS) {
+  const r = run(name, script, args)
+  results.push(r)
+  console.log(`  ${r.ok ? '✅' : '❌'} ${name.padEnd(18)} ${r.summary}`)
+}
+
+const failed = results.filter((r) => !r.ok)
+const total = results.length
+console.log(`\n═══ 共 ${total} 个套件：${total - failed.length} 通过 / ${failed.length} 失败 ═══`)
+if (failed.length > 0) {
+  console.log('失败项：')
+  for (const f of failed) {
+    console.log(`  - ${f.name}: ${f.summary}`)
+    // 🔴 把失败脚本的输出尾部打出来——只报"最后一行"会把堆栈丢掉（查不出根因）。
+    if (f.detail !== '') {
+      console.log('    ── 该脚本输出尾部 ──')
+      for (const line of f.detail.split('\n')) console.log(`    | ${line}`)
+    }
+  }
+}
+process.exit(failed.length === 0 ? 0 : 1)

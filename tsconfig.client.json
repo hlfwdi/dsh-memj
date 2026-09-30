@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "noImplicitAny": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    // ⚠️ **必须保留 skipLibCheck: true**：client 侧 node_modules 缺 3 个包
+    // （`dsh-client-store` / `ui-primitives` / `dockkit` 是 shell 内联的），
+    // 而 slots / sidebar 的 `.d.ts` 都 import 了它们 ⇒ **typecheck 能过全靠它**。
+    "skipLibCheck": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "target": "es2024",
+    "lib": ["es2024", "dom", "dom.iterable"],
+    "jsx": "react-jsx",
+    "allowImportingTsExtensions": true,
+    "esModuleInterop": true,
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["src/client"]
+}

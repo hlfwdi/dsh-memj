@@ -1,0 +1,10 @@
+packages:
+  - .
+
+# pnpm 11 把 build-script 审批从 package.json 的 pnpm.onlyBuiltDependencies
+# 移到了这里（pnpm 11 不再读后者）。占位未解析会以 ERR_PNPM_IGNORED_BUILDS 阻断安装。
+allowBuilds:
+  esbuild: true
+
+minimumReleaseAgeExclude:
+  - '@deepseek-ai/dsh-timeout@0.2.0-rc.2'

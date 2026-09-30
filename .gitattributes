@@ -1,0 +1,23 @@
+# 🔴 **强制 LF，禁止任何自动行尾转换**
+#
+# 为什么对本项目特别重要：
+#   · 源码/文档里有大量中文，本项目已因**编码/行尾被工具改坏**踩过多次坑；
+#   · 生成物（src/protocol.ts、src/tool-descriptions.ts）要与设计文档/导出物
+#     **逐字节比对**——行尾一变，校验就会假失败。
+# 策略：**默认不转换**（`-text`），再对已知文本类型显式声明 `eol=lf`。
+* -text
+*.ts   text eol=lf
+*.tsx  text eol=lf
+*.js   text eol=lf
+*.mjs  text eol=lf
+*.json text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.md   text eol=lf
+*.css  text eol=lf
+*.html text eol=lf
+*.gitignore    text eol=lf
+*.gitattributes text eol=lf
+
+# 锁文件由 pnpm 生成，不该被手工 diff 噪声干扰
+pnpm-lock.yaml -diff
