@@ -804,6 +804,40 @@ check('  记录含 project / turn / full / sections',
   recText.slice(0, 240))
 check('  轮次号确实是 3（不是 4）', recText.includes('"turn":3'), recText.slice(0, 240))
 
+// ⑨ ⭐⭐ 同名小节判据：**只在同一个父节内**才报（2026-09-30 修正）
+//
+// 起因：本项目的「有效做法」与「失败/踩坑」**各自**都有
+//   `### 一、通用方法（跨功能）` / `### 二、按功能` ⇒ 旧的"按节名全局计数"
+//   会把这种**跨顶层节的合法重名**报成"同名小节"，每轮交接都刷一条假警报。
+// ⚠️ 两条构造注意：
+//   ① 该检查**只在按节路径（`docSection` / `docOp`）里跑** —— 整份 `doc` 路径不跑它
+//      ⇒ 用例**必须走 `replace`**，否则断言恒真（第一版就是这么假绿的）；
+//   ② 这是该判据**唯一的防线**（`findDuplicateSections` 只被 handoff.ts 内部调用）。
+const legalOne = await runHandoff({
+  project: 'dsh-memj',
+  docSection: '当前进度', docOp: 'replace',
+  doc: '## 当前进度\n\n新进度\n\n### 一、通用方法\n\n乙',
+}, { sessionId: 'sess-dup-legal', turn: 8, config: CFG })
+const legalTwo = await runHandoff({
+  project: 'dsh-memj',
+  docSection: '目标', docOp: 'replace',
+  doc: '## 目标\n\n新目标\n\n### 一、通用方法\n\n甲',
+}, { sessionId: 'sess-dup-legal', turn: 9, config: CFG })
+check('⭐⭐ 跨顶层节的同名子节 ⇒ **不报**同名小节（旧判据下必报）',
+  legalOne.ok === true && legalTwo.ok === true && !legalTwo.message.includes('同名小节'),
+  legalTwo.message.slice(0, 240))
+
+const dupReal = await runHandoff({
+  project: 'dsh-memj',
+  docSection: '目标', docOp: 'replace',
+  doc: '## 目标\n\n新目标\n\n### 一、通用方法\n\n甲\n\n### 一、通用方法\n\n乙',
+}, { sessionId: 'sess-dup-real', turn: 10, config: CFG })
+check('🔴 同一个父节下的同名子节 ⇒ **报**同名小节',
+  dupReal.ok === true && dupReal.message.includes('同名小节'),
+  dupReal.message.slice(0, 240))
+check('  报警里带父节名（`父节 › 子节` 形态）',
+  dupReal.message.includes('目标 › 一、通用方法'), dupReal.message.slice(0, 320))
+
 console.log(`\n═══ 端到端结果：通过 ${pass} / 失败 ${fail} ═══`)
 console.log(`库根保留在: ${lib}（供人工查看；测试结束会删除）`)
 rmSync(lib, { recursive: true, force: true })

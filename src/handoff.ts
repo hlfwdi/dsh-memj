@@ -547,19 +547,41 @@ export function findEmptySections(text: string): string[] {
  *
  * ⚠️ 与 `findEmptySections` 同取向：**只警告、不拒绝**——
  *    "故意造两个同名小节"在语义上并非不可能（虽然罕见），工具**不该替人做这个决定**。
+ *
+ * 🔴🔴 **2026-09-30 修正：只在【同一个父节内】统计子节重名**（原判据是全局计数）。
+ *    **起因**：本项目的「有效做法」与「失败/踩坑」**各自**都用
+ *    `### 一、通用方法（跨功能）` / `### 二、按功能` 这种两段式组织
+ *    ⇒ 全局计数必然报"`一、通用方法（跨功能）`×2、`二、按功能`×2"
+ *    ⇒ **每轮交接都打一条假警报**（实测：本轮两次 handoff 都被它刷了一遍）。
+ *    ⭐ **判据**：要防的是「**同一个父节下的重复**」，不是「同名」——
+ *    跨顶层节的同名子节是**结构性重名**，语义上完全正常。
+ *    ⚠️ **顶层 `##` 节没有父节** ⇒ 它**仍然按全局唯一**统计
+ *    （两个 `## 当前进度` 才是真重复）。
  * @param text - 叙事文本。
- * @returns 出现次数 > 1 的节名（含出现次数），按首次出现顺序。
+ * @returns 出现次数 > 1 的节名（含出现次数与父节名），按首次出现顺序。
  */
-export function findDuplicateSections(text: string): Array<{ title: string; count: number; level: 2 | 3 }> {
-  const counts = new Map<string, { count: number; level: 2 | 3 }>()
+export function findDuplicateSections(
+  text: string,
+): Array<{ title: string; count: number; level: 2 | 3; parent?: string }> {
+  // 🔑 **计数键 = 父节 › 节名**（顶层节用 `##` 占位，等价于"全局唯一"）。
+  const counts = new Map<string, { title: string; count: number; level: 2 | 3; parent?: string }>()
+  let currentTop = ''
   for (const s of splitAny(text)) {
-    const prev = counts.get(s.title)
-    if (prev === undefined) counts.set(s.title, { count: 1, level: s.level })
-    else prev.count += 1
+    if (s.level === 2) currentTop = s.title
+    const key = s.level === 2 ? `\u0000##\u0000${s.title}` : `\u0000${currentTop}\u0000${s.title}`
+    const prev = counts.get(key)
+    if (prev === undefined) {
+      counts.set(
+        key,
+        s.level === 2
+          ? { title: s.title, count: 1, level: 2 }
+          : { title: s.title, count: 1, level: 3, parent: currentTop },
+      )
+    } else prev.count += 1
   }
-  const out: Array<{ title: string; count: number; level: 2 | 3 }> = []
+  const out: Array<{ title: string; count: number; level: 2 | 3; parent?: string }> = []
   // ⚠️ 用 `splitAny` 的顺序输出（`Map` 保持插入序），与"文档里第一次出现的位置"一致。
-  for (const [title, v] of counts) if (v.count > 1) out.push({ title, count: v.count, level: v.level })
+  for (const v of counts.values()) if (v.count > 1) out.push(v)
   return out
 }
 
@@ -2486,12 +2508,18 @@ export async function runHandoff(
     const dupes = findDuplicateSections(narrative)
     if (dupes.length > 0) {
       lines.push(
-        `\n🔴 **发现 ${dupes.length} 个"同名小节"**（同一节名出现了多次）：` +
-          `${dupes.map((d) => `\`${d.title}\`×${d.count}`).join('、')}。\n` +
+        `\n🔴 **发现 ${dupes.length} 个"同名小节"**（**同一个父节下**出现了多次）：` +
+          `${dupes
+            .map((d) =>
+              d.level === 2 ? `\`${d.title}\`×${d.count}` : `\`${d.parent} › ${d.title}\`×${d.count}`,
+            )
+            .join('、')}。\n` +
           '    ⚠️ **最可能的原因**：你在 `doc` 里写进了**别的小节的 `###` 标题** ——\n' +
           '    那些标题会被当成**新建子节**，而**原有的同名小节仍然在** ⇒ **整段内容重复两遍**。\n' +
           '    ⭐ **正确做法**：`replace` 的 `doc` 里**只写"被替换那一节自己"的标题**；\n' +
           '    要合并别的小节 ⇒ **逐个替换它们**，不要把它们的标题塞进这一节里。\n' +
+          '    ⭐ **只在同一个顶层节内统计**：跨顶层节的同名子节（例如「有效做法」与「失败/踩坑」\n' +
+          '    各自的「一、通用方法」）是**合法结构**，不算重复 —— 它们不会出现在上面的清单里。\n' +
           '    ⚠️ 请核对：若确实是有意造两个同名节 ⇒ 忽略本提示。',
       )
     }
