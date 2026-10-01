@@ -473,6 +473,11 @@
        ⚠️ 分区轴 = **生效方式与影响面**（不是功能）：
           A 常驻文本（破缓存）｜B 工具与命令（描述破缓存、参数/输出只读）｜C 内部提示词（与主会话无关）。 -->
   <button type="button" class="subtab" data-setsub="prompts"><span class="wide-only">提示词</span><span class="narrow-only">提示词</span></button>
+  <!-- ⭐⭐⭐ 2026-09-30：【模板】子页（决策 204/205，用户新增需求）。
+       🔴 **模板 = 交接文档的结构**（节名 / 节数 / 每节用途），用户可完全自定义。
+       ⚠️ **它只影响【新建项目】**——已有文档记着自己的节名，与模板已解耦
+          ⇒ 改模板、删模板都**不影响任何已有文档**（这一点必须在页面上说明）。 -->
+  <button type="button" class="subtab" data-setsub="templates"><span class="wide-only">模板</span><span class="narrow-only">模板</span></button>
 </div>
 
 <!-- ──────────────── 子页①：沉淀 ──────────────── -->
@@ -1042,6 +1047,73 @@
 
   <div class="set-foot">
     <span class="dim set-msg" id="settings-msg-prompts"></span>
+  </div>
+</div>
+
+<!-- ──────────────── 子页⑥：模板（决策 204/205）──────────────── -->
+<div class="subpanel set-panel" id="setsub-templates" hidden>
+  <div class="set-scroll">
+
+    <section class="set-section">
+      <h3 class="set-section-title">交接文档模板</h3>
+      <div class="set-item">
+        <p class="set-desc">
+          模板决定<b>交接文档的结构</b>：有哪些节、每节叫什么、每节要干嘛。
+          ⭐ <b>它只在「新建项目」的那一刻生效</b> —— 已有文档记着自己建时的结构，
+          <b>改模板、删模板都不会影响它们</b>。
+        </p>
+      </div>
+      <div class="set-item">
+        <div class="set-row">
+          <span>模板列表</span>
+          <span class="dim" id="tpl-status"></span>
+        </div>
+        <div id="tpl-list" class="tpl-list"></div>
+      </div>
+    </section>
+
+    <section class="set-section">
+      <h3 class="set-section-title">新建 / 编辑模板</h3>
+      <div class="set-item">
+        <div class="set-grid">
+          <label>模板 id</label>
+          <input type="text" id="tpl-id" placeholder="my-template（全小写英文/数字/连字符）">
+          <label>名字</label>
+          <input type="text" id="tpl-title" placeholder="给这个模板起个名字">
+        </div>
+        <p class="set-desc">
+          id 同时是文件名，只能用<b>全小写英文 / 数字 / 连字符</b>。内置的 <code>default</code> 不可覆盖。
+        </p>
+      </div>
+      <div class="set-item">
+        <div class="set-row">
+          <span>节定义（顺序即文档顺序）</span>
+          <button type="button"  id="tpl-add-section">+ 添加一节</button>
+        </div>
+        <div id="tpl-sections" class="tpl-sections"></div>
+        <p class="set-desc">
+          每节要填<b>节名</b>与<b>这一节要干嘛</b>（后者会拼进写给模型的写作指导）。
+          那一节的较早内容要自动截断归档，就勾<b>「可截断」</b>（<b>至多一节</b>；
+          一节都不勾 = 这份文档<b>不会自动瘦身</b>）。
+          ⚠️ 节名不能是「沉淀知识」（工具自己用），也<b>不能互为子串</b>。
+        </p>
+      </div>
+      <div class="set-item">
+        <div class="set-row">
+          <span></span>
+          <span>
+            <button type="button"  id="tpl-clear">清空表单</button>
+            <button type="button" class="primary" id="tpl-save">保存模板</button>
+          </span>
+        </div>
+        <div id="tpl-errors" class="tpl-errors" hidden></div>
+      </div>
+    </section>
+
+  </div>
+
+  <div class="set-foot">
+    <span class="dim set-msg" id="settings-msg-templates"></span>
   </div>
 </div>
 

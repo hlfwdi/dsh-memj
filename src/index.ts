@@ -477,6 +477,12 @@ export function apply(ctx: Context, config: MemjConfig = DEFAULT_CONFIG): void {
       `${API_BASE}/prompt/history`,
       // ⭐ 回退到某一版历史（"备份回退"的第二个方向）。
       `${API_BASE}/prompt/restore`,
+      // ⭐⭐⭐【模板】子页（决策 204/205）——**同上**：
+      //    🔴 漏了这三行 ⇒ 模板页"加载失败"（请求落 SPA 兜底返回 HTML），
+      //       而服务端毫无异常。本项目已因同一原因踩过三次。
+      `${API_BASE}/templates`,
+      `${API_BASE}/template/save`,
+      `${API_BASE}/template/delete`,
       // ⚠️ 探针路由**不在这里**注册——它有自己的 handler，见下面单独的
       //    `webServer.register`。🔴 我第一版**两处都注册了** ⇒
       //    `duplicate exact route` ⇒ **整个插件 apply 抛错、实例起不来**
@@ -526,6 +532,9 @@ export * from './reads.ts'
 export * from './schema.ts'
 export * from './search.ts'
 export * from './store.ts'
+// ⭐⭐⭐ 决策 204/205：交接文档模板（存储 + 校验）与工具决策（两段式确认）。
+export * from './templates.ts'
+export * from './template-tool.ts'
 // ⚠️ `settings` 一并导出：它被**静态 import** ⇒ 打包器把它内联进本 chunk
 //    （`lib/settings.js` **根本不存在**，同 `api.ts` 的形态）。
 //    测试脚本（`scripts/test-theme-mode.mjs`）要直接验它的路径解析与 YAML 定点改写。

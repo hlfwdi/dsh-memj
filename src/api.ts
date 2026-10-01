@@ -28,6 +28,16 @@ import {
   specOf,
 } from './prompts.ts'
 import { promptOverridesPath } from './paths.ts'
+// ⭐ 决策 204：模板 CRUD（人侧管理页的数据源）。
+import {
+  deleteTemplate,
+  listTemplates,
+  normalizeTemplate,
+  saveTemplate,
+  validateTemplate,
+  type Template,
+} from './templates.ts'
+import { templatesDir } from './paths.ts'
 import { fileExistsStat, readTextIfExists } from './files.ts'
 import {
   fixCoverBlock,
@@ -1432,6 +1442,63 @@ export async function handleApi(
       if (specOf(key) === undefined) return { status: 404, body: { ok: false, error: `未知的提示词键：${key}` } }
       const r = await restorePromptHistory(key, file)
       return { status: r.ok ? 200 : 400, body: { ok: r.ok, errors: r.errors, saved: r.saved, backupPath: r.backupPath ?? '' } }
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // ⭐⭐⭐ **交接文档模板**（决策 204 / 205）
+    //
+    // 🔴🔴 **路由注册是【两份清单】**：加了这里的分支，**必须**同时去
+    //    `index.ts` 的注册数组里加一行 —— 漏了 ⇒ 请求落到 SPA 兜底、
+    //    返回 **HTML**，前端 `JSON.parse` 报错，而**服务端毫无异常**。
+    //    ⚠️ 本项目已因此踩过三次（`/archived`、`/backup/*`、`/prompts`）。
+    // ══════════════════════════════════════════════════════════════════
+
+    // 列出全部模板（含内置 default）+ 每个模板的合法性。
+    if (route === '/templates') {
+      if (method !== 'GET') return { status: 405, body: { ok: false, error: '该接口只接受 GET' } }
+      const list = await listTemplates()
+      const items = list.map((t) => ({
+        id: t.id,
+        title: t.title,
+        sectionCount: t.sections.length,
+        sections: t.sections.map((s) => ({ name: s.name, desc: s.desc, truncate: s.truncate === true })),
+        // ⭐ 内置的 default **不可删**（它是回落目标）。
+        deletable: t.id !== 'default',
+        errors: validateTemplate(t),
+      }))
+      return { status: 200, body: { ok: true, items, dir: templatesDir() } }
+    }
+
+    // 保存一份模板（**校验在前，不过不写盘**）。
+    if (route === '/template/save') {
+      if (method !== 'POST') return { status: 405, body: { ok: false, error: '该接口只接受 POST' } }
+      let t: Template | undefined
+      try {
+        const body = JSON.parse(rawBody) as { template?: unknown }
+        t = normalizeTemplate(body.template)
+      } catch {
+        return { status: 400, body: { ok: false, error: '请求体不是合法 JSON' } }
+      }
+      if (t === undefined) return { status: 400, body: { ok: false, error: '模板形状不合法（缺 id 或 sections 全空）' } }
+      if (t.id === 'default') {
+        return { status: 400, body: { ok: false, error: '`default` 是内置模板，不可覆盖（可以另建一个 id）。' } }
+      }
+      const errs = await saveTemplate(t)
+      return { status: errs.length === 0 ? 200 : 400, body: { ok: errs.length === 0, errors: errs } }
+    }
+
+    // 删除一份模板（⚠️ **不影响任何已有文档**——文档记着自己的节名）。
+    if (route === '/template/delete') {
+      if (method !== 'POST') return { status: 405, body: { ok: false, error: '该接口只接受 POST' } }
+      let id = ''
+      try {
+        id = String((JSON.parse(rawBody) as { id?: unknown }).id ?? '')
+      } catch {
+        return { status: 400, body: { ok: false, error: '请求体不是合法 JSON' } }
+      }
+      if (id === 'default') return { status: 400, body: { ok: false, error: '内置模板 default 不可删除。' } }
+      const ok = await deleteTemplate(id)
+      return { status: ok ? 200 : 404, body: { ok, error: ok ? '' : `模板 \`${id}\` 不存在。` } }
     }
 
     // ⭐⭐ 英文召回索引（设计文档 §9.2）：**翻译模型下拉框的数据源**。

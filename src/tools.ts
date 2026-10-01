@@ -49,6 +49,8 @@ import { recordRead, renderSnapshotList, pendingSnapshots } from './reads.ts'
 import { decideRead } from './read.ts'
 // ⭐⭐⭐ 提示词运行期覆盖（本次新增）：`safeRegister` 用它把工具描述改成 getter。
 import { promptText, registerPromptDefault } from './prompts.ts'
+// ⭐ 决策 205：模板工具的两段式确认（纯函数，可单测）。
+import { decideTemplateTool } from './template-tool.ts'
 import { bodySize, filterByContext, filterContextByTerms, normalizeQuery, scoreCover, sortHits } from './search.ts'
 import { resolveRef } from './paths.ts'
 // ⭐ `kind` 的受控词表判据（决策 114 的 `setFields.kind` 用）。
@@ -63,6 +65,8 @@ import {
   MEMJ_UPDATE_DESCRIPTION,
   MEMJ_READ_DESCRIPTION,
   MEMJ_REBUILD_DESCRIPTION,
+  // ⭐⭐⭐ 决策 205：交接文档模板。
+  MEMJ_TEMPLATE_DESCRIPTION,
   MEMJ_SEARCH_DESCRIPTION,
   MEMJ_SNAPSHOTS_DESCRIPTION,
 } from './tool-descriptions.ts'
@@ -674,12 +678,55 @@ export function registerTools(deps: ToolDeps): void {
               }
             }
 
+            // ⭐⭐⭐ **按需注入该文档的写作指导**（决策 205 / 用户裁定的形态①）。
+            //
+            // 🔴🔴 **为什么不放常驻 `context()`**：`context()` 是**单条快照、按整条文本比较**
+            //    （库内知识 `74a18e19`）⇒ 按项目动态改它会**每轮 append 一条新消息**
+            //    （旧的不删、直到 compaction）。而模板说明**只在交接那一刻有用**
+            //    ⇒ 放在**读项目文档时按需给出** —— 不占常驻预算、也不破缓存。
+            //
+            // ⚠️ **只在"该文档用了自定义模板"时才附**：默认六节的项目**一字不加**
+            //    ⇒ 既有行为零变化（这是本改动敢做的前提）。
+            let tplNotice = ''
+            try {
+              const { loadProjectDoc } = await import('./store.ts')
+              const doc2 = await loadProjectDoc(projectId)
+              const secs = doc2?.frontmatter.sections ?? []
+              const tplId = doc2?.frontmatter.template ?? ''
+              // ⭐ 判据：**文档自己记着节名**（= 自定义模板建的）才附。
+              if (secs.length > 0) {
+                const { listTemplates, renderTemplateGuidance } = await import('./templates.ts')
+                const all = await listTemplates()
+                // ⚠️ 优先按 `template` 找回原模板；找不到（被删/改名）⇒
+                //    用**文档自己记着的节名**现拼一份（**不撒谎**：它就是这份文档的结构）。
+                const t = all.find((x) => x.id === tplId)
+                if (t !== undefined) {
+                  tplNotice = `\n\n---\n\n## 本文档的写作指导（按模板 \`${t.id}\` 生成）\n\n${renderTemplateGuidance(t)}`
+                } else {
+                  const secLines = secs
+                    .map((s) => {
+                      const trunc = s === (doc2?.frontmatter.truncateSection ?? '') ? '　⭐ **本节的较早内容会被自动截断归档**' : ''
+                      return `- \`## ${s}\`${trunc}`
+                    })
+                    .join('\n')
+                  tplNotice =
+                    `\n\n---\n\n## 本文档的节结构（共 ${secs.length} 节，顺序固定）\n\n${secLines}\n\n` +
+                    (tplId !== ''
+                      ? `⚠️ 原模板 \`${tplId}\` 已不存在 —— 上面这份是从**文档自己记着的节名**还原的，**它才是准的**。`
+                      : '') +
+                    `\n🔴 \`## 沉淀知识\` 由工具生成（放封面），**不在上面这几节里**。`
+                }
+              }
+            } catch {
+              /* 拼不出指导不该让读取失败 */
+            }
+
             return {
               found: true,
               id: projectId,
               title: `项目交接文档 ${projectId}`,
               mode: decision.mode,
-              content: decision.content,
+              content: tplNotice === '' ? decision.content : `${decision.content}${tplNotice}`,
               availableSections: decision.availableSections,
               sectionGroups: decision.sectionGroups,
               sectionRequested: decision.sectionRequested,
@@ -1688,6 +1735,168 @@ export function registerTools(deps: ToolDeps): void {
             projects: stats.projects,
             globalApproved: stats.globalApproved,
             invalidCovers: issues.length,
+          }
+        },
+      }),
+  )
+
+  // ══════════════════════════════════════════════════════════════════════
+  // ⭐⭐⭐ memj_template —— 交接文档模板（决策 204 / 205）
+  //
+  // 🔴🔴 **create / delete 走【两段式确认】**（用户 2026-09-30 裁定走 (b) 方案）：
+  //    第一次调用（不给 `confirm`）**什么都不做**，只回一份「待确认」回执；
+  //    用户在主会话明确同意后，模型带 `confirm: true` 重调一次才执行。
+  //    ⭐ 与 `memj_handoff` 的 `confirmCreate`（相似 id 确认）**同一套路**。
+  //    ⚠️ `list` **不需要确认**（只读、零副作用）——否则模型连"有哪些模板"都看不了。
+  //
+  // ⚠️ **模板只影响【新建项目】**：已有文档记着自己的节名，与模板**已解耦**
+  //    ⇒ 改模板、删模板都**不影响任何已有文档**（决策 204）。
+  // ══════════════════════════════════════════════════════════════════════
+  safeRegister(
+    'memj_template',
+    () =>
+      defineTool({
+        name: 'memj_template',
+        description: MEMJ_TEMPLATE_DESCRIPTION,
+        parameters: {
+          action: {
+            type: 'string',
+            description: "要做什么：'list' 列出全部模板（不需确认）/ 'create' 新建或覆盖 / 'delete' 删除。",
+          },
+          template: {
+            type: 'object',
+            // ⚠️ `type:'object'` 节点**必须显式给 `additionalProperties`**（文件头第 9 行那条铁律）。
+            additionalProperties: false,
+            description:
+              '`create` 时给。⭐ `desc` 必填（这一节要干嘛，会拼进写作指导）；' +
+              '`truncate` 至多一节设 true，**一节都不设 = 该文档不会自动截断**。',
+            properties: {
+              id: {
+                type: 'string',
+                required: true,
+                description: '模板 id（全小写英文/数字/连字符，2–48 字符；同时是文件名）。',
+              },
+              title: { type: 'string', description: '给人看的名字。' },
+              sections: {
+                type: 'array',
+                required: true,
+                description: '节定义，**顺序即文档里的顺序**。',
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    name: { type: 'string', required: true, description: '节名（`## ` 后面那个词）。' },
+                    desc: {
+                      type: 'string',
+                      required: true,
+                      description: '⭐ **这一节要干嘛**（必填，≤200 字符）。',
+                    },
+                    truncate: {
+                      type: 'boolean',
+                      description: '该节是否参与自动截断（**至多一节**设 true；一节都不设 = 不自动截断）。',
+                    },
+                  },
+                },
+              },
+            },
+          },
+          id: {
+            type: 'string',
+            description: '`delete` 时要删的模板 id。内置 `default` 不可删。',
+          },
+          confirm: {
+            type: 'boolean',
+            description:
+              '⭐ **用户同意后才传 true**。不给 ⇒ 本工具**只回一份待确认回执、什么都不做**（两段式确认）。',
+          },
+        },
+        output: {
+          schema: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              ok: { type: 'boolean', required: true },
+              message: { type: 'string', required: true },
+            },
+          },
+          render: (_args, value) => {
+            const v = value as { message: string }
+            return [{ type: 'text', text: v.message }]
+          },
+        },
+        async execute(args) {
+          const a = args as { action?: string; template?: unknown; id?: string; confirm?: boolean }
+          const req = {
+            action: (typeof a.action === 'string' ? a.action.trim() : '') as 'list' | 'create' | 'delete',
+            template: a.template,
+            id: typeof a.id === 'string' ? a.id : '',
+            confirm: a.confirm === true,
+          }
+          const decision = decideTemplateTool(req)
+          if (decision.kind === 'reject') return { ok: false, message: decision.message }
+          if (decision.kind === 'needs-confirm') return { ok: true, message: decision.message }
+
+          const { listTemplates, normalizeTemplate, saveTemplate, deleteTemplate, validateTemplate } =
+            await import('./templates.ts')
+
+          if (req.action === 'list') {
+            const all = await listTemplates()
+            const lines = [`共 ${all.length} 份模板：`, '']
+            for (const t of all) {
+              const errs = validateTemplate(t)
+              lines.push(
+                `- \`${t.id}\`（${t.title}）— ${t.sections.length} 节` +
+                  (t.id === 'default' ? '｜**内置，不可删**' : '') +
+                  (errs.length > 0 ? `\n  ⚠️ 该模板不合法：${errs.join('；')}` : ''),
+              )
+              for (const s of t.sections) {
+                lines.push(`  · \`${s.name}\` —— ${s.desc}${s.truncate === true ? '（可自动截断）' : ''}`)
+              }
+            }
+            lines.push(
+              '',
+              '⭐ 要在新建项目时用它：在 `memj_handoff` 里传 `template: "<id>"`。',
+              '⚠️ **模板只影响新建项目**；已有文档记着自己的节名，不受模板影响。',
+            )
+            return { ok: true, message: lines.join('\n') }
+          }
+
+          if (req.action === 'create') {
+            const t = normalizeTemplate(req.template)
+            if (t === undefined) {
+              return { ok: false, message: '模板形状不合法（缺 `id`，或 `sections` 全为空）。' }
+            }
+            if (t.id === 'default') {
+              return { ok: false, message: '`default` 是内置模板，不可覆盖（可以另建一个 id）。' }
+            }
+            const errs = await saveTemplate(t)
+            if (errs.length > 0) {
+              return {
+                ok: false,
+                message: `模板**未写入**（校验没过）：\n${errs.map((e) => `  · ${e}`).join('\n')}`,
+              }
+            }
+            return {
+              ok: true,
+              message:
+                `✅ 模板 \`${t.id}\`（${t.title}）已保存，共 ${t.sections.length} 节。\n` +
+                (t.sections.some((s) => s.truncate === true)
+                  ? ''
+                  : '⚠️ 本模板**没有**声明可自动截断的节 ⇒ 用它的文档**不会自动瘦身**。\n') +
+                '⭐ 在新建项目时用：`memj_handoff` 里传 `template: "' +
+                t.id +
+                '"`。\n' +
+                '⚠️ **不影响任何已有文档**。',
+            }
+          }
+
+          // delete
+          const okDel = await deleteTemplate(req.id ?? '')
+          return {
+            ok: okDel,
+            message: okDel
+              ? `✅ 模板 \`${req.id}\` 已删除。\n⭐ **没有任何已有文档受到影响** —— 它们记着自己的节名。`
+              : `模板 \`${req.id}\` 不存在（或不可删）。`,
           }
         },
       }),

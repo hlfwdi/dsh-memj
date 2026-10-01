@@ -124,7 +124,7 @@ check('协议文本非空且含工具名',
   registeredSections[0].text().includes('memj_snapshots'))
 check('协议 order = 3000', registeredSections[0]?.order === 3000, String(registeredSections[0]?.order))
 
-console.log('\n【B】工具注册（十个）')
+console.log('\n【B】工具注册（十一个）')
 // ⚠️ `defineTool` 会把 `parameters` **编译成 JSON Schema**
 //    （`{type, properties, required[]}`），不是保留原始 DSL 定义。
 //    所以下面的断言要看 `properties` 与 `required` 数组。
@@ -135,8 +135,9 @@ const names = registeredTools.map((t) => t.name).sort()
 // ⭐ 决策 119 新增 `memj_update`（改正文）⇒ 7 个变 8 个。
 // ⭐⭐ 决策 162 新增 `memj_normalize_tags`（标签规范化）⇒ 8 个变 **9** 个。
 // ⭐⭐⭐ 决策 177 新增 `memj_score_turn`（轮末知识评分）⇒ 9 个变 **10** 个。
-const expected = ['memj_handoff', 'memj_info', 'memj_normalize_tags', 'memj_promote', 'memj_read', 'memj_rebuild', 'memj_score_turn', 'memj_search', 'memj_snapshots', 'memj_update']
-check('工具数量 = 10', registeredTools.length === 10, `实际 ${registeredTools.length}: ${names.join(', ')}`)
+// ⭐⭐⭐ 决策 205 新增 `memj_template`（交接文档模板管理）⇒ 10 个变 **11** 个。
+const expected = ['memj_handoff', 'memj_info', 'memj_normalize_tags', 'memj_promote', 'memj_read', 'memj_rebuild', 'memj_score_turn', 'memj_search', 'memj_snapshots', 'memj_template', 'memj_update']
+check('工具数量 = 11', registeredTools.length === 11, `实际 ${registeredTools.length}: ${names.join(', ')}`)
 check('工具名齐全', JSON.stringify(names) === JSON.stringify(expected), names.join(', '))
 check('每个工具都有 description', registeredTools.every((t) => t.description.length > 20))
 check('每个工具都有 output.schema 与 render', registeredTools.every((t) => t.output?.schema && typeof t.output.render === 'function'))
@@ -500,6 +501,11 @@ const callPlan = {
   //       不碰网络、不落盘。⭐ 目的只是验 `output.schema`（两个必填字段都在）。
   //    ⚠️ `turn: 0` 是合法整数（schema 要求 `type: 'integer'`）。
   memj_score_turn: { session: 'session-does-not-exist-probe', turn: 0 },
+  // ⭐⭐⭐ 决策 205 新增：`memj_template` —— **走 `list` 这条只读路径**。
+  //    🔴 探针**绝不能真建/真删模板**（会写库根的 `templates/`）；
+  //    `list` 零副作用、且不需要用户确认（两段式确认只针对 create/delete）。
+  //    ⭐ 顺带验证了"list 不需要 confirm"这条设计。
+  memj_template: { action: 'list' },
 }
 
 for (const tool of registeredTools) {

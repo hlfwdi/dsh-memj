@@ -317,6 +317,40 @@ export const MEMJ_REBUILD_DESCRIPTION = `从库里的全部项目级 handoff 文
 派生文档是**投影**：手改会被下次重建覆盖——**要改知识就改 handoff 封面**。
 不带参数为全量重建；给 \`project\` 则只重建涉及该项目的部分。`
 
+/** `memj_template` 的 description 原文。 */
+export const MEMJ_TEMPLATE_DESCRIPTION = `管理「交接文档模板」——用户可自定义交接文档的结构（节名、节数、每一节要干嘛）。
+
+## 它解决什么
+交接文档默认是六节。用户可以用模板**完全自定义**：自己定节名、节数、每节用途。
+
+## 🔴 什么时候用
+- **新建项目前**：先 list 看有哪些模板，再在 memj_handoff 里传 template 参数。
+- **用户想建/改文档结构时**：用 create 建一份新模板给以后的项目用。
+
+## 🔴🔴 两段式确认（必须遵守）
+create / delete **不会立刻执行**：第一次调用只回一份「待确认」回执。
+你必须**把回执内容转达给用户并取得明确同意**，然后才带 confirm: true 重调一次。
+⚠️ 不要在第一段就说"已经建好了"——那时**什么都没发生**。
+list 不需要确认。
+
+## 参数
+- action: 'list'（列出全部模板）/ 'create'（新建或覆盖）/ 'delete'（删除）。
+- template: create 时给，形状为
+  { id, title, sections: [{ name, desc, truncate? }] }。
+  ⭐ desc 必填——它就是"这一节要干嘛"，会拼进写作指导。
+  truncate 至多一节设为 true；**一节都不设 = 该文档不会自动截断**（文档不会瘦身）。
+- id: delete 时给要删的模板 id。
+- confirm: 用户同意后才传 true。
+
+## 三条硬约束（违反会被拒）
+1. 节名不能是「沉淀知识」——那一节由工具维护（封面存在那里）。
+2. **节名之间不得互为子串**——按节读取是子串匹配，互为子串会一次命中两节。
+3. 至多一节声明 truncate。
+
+## 边界
+- 模板**只影响【新建项目】**；已有文档记着自己的节名，**改模板、删模板都不影响它们**。
+- 删除模板**不会**动任何文档。`
+
 /** `memj_normalize_tags` 的 description 原文。 */
 export const MEMJ_NORMALIZE_TAGS_DESCRIPTION = `规范化库里的标签（tags）：把同义/大小写变体合并到规范词，去掉纯泛化词，
 并给规范词补英文（供中文不好的模型用）。

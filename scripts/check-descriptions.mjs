@@ -50,6 +50,8 @@ const names = [
   'memj_promote',
   'memj_update',
   'memj_rebuild',
+  // ⭐⭐⭐ 决策 205：交接文档模板（管理模板：list/create/delete；两段式确认）。
+  'memj_template',
   // ⭐ 决策 162：标签规范化（独立工具，与沉淀解耦）。
   'memj_normalize_tags',
   // ⭐⭐⭐ 决策 177：轮末知识评分（由插件起子代理调）。

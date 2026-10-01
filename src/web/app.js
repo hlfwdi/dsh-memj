@@ -30,7 +30,7 @@ const TABS = ['kb', 'projects', 'themes', 'hot', 'review', 'archive', 'settings'
 //       ⭐ 所以 index 页的标签也从"索引与规范化"改成了"英文索引"。
 //    ⭐⭐⭐ 2026-09-29：**新增 `prompts`**（用户需求）——这一页的分区轴是
 //       **生效方式与影响面**（常驻/工具/内部），不是功能（见 `renderPromptsPage`）。
-const SET_SUBTABS = ['sink', 'hot', 'active', 'index', 'prompts']
+const SET_SUBTABS = ['sink', 'hot', 'active', 'index', 'prompts', 'templates']
 
 /**
  * ⭐⭐⭐ **【提示词】页的分区标题**（与 `prompts.ts` 的 `PromptZone` 一一对应）。
@@ -3467,6 +3467,252 @@ async function openSettingsPage(sub = 'sink', { keepMessage = false } = {}) {
   //    所以要在 `/settings` 读完之后**单独拉一次**。
   //    ⚠️ 放在 `try` 之外：提示词页拉取失败**不该**影响其它子页的"保存"按钮可用性。
   if (state.setSub === 'prompts') void openPromptsPage({ keepMessage: true })
+  // ⭐⭐⭐ **【模板】页同理**：它的数据源是 `GET /templates`（不是 `/settings`）。
+  if (state.setSub === 'templates') void openTemplatesPage()
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ⭐⭐⭐ **【模板】子页**（决策 204 / 205）
+//
+// 作用：管理"交接文档模板" —— 用户可完全自定义文档结构（节名/节数/每节用途）。
+//
+// 🔴🔴 **它只影响【新建项目】**：已有文档记着自己建时的结构，与模板**已解耦**
+//    ⇒ 改模板、删模板都**不影响任何已有文档**。⭐ 这句话必须显示在页面上
+//    （否则用户会以为"我改了模板，怎么老文档没变"——那是**设计如此**，不是 bug）。
+// ══════════════════════════════════════════════════════════════════════════
+
+/** 模板页状态（当前正在编辑的表单）。 */
+const tplState = {
+  items: [],
+  /** 表单里的节（`{ name, desc, truncate }`）。 */
+  sections: [],
+}
+
+/**
+ * 打开/刷新模板页：拉列表 + 重画。
+ */
+async function openTemplatesPage() {
+  const status = document.getElementById('tpl-status')
+  try {
+    const r = await fetch(`${API}/templates`)
+    const body = await r.json()
+    if (!body.ok) throw new Error(body.error || '读取失败')
+    tplState.items = body.items
+    if (status) status.textContent = `共 ${body.items.length} 份`
+    renderTemplatesList()
+    // ⭐ 首次打开且表单为空 ⇒ 给一份"默认六节"作起点（省得用户从零敲六行）。
+    if (tplState.sections.length === 0) loadTemplateIntoForm(body.items.find((t) => t.id === 'default'))
+  } catch (e) {
+    if (status) status.textContent = `读取失败：${e.message}`
+    toast(`读取模板失败：${e.message}`, true)
+  }
+}
+
+/** 把一份模板灌进表单（编辑已有模板，或以它为起点）。 */
+function loadTemplateIntoForm(t) {
+  if (!t) return
+  const idEl = document.getElementById('tpl-id')
+  const titleEl = document.getElementById('tpl-title')
+  // ⚠️ 内置 default **不能被覆盖** ⇒ 不带入 id（让用户自己起个新 id）。
+  if (idEl) idEl.value = t.id === 'default' ? '' : t.id
+  if (titleEl) titleEl.value = t.id === 'default' ? '' : t.title
+  // ⚠️ **深拷一份**：直接引用 `t.sections` 会让"取消编辑"后仍改到列表里的对象。
+  tplState.sections = t.sections.map((s) => ({ name: s.name, desc: s.desc, truncate: s.truncate === true }))
+  renderTemplateSections()
+}
+
+/** 画模板列表（每份一行：节数 + 编辑/删除）。 */
+function renderTemplatesList() {
+  const box = document.getElementById('tpl-list')
+  if (!box) return
+  box.replaceChildren()
+  for (const t of tplState.items) {
+    const row = document.createElement('div')
+    row.className = 'tpl-row'
+    const info = document.createElement('div')
+    info.className = 'tpl-row-info'
+    const name = document.createElement('strong')
+    name.textContent = `${t.id}${t.title && t.title !== t.id ? `（${t.title}）` : ''}`
+    const meta = document.createElement('span')
+    meta.className = 'dim'
+    meta.textContent = `${t.sectionCount} 节${t.id === 'default' ? '｜内置，不可删' : ''}`
+    info.append(name, meta)
+    // ⚠️ 不合法的模板**逐条报出来**（否则它会静默不可用）。
+    if (t.errors && t.errors.length > 0) {
+      const err = document.createElement('div')
+      err.className = 'tpl-row-err'
+      err.textContent = `⚠️ 不合法：${t.errors.join('；')}`
+      info.append(err)
+    }
+    row.append(info)
+
+    const acts = document.createElement('span')
+    const edit = document.createElement('button')
+    edit.type = 'button'
+    edit.className = ''
+    edit.textContent = '编辑'
+    edit.addEventListener('click', () => loadTemplateIntoForm(t))
+    acts.append(edit)
+    if (t.deletable) {
+      const del = document.createElement('button')
+      del.type = 'button'
+      del.className = ''
+      del.textContent = '删除'
+      // 🔴 **二次确认**（用户裁定：模板相关操作要用户确认）。
+      del.addEventListener('click', () => {
+        if (!window.confirm(`删除模板「${t.id}」？\n\n⭐ 不会影响任何已有文档（它们记着自己的结构）。`)) return
+        void deleteTemplate(t.id)
+      })
+      acts.append(del)
+    }
+    row.append(acts)
+    box.append(row)
+  }
+}
+
+/** 画表单里的节（每行：节名 + 用途 + 可截断 + 删除）。 */
+function renderTemplateSections() {
+  const box = document.getElementById('tpl-sections')
+  if (!box) return
+  box.replaceChildren()
+  tplState.sections.forEach((s, i) => {
+    const row = document.createElement('div')
+    row.className = 'tpl-sec'
+
+    const name = document.createElement('input')
+    name.type = 'text'
+    name.className = 'tpl-sec-name'
+    name.placeholder = '节名'
+    name.value = s.name
+    name.addEventListener('input', () => { s.name = name.value })
+
+    const desc = document.createElement('input')
+    desc.type = 'text'
+    desc.className = 'tpl-sec-desc'
+    desc.placeholder = '这一节要干嘛（必填）'
+    desc.value = s.desc
+    desc.addEventListener('input', () => { s.desc = desc.value })
+
+    const truncWrap = document.createElement('label')
+    truncWrap.className = 'tpl-sec-trunc'
+    const trunc = document.createElement('input')
+    trunc.type = 'checkbox'
+    trunc.checked = s.truncate === true
+    trunc.addEventListener('change', () => {
+      // ⭐ **至多一节**：勾上新的 ⇒ 自动取消其余（否则保存时会被服务端拒）。
+      if (trunc.checked) for (const o of tplState.sections) o.truncate = false
+      s.truncate = trunc.checked
+      renderTemplateSections()
+    })
+    truncWrap.append(trunc, document.createTextNode('可截断'))
+
+    const del = document.createElement('button')
+    del.type = 'button'
+    del.className = ''
+    del.textContent = '×'
+    del.title = '删除这一节'
+    del.addEventListener('click', () => {
+      tplState.sections.splice(i, 1)
+      renderTemplateSections()
+    })
+
+    row.append(name, desc, truncWrap, del)
+    box.append(row)
+  })
+}
+
+/** 保存当前表单里的模板。 */
+async function saveTemplateForm() {
+  const errBox = document.getElementById('tpl-errors')
+  const showErrs = (list) => {
+    if (!errBox) return
+    errBox.replaceChildren()
+    if (!list || list.length === 0) { errBox.hidden = true; return }
+    errBox.hidden = false
+    const ul = document.createElement('ul')
+    for (const e of list) {
+      const li = document.createElement('li')
+      li.textContent = e
+      ul.append(li)
+    }
+    errBox.append(ul)
+  }
+  const id = (document.getElementById('tpl-id')?.value ?? '').trim()
+  const title = (document.getElementById('tpl-title')?.value ?? '').trim()
+  const template = {
+    id,
+    title: title === '' ? id : title,
+    sections: tplState.sections.map((s) => ({
+      name: s.name.trim(),
+      desc: s.desc.trim(),
+      ...(s.truncate === true ? { truncate: true } : {}),
+    })),
+  }
+  try {
+    const r = await fetch(`${API}/template/save`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ template }),
+    })
+    const body = await r.json()
+    if (!body.ok) {
+      showErrs(body.errors || [body.error || '保存失败'])
+      toast('模板未保存：校验没过', true)
+      return
+    }
+    showErrs([])
+    toast(`模板「${id}」已保存`)
+    await openTemplatesPage()
+  } catch (e) {
+    showErrs([`请求失败：${e.message}`])
+    toast(`保存模板失败：${e.message}`, true)
+  }
+}
+
+/** 删除一份模板。 */
+async function deleteTemplate(id) {
+  try {
+    const r = await fetch(`${API}/template/delete`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id }),
+    })
+    const body = await r.json()
+    if (!body.ok) { toast(body.error || '删除失败', true); return }
+    toast(`模板「${id}」已删除（已有文档不受影响）`)
+    await openTemplatesPage()
+  } catch (e) {
+    toast(`删除模板失败：${e.message}`, true)
+  }
+}
+
+/** 绑定模板页上的按钮（**只绑一次**）。 */
+function bindTemplateButtons() {
+  const add = document.getElementById('tpl-add-section')
+  if (add && add.dataset['bound'] !== '1') {
+    add.dataset['bound'] = '1'
+    add.addEventListener('click', () => {
+      tplState.sections.push({ name: '', desc: '', truncate: false })
+      renderTemplateSections()
+    })
+  }
+  const clear = document.getElementById('tpl-clear')
+  if (clear && clear.dataset['bound'] !== '1') {
+    clear.dataset['bound'] = '1'
+    clear.addEventListener('click', () => {
+      const idEl = document.getElementById('tpl-id')
+      const titleEl = document.getElementById('tpl-title')
+      if (idEl) idEl.value = ''
+      if (titleEl) titleEl.value = ''
+      tplState.sections = [{ name: '', desc: '', truncate: false }]
+      renderTemplateSections()
+    })
+  }
+  const save = document.getElementById('tpl-save')
+  if (save && save.dataset['bound'] !== '1') {
+    save.dataset['bound'] = '1'
+    save.addEventListener('click', () => void saveTemplateForm())
+  }
 }
 
 
@@ -6911,5 +7157,7 @@ if (!/^#\/(kb|project|theme|hot|review|archive)/.test(location.hash)) state.tab 
 //      而且那个错会让**它之后的所有顶层语句全部不执行**（实测：热知识页整页坏掉）。
 //    ⭐ 判据：**顶层立即执行的初始化，只能放在"它依赖的全部 `const` 之后"**。
 bindNarrowEditorButtons()
+// ⭐ 【模板】页的按钮（决策 205）—— 同样放最末尾（同 TDZ 理由）。
+bindTemplateButtons()
 renderTabs()
 void load().then(() => applyRoute())

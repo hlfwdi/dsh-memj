@@ -561,8 +561,10 @@ export async function writeProjectDoc(
     //    🔴 **为什么必须"空就不写"**：老文档（或未指定模板的）读出来是空数组
     //    ⇒ 写回时若渲染成 `sections: []`，会让**每一份老文档都被改一次**
     //    （凭空产生一次全库 diff），而语义上它并没有变化。
-    ...(frontmatter.sections.length > 0
-      ? ([['sections', renderYamlArray(frontmatter.sections)]] as Array<readonly [string, string]>)
+    //    ⚠️ `?? []` 是**容错**：调用方（尤其旧测试夹具/脚本）可能没给这个字段，
+    //       直接读 `.length` 会**崩在 `undefined.length`**（实测踩到 —— 同 `title` 的 `?? ''`）。
+    ...((frontmatter.sections ?? []).length > 0
+      ? ([['sections', renderYamlArray(frontmatter.sections ?? [])]] as Array<readonly [string, string]>)
       : []),
     // ⭐ 建文档时用的模板 id（决策 204）：空就不写行。
     //    ⚠️ **必须从 frontmatter 透传**（同 `archivedAt` 的理由）——
