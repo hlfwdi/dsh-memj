@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..')
 const LIB = join(ROOT, 'lib', 'index.js')
-const SRC = join(ROOT, 'src')
+const SRC = process.env['MEMJ_TEST_SRC'] ?? join(ROOT, 'src')
 
 let pass = 0, fail = 0
 const check = (name, ok, extra = '') => {
@@ -134,7 +134,21 @@ console.log('\n【3】⭐ 规范（context.ts）—— 这是生成物，源头�
     /判"(\*\*)?话题/.test(ctx) || /通不通用的\*\*不是话题\*\*/.test(ctx))
   check('⭐⭐ 规范里要求填 `themeWhy`（引 desc + 说明用途）', /themeWhy/.test(ctx))
   check('⭐⭐ 规范里说明**引不出 ⇒ 警告**', /警告/.test(ctx))
-  check('⭐ 生成物标注仍在（提醒改源头）', /本文件由 `scripts\/gen-context\.mjs`/.test(ctx))
+  // ⭐⭐ 2026-10-02 更正：原来这里断言的是"本文件由 gen-context.mjs 生成"那句标注，
+  //    但**那条生成链已不在 `run-all-tests` 回路里**（对比 `gen-descriptions.mjs` 仍在），
+  //    而 `context.ts` 现在是"默认值 / 回落值"、可以直接改。
+  //    ⇒ 判据随之改成验**新的、如实的说明**（两个源头 + 生成链已失效）。
+  check('⭐ 说明「运行期唯一源头是设置页【提示词】」',
+    /设置页【提示词】子页/.test(ctx) && /唯一源头/.test(ctx))
+  check('⭐ 说明「生成链已不在套件回路里」（不再误导"先改设计文档"）',
+    /生成链已不在/.test(ctx))
+  // ⭐⭐ 2026-10-02：正文那句**不得再出现"六节 / 第七节"**。
+  //    🔴 为什么要有这条：文档结构现在**可由用户自定义模板**（决策 204/205），
+  //       常驻文本里写死"前六节/第七节"会与"这份文档可能只有 3 节"**自相矛盾**。
+  //    ⚠️ 这条断言是**反证逼出来的**：我第一版只改了文案、没写断言
+  //       ⇒ 反证"改回旧写法"时**没报红**（说明没有判据守着它）。
+  check('⭐⭐ 正文已中性化（不再写死「前六节 / 第七节」）',
+    !/前六节写/.test(ctx) && !/第七节「沉淀知识」/.test(ctx))
 }
 
 console.log(`\n挂靠依据核对测试：${pass} 通过 / ${fail} 失败`)

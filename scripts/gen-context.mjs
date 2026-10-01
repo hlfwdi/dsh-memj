@@ -60,8 +60,15 @@ const joined = blocks.map((b) => b.text.trim()).join('\n\n')
 const escaped = joined.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$\{/g, '\\${')
 
 const header = `/**
- * ⚠️ **本文件由 \`scripts/gen-context.mjs\` 从 \`memj-design.md\` §5.2 生成**——
- * 不要直接改本文件。要改内容，**先改设计文档 §5.2**，再重跑生成脚本。
+ * ⭐ **本文件是「默认值 / 回落值」**——运行期真正的生效文本看两处：
+ *   ① **设置页【提示词】子页**（写 \`<库根>/prompts/overrides.json\`，
+ *      **改完即生效、不破前缀缓存**）⇒ ⭐ **它才是运行期唯一源头**；
+ *   ② 本文件（**没被覆盖过**时用它；改它要**重启**才生效）。
+ *
+ * ⚠️ 历史：本文件曾由 \`scripts/gen-context.mjs\` 从设计文档 §5.2 生成，
+ *    但**那条生成链已不在 \`run-all-tests\` 的回路里**（对比 \`gen-descriptions.mjs\`
+ *    仍在套件里每次重跑）⇒ **可以直接改本文件**，不需要动设计文档。
+ *    （本头部模板随之失去了"提醒改源头"的作用，保留只为记录这段历史。）
  *
  * 这些文本走 \`ctx.systemPrompt.context()\`（**user 角色、尾部 append**）——
  * ⭐ 与协议（\`section()\`，node 0）不同：**改它不破前缀缓存**。
