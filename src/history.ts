@@ -28,6 +28,9 @@
  */
 
 import { randomUUID } from 'node:crypto'
+// ⭐ 节名走**唯一源头**（`store.ts`）——历史上这里是硬编码的 `'当前进度'` 字面量，
+//   与 `handoff.ts` 的同类判据是**各自一份**（2026-09-30 合并）。
+import { PROGRESS_TITLE } from './store.ts'
 
 /** 「历史进展」小节名（**「当前进度」内部**的 `###` 小节，用户裁定）。 */
 export const HISTORY_SECTION = '历史进展'
@@ -216,9 +219,9 @@ export function truncateProgress(
   const lines = narrative.split(/\r?\n/)
   const secs = splitSectionsForHistory(lines)
   // ── 找「当前进度」顶层节 ──
-  const progress = secs.find((s) => s.level === 2 && s.title === '当前进度')
+  const progress = secs.find((s) => s.level === 2 && s.title === PROGRESS_TITLE)
   if (progress === undefined) {
-    return { narrative, beforeChars: 0, afterChars: 0, chunks: [], warning: '没有「当前进度」这一节，未截断。' }
+    return { narrative, beforeChars: 0, afterChars: 0, chunks: [], warning: `没有「${PROGRESS_TITLE}」这一节，未截断。` }
   }
   const secLines = lines.slice(progress.start, progress.end)
   const beforeChars = secLines.join('\n').trimEnd().length
@@ -238,7 +241,7 @@ export function truncateProgress(
       afterChars: beforeChars,
       chunks: [],
       warning:
-        '「当前进度」超过目标、但里面**没有可截的 `###` 小节**（或只有「历史进展」）⇒ 未截断。' +
+        `「${PROGRESS_TITLE}」超过目标、但里面**没有可截的 \`###\` 小节**（或只有「历史进展」）⇒ 未截断。` +
         '⚠️ 工具不猜——请人工确认这一节为什么这么长。',
     }
   }

@@ -31,6 +31,8 @@
 
 import { parse as parseYaml } from 'yaml'
 import { ENTRY_KINDS, isEntryKind, type Cover, type CoverIssue, type EntryKind, type ParsedCover } from './schema.ts'
+// ⭐ 节名走**唯一源头**（`sections.ts` 零依赖 ⇒ 不会形成 store ⇄ parse 循环引用）。
+import { cutKnowledgeSection } from './sections.ts'
 
 /** `desc` 的长度上限（字符数，§3.2）。 */
 export const DESC_MAX_CHARS = 200
@@ -518,15 +520,8 @@ export function narrativeFromProjectText(text: string): string {
   // ② 去封面围栏块。
   const withoutCovers = stripCovers(body)
   // ③ 砍掉「沉淀知识」节及其后内容（**行首精确匹配**，避免命中正文里的引用）。
-  const lines = withoutCovers.split(/\r?\n/)
-  let cut = lines.length
-  for (let i = 0; i < lines.length; i += 1) {
-    if (/^##\s+沉淀知识\s*$/.test(lines[i] ?? '')) {
-      cut = i
-      break
-    }
-  }
-  const narrative = lines.slice(0, cut).join('\n')
+  //    ⭐ 判定走 `sections.ts` 的唯一实现（历史上这里与 `handoff.ts` 各写了一遍）。
+  const narrative = cutKnowledgeSection(withoutCovers)
   // ④ 去一级标题。
   const noTitle = narrative.replace(/^\s*#\s+HANDOFF[^\n]*\n+/i, '')
   // ⑤ 🔴 **去掉「文件位置」行内注释**（2026-09-19 真实实例验收抓到的累积 bug）。

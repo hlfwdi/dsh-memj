@@ -68,18 +68,33 @@ import type {
 const HANDOFF_PREFIX = 'HANDOFF-'
 const MD_SUFFIX = '.md'
 
-/** 项目文档的**六节叙事**标题（顺序固定，§3.1）。 */
-export const NARRATIVE_SECTIONS: readonly string[] = [
-  '## 目标',
-  '## 当前进度',
-  '## 有效做法',
-  '## 失败/踩坑',
-  '## 关键上下文',
-  '## 下一步',
-]
+// ⭐⭐⭐ **节名契约已下沉到 `./sections.ts`**（2026-09-30 去副本）。
+//
+// 🔴 为什么不留在本文件：节名被 `store` / `handoff` / `history` / `parse` 四处消费，
+//   而它们之间**已有依赖方向 `store → parse`** ⇒ 常量放这里，`parse.ts` 引用它
+//   就会形成**循环依赖**。⇒ 下沉到零依赖的 `sections.ts`。
+//
+// ⭐ **引入 + 转出两步都做**：`import` 让本文件自己能用（`writeProjectDoc` 重建骨架要用），
+//   `export` 让既有调用点（从 `store.ts` 引这些名字的）**一行都不用改**。
+import {
+  NARRATIVE_TITLES,
+  NARRATIVE_SECTIONS,
+  PROGRESS_TITLE,
+  KNOWLEDGE_TITLE,
+  KNOWLEDGE_SECTION,
+  isKnowledgeHeading,
+  cutKnowledgeSection,
+} from './sections.ts'
 
-/** 「沉淀知识」节标题——**只放封面，不放正文**。 */
-export const KNOWLEDGE_SECTION = '## 沉淀知识'
+export {
+  NARRATIVE_TITLES,
+  NARRATIVE_SECTIONS,
+  PROGRESS_TITLE,
+  KNOWLEDGE_TITLE,
+  KNOWLEDGE_SECTION,
+  isKnowledgeHeading,
+  cutKnowledgeSection,
+}
 
 /** 一个项目在库里的全貌。 */
 export interface ProjectRecord {

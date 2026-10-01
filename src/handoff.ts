@@ -52,6 +52,9 @@ import {
 } from './parse.ts'
 import {
   KNOWLEDGE_SECTION,
+  NARRATIVE_TITLES,
+  PROGRESS_TITLE,
+  cutKnowledgeSection,
   loadEntryDoc,
   loadProjectDoc,
   readNominations,
@@ -369,15 +372,10 @@ export interface HandoffResult {
   snapshotCount: number
 }
 
-/** 六节叙事的标题（**顺序固定**，§3.1 / §4.2）。 */
-const NARRATIVE_TITLES: readonly string[] = [
-  '目标',
-  '当前进度',
-  '有效做法',
-  '失败/踩坑',
-  '关键上下文',
-  '下一步',
-]
+// ⭐⭐⭐ **第二份节名清单已删除**（2026-09-30）：这里原来还有一个本地
+//   `const NARRATIVE_TITLES = ['目标', '当前进度', …]`（**无 `## ` 前缀**形态），
+//   与 `store.ts` 的 `NARRATIVE_SECTIONS` 是**两份必须同改的副本**。
+//   ⇒ 现在唯一源头是 `store.ts` 的 `NARRATIVE_TITLES`（见文件头部 import）。
 
 /** 六节叙事的默认骨架。 */
 const NARRATIVE_TEMPLATE = NARRATIVE_TITLES.map((t) => `## ${t}\n`).join('\n')
@@ -805,22 +803,6 @@ export function mergeNarrative(incoming: string, existing: string | undefined): 
 }
 
 /**
- * 砍掉「沉淀知识」节及其后的全部内容。
- *
- * ⚠️ **必须按行首匹配**：`indexOf('## 沉淀知识')` 会命中正文里**引用**这个标题的地方
- * （例如叙述里提到"见 ## 沉淀知识"），从而把真实内容误删。
- * @param text - 文本。
- * @returns 砍掉后的文本。
- */
-function cutKnowledgeSection(text: string): string {
-  const lines = text.split(/\r?\n/)
-  for (let i = 0; i < lines.length; i += 1) {
-    if (/^##\s+沉淀知识\s*$/.test(lines[i] ?? '')) return lines.slice(0, i).join('\n')
-  }
-  return text
-}
-
-/**
  * 从 LLM 给的 `doc` 里抽出**叙事部分**并规范化成六节。
  *
  * 这样无论 LLM 传的是"整份文档"还是"只有叙事"、写全了还是只写了几节，
@@ -1032,7 +1014,7 @@ function orphanJudgments(
   before: string,
   after: string,
 ): { before: number; after: number } | undefined {
-  const target = '当前进度'
+  const target = PROGRESS_TITLE
   const pick = (narrative: string): string[] | undefined => {
     for (const s of splitH2(narrative)) if (s.title === target) return s.lines
     return undefined
@@ -2200,24 +2182,26 @@ export async function runHandoff(
       const n = s.lines.join('\n').trim().length
       sizes.set(s.title, (sizes.get(s.title) ?? 0) + n)
     }
-    const progressChars = sizes.get('当前进度') ?? 0
+    const progressChars = sizes.get(PROGRESS_TITLE) ?? 0
     const total = [...sizes.values()].reduce((a, b) => a + b, 0)
     if (progressChars > 0 || sizes.size > 0) {
       const warn = env.config.progressCharsWarn
       const over = progressChars > warn
       // 展示顺序：标准六节在前（按设计顺序），自定义节附后。
-      const order = ['目标', '当前进度', '有效做法', '失败/踩坑', '关键上下文', '下一步']
+      // ⭐ 用**唯一源头** `NARRATIVE_TITLES`——这里原来是**第三份**节名数组副本
+      //   （2026-09-30 合并）。
+      const order = NARRATIVE_TITLES
       const shown = [
         ...order.filter((t) => sizes.has(t)),
         ...[...sizes.keys()].filter((t) => !order.includes(t)),
       ]
       const detail = shown
-        .map((t) => (t === '当前进度' ? `**${t} ${sizes.get(t)}**` : `${t} ${sizes.get(t)}`))
+        .map((t) => (t === PROGRESS_TITLE ? `**${t} ${sizes.get(t)}**` : `${t} ${sizes.get(t)}`))
         .join(' ｜ ')
       lines.push(
         `📋 **叙事共 ${total} 字符**，${shown.length} 节：\n    ${detail}` +
           (progressChars > 0
-            ? `\n📏 **「当前进度」${progressChars} 字符**（阈值 ${warn}）。` +
+            ? `\n📏 **「${PROGRESS_TITLE}」${progressChars} 字符**（阈值 ${warn}）。` +
               (over
                 ? '\n    ⚠️ **已超过阈值**——请把已完结的历史归并（判据见 `context()` 的压缩规范）。'
                 : '')
@@ -2550,7 +2534,7 @@ export async function runHandoff(
     const oj = orphanJudgments(existing.narrative, finalNarrative)
     if (oj !== undefined && oj.after < oj.before) {
       lines.push(
-        `\n⚠️ **孤本判据减少**（「当前进度」）：${oj.before} → ${oj.after} 条` +
+        `\n⚠️ **孤本判据减少**（「${PROGRESS_TITLE}」）：${oj.before} → ${oj.after} 条` +
           `（−${oj.before - oj.after}）。\n` +
           '    ⭐ **孤本 = 文档别的节里没有对应表述**——删了**别处查不到**。\n' +
           '    ⚠️ 判据靠**原句**生效（改写成摘要就不再是判据了）。\n' +
@@ -2657,7 +2641,7 @@ async function runHistoryArchive(args: {
       kind: 'history',
       tags: ['历史进展'],
       title: c.title,
-      desc: `「当前进度」自动截断时归档的原文（${c.summary}）；当要查这一段的历史细节时读它。`,
+      desc: `「${PROGRESS_TITLE}」自动截断时归档的原文（${c.summary}）；当要查这一段的历史细节时读它。`,
       ref: '', // 由 writeEntryDoc 生成
       ext: false,
       createdAt: nowIsoNow(),
@@ -2685,7 +2669,7 @@ async function runHistoryArchive(args: {
 
   if (created.length > 0) {
     lines.push(
-      `\n📦 **历史归档（自动截断）**：「当前进度」${r.beforeChars} → ${r.afterChars} 字符` +
+      `\n📦 **历史归档（自动截断）**：「${PROGRESS_TITLE}」${r.beforeChars} → ${r.afterChars} 字符` +
         `（目标 ${config.progressCharsKeep}）。\n` +
         created
           .map(
