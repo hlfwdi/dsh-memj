@@ -208,6 +208,11 @@ export function slugSegment(titles: readonly string[]): string {
  * @param warnChars - **触发点**（超过它才截）。
  * @param keepChars - **截断目标**（截后应 ≤ 它）。⚠️ 应 ≤ `warnChars`。
  * @param historyLines - ⭐ **已有的「历史进展」行**（调用方从旧文档里取，用于保留历史指针）。
+ * @param targetTitle - ⭐⭐ **要截哪一节**（决策 204）。
+ *   · 省略 ⇒ `PROGRESS_TITLE`（**默认六节的行为，一字不变**）；
+ *   · 传 `''`（空串）⇒ ⭐ **本模板没有声明可截断的节** ⇒ **不截断**，
+ *     并回一条说明性 warning（**如实报，不是错误**）。
+ *   ⚠️ 参数**必须加在末尾且可选** —— 测试里有 12 处按前三/四参调用。
  * @returns 截断结果。
  */
 export function truncateProgress(
@@ -215,13 +220,24 @@ export function truncateProgress(
   warnChars: number,
   keepChars: number,
   historyLines: readonly string[] = [],
+  targetTitle: string = PROGRESS_TITLE,
 ): TruncateResult {
+  // ⭐ 模板声明"没有可截断的节" ⇒ 明确不截（不是找不到节那种异常）。
+  if (targetTitle === '') {
+    return {
+      narrative,
+      beforeChars: 0,
+      afterChars: 0,
+      chunks: [],
+      warning: '本模板没有声明可自动截断的节 ⇒ 未截断（文档不会自动瘦身，需要手动归并）。',
+    }
+  }
   const lines = narrative.split(/\r?\n/)
   const secs = splitSectionsForHistory(lines)
-  // ── 找「当前进度」顶层节 ──
-  const progress = secs.find((s) => s.level === 2 && s.title === PROGRESS_TITLE)
+  // ── 找目标节（默认「当前进度」，自定义模板由调用方传入） ──
+  const progress = secs.find((s) => s.level === 2 && s.title === targetTitle)
   if (progress === undefined) {
-    return { narrative, beforeChars: 0, afterChars: 0, chunks: [], warning: `没有「${PROGRESS_TITLE}」这一节，未截断。` }
+    return { narrative, beforeChars: 0, afterChars: 0, chunks: [], warning: `没有「${targetTitle}」这一节，未截断。` }
   }
   const secLines = lines.slice(progress.start, progress.end)
   const beforeChars = secLines.join('\n').trimEnd().length
@@ -241,7 +257,7 @@ export function truncateProgress(
       afterChars: beforeChars,
       chunks: [],
       warning:
-        `「${PROGRESS_TITLE}」超过目标、但里面**没有可截的 \`###\` 小节**（或只有「历史进展」）⇒ 未截断。` +
+        `「${targetTitle}」超过目标、但里面**没有可截的 \`###\` 小节**（或只有「历史进展」）⇒ 未截断。` +
         '⚠️ 工具不猜——请人工确认这一节为什么这么长。',
     }
   }

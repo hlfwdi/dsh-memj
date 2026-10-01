@@ -54,7 +54,9 @@ import {
   KNOWLEDGE_SECTION,
   NARRATIVE_TITLES,
   PROGRESS_TITLE,
+  buildSkeleton,
   cutKnowledgeSection,
+  sectionsOf,
   loadEntryDoc,
   loadProjectDoc,
   readNominations,
@@ -70,6 +72,14 @@ import {
   findDocRead,
 } from './store.ts'
 import { entryRelPath } from './paths.ts'
+// ⭐⭐⭐ 决策 204：模板（用户可自定义文档结构）。
+import {
+  defaultTemplate,
+  listTemplates,
+  loadTemplate,
+  templateSectionNames,
+  validateTemplate,
+} from './templates.ts'
 // ⭐⭐⭐ 决策 167：落知识时**由插件自己记一笔**（供轮次结束的自动规范化判断）。
 import { noteKnowledgeWritten } from './tag-auto-state.ts'
 import { pendingSnapshots } from './reads.ts'
@@ -353,6 +363,19 @@ export interface HandoffRequest {
   linkedSnapshots?: string[] | undefined
   adopt?: AdoptRequest[] | undefined
   confirmCreate?: boolean | undefined
+  /**
+   * ⭐⭐ **用哪份模板建这份文档**（决策 204）。
+   *
+   * 🔴🔴 **只在「新建项目」那一刻有效**（用户 2026-09-30 裁定）：
+   *    · 项目**已存在** ⇒ 本参数**被忽略**（**模板绝不回溯已有文档**）；
+   *    · 新建 ⇒ 按该模板的节名建骨架，并把节名**写进文档自己的 frontmatter**。
+   *   ⇒ 此后那份文档**按自己记着的节名**工作，**与模板解耦**
+   *     （改模板、甚至删掉模板，都**不影响**它）。
+   *
+   * ⚠️ **省略 = 默认六节**（行为与改造前完全一致）。
+   * ⚠️ **模型要改已有文档的结构 ⇒ 做不到，这是有意的**；要换结构只能新建项目。
+   */
+  template?: string | undefined
 }
 
 /** 执行结果。 */
@@ -377,8 +400,9 @@ export interface HandoffResult {
 //   与 `store.ts` 的 `NARRATIVE_SECTIONS` 是**两份必须同改的副本**。
 //   ⇒ 现在唯一源头是 `store.ts` 的 `NARRATIVE_TITLES`（见文件头部 import）。
 
-/** 六节叙事的默认骨架。 */
-const NARRATIVE_TEMPLATE = NARRATIVE_TITLES.map((t) => `## ${t}\n`).join('\n')
+// ⭐⭐⭐ 决策 204：**默认骨架已由 `buildSkeleton(titles)` 生成**（支持任意节名）。
+//   原来这里的 `NARRATIVE_TEMPLATE`（写死默认六节）已删除——
+//   它会让自定义模板的文档**被按默认六节建骨架**。
 
 /**
  * 把一段叙事文本按 `## ` 切成节（**跳过代码围栏内的伪标题**）。
@@ -689,11 +713,13 @@ export function applySectionOp(
  * 3. **非标准节保留**，附在最后——不丢弃 LLM 写的内容；
  * 4. 同名节出现多次 ⇒ 内容合并到该节。
  * @param text - 原始叙事文本。
+ * @param titles - ⭐ **该文档的节名清单**（决策 204）。省略 ⇒ 默认六节。
+ *   🔴 **必须用 `sectionsOf(fm.sections)` 的结果传入**（自定义模板的文档靠它）。
  * @returns 规范化后的叙事。
  */
-export function normalizeNarrative(text: string): string {
+export function normalizeNarrative(text: string, titles: readonly string[] = NARRATIVE_TITLES): string {
   const sections = splitH2(text)
-  const standard = new Set(NARRATIVE_TITLES)
+  const standard = new Set(titles)
   /** 标准节 → 合并后的内容行。 */
   const merged = new Map<string, string[]>()
   /** 非标准节（保序、去重）。 */
@@ -710,7 +736,7 @@ export function normalizeNarrative(text: string): string {
   }
 
   const out: string[] = []
-  for (const title of NARRATIVE_TITLES) {
+  for (const title of titles) {
     out.push(`## ${title}`, '')
     const body = (merged.get(title) ?? []).join('\n').trim()
     if (body !== '') out.push(body, '')
@@ -749,15 +775,22 @@ export function normalizeNarrative(text: string): string {
  *    （自定义节同样**不会被丢弃**——这正是用户报的"内容丢了"的一部分）。
  * @param incoming - 本次 `doc`（可能只含部分节）。
  * @param existing - 旧叙事（可能为 `undefined` = 新项目）。
+ * @param titles - ⭐ **该文档的节名清单**（决策 204）。省略 ⇒ 默认六节。
+ *   🔴 **必须用 `sectionsOf(existingFm.sections)` 的结果传入** ——
+ *   否则自定义模板的文档会被"按默认六节合并"，表现为**节错位 / 旧节永远留着**。
  * @returns 合并后的完整叙事。
  */
-export function mergeNarrative(incoming: string, existing: string | undefined): string {
+export function mergeNarrative(
+  incoming: string,
+  existing: string | undefined,
+  titles: readonly string[] = NARRATIVE_TITLES,
+): string {
   // 新项目（无旧叙事）⇒ 等价于原来那个"规范成固定六节"的行为。
-  if (existing === undefined || existing.trim() === '') return normalizeNarrative(incoming)
+  if (existing === undefined || existing.trim() === '') return normalizeNarrative(incoming, titles)
 
   const ins = splitH2(incoming)
   const old = splitH2(existing)
-  const standard = new Set(NARRATIVE_TITLES)
+  const standard = new Set(titles)
 
   /** 本次写了的节（同名多次 ⇒ 合并）。 */
   const touched = new Map<string, string[]>()
@@ -768,8 +801,8 @@ export function mergeNarrative(incoming: string, existing: string | undefined): 
   }
 
   const out: string[] = []
-  // ── 标准六节：本次写了用新的，没写沿用旧的 ──
-  for (const title of NARRATIVE_TITLES) {
+  // ── 标准节（= 该文档自己的节名）：本次写了用新的，没写沿用旧的 ──
+  for (const title of titles) {
     if (touched.has(title)) {
       out.push(`## ${title}`, '')
       const body = (touched.get(title) ?? []).join('\n').trim()
@@ -803,15 +836,16 @@ export function mergeNarrative(incoming: string, existing: string | undefined): 
 }
 
 /**
- * 从 LLM 给的 `doc` 里抽出**叙事部分**并规范化成六节。
+ * 从 LLM 给的 `doc` 里抽出**叙事部分**并规范化成该文档的节结构。
  *
  * 这样无论 LLM 传的是"整份文档"还是"只有叙事"、写全了还是只写了几节，
- * 结果都是**固定的六节结构**。
+ * 结果都是**固定的节结构**（默认六节，或自定义模板的节）。
  * @param doc - LLM 给的文档文本。
+ * @param titles - ⭐ **该文档的节名清单**（决策 204）。省略 ⇒ 默认六节。
  * @returns 规范化后的叙事 markdown。
  */
-export function narrativeFromDoc(doc: string | undefined): string {
-  if (doc === undefined || doc.trim() === '') return NARRATIVE_TEMPLATE
+export function narrativeFromDoc(doc: string | undefined, titles: readonly string[] = NARRATIVE_TITLES): string {
+  if (doc === undefined || doc.trim() === '') return buildSkeleton(titles)
   // 去掉 frontmatter（我们会重新生成）。
   const { body } = splitFrontmatter(doc)
   // 去掉封面围栏块。
@@ -824,8 +858,8 @@ export function narrativeFromDoc(doc: string | undefined): string {
   //    "上一轮生成的整份文档"原样当 `doc` 传回来，里面就带着我们自己的注释，
   //    不剥掉会**每轮 +1**（实测累积 bug）。
   const noLoc = noTitle.replace(/^\s*<!--\s*文件位置：[^>]*-->\s*$/gm, '')
-  const normalized = normalizeNarrative(noLoc)
-  return normalized === '' ? NARRATIVE_TEMPLATE : normalized
+  const normalized = normalizeNarrative(noLoc, titles)
+  return normalized === '' ? buildSkeleton(titles) : normalized
 }
 
 /**
@@ -859,6 +893,43 @@ function narrativeTopSections(narrative: string): string[] {
   const out: string[] = []
   for (const s of splitH2(narrative)) if (!out.includes(s.title)) out.push(s.title)
   return out
+}
+
+/**
+ * ⭐⭐ **该文档要自动截断的那一节**（决策 204）——**完全从文档自己身上取**。
+ *
+ * 🔴🔴 **为什么不查模板**：模板**可以被改、被删**，而文档与它**解耦**
+ *   ⇒ 文档必须**自描述**。光有节名不够（节名不表达"哪节能截"）
+ *   ⇒ 所以 `truncateSection` 也存进 frontmatter。
+ *
+ * ⚠️ **判据分两步（顺序有意义）**：
+ *   · `sections` **为空**（老文档 / 未指定）⇒ 用默认六节的目标（「当前进度」）
+ *     —— 这是**零行为变化**的保证；
+ *   · `sections` **非空**（自定义模板建的）⇒ **以 `truncateSection` 为准**，
+ *     空串就是**真的不截**。
+ * @param sections - 文档 frontmatter 里的节名清单。
+ * @param truncateSection - 文档 frontmatter 里的截断目标节。
+ * @returns 要截断的节名；`''` = 不截。
+ */
+function defaultTruncateTitle(
+  sections: readonly string[] | undefined,
+  truncateSection: string | undefined,
+): string {
+  const mine = (sections ?? []).map((s) => s.trim()).filter((s) => s !== '')
+  // 老文档（没记节名）⇒ 默认六节的目标节。
+  if (mine.length === 0) return PROGRESS_TITLE
+  // 自定义模板建的文档 ⇒ 自己记着目标；空 = 不截（**不猜**）。
+  return (truncateSection ?? '').trim()
+}
+
+/**
+ * ⭐ 从模板取"要截断的节名"。
+ * @param t - 模板。
+ * @returns 节名；没有节声明 `truncate` ⇒ `''`。
+ */
+function templateTruncateTitle(t: { sections: Array<{ name: string; truncate?: boolean }> }): string {
+  const hit = t.sections.find((s) => s.truncate === true)
+  return hit === undefined ? '' : hit.name
 }
 
 /**
@@ -1489,6 +1560,46 @@ export async function runHandoff(
   /** 本次要写入/更新的项目文档里的封面（含保留的旧封面）。 */
   const existing = await loadProjectDoc(projectId)
   const keptCovers: Cover[] = existing?.covers ?? []
+
+  // ══════════════════════════════════════════════════════════════════════
+  // ⭐⭐⭐ **模板 → 节名**（决策 204）
+  //
+  // 🔴🔴 **只在新建项目时取值**（用户裁定：模板不回溯已有文档）：
+  //    · 项目已存在 ⇒ `newSections` 用**它自己的** `sections`（写回时也沿用）；
+  //    · 新建 ⇒ 按 `req.template` 的节名建骨架（省略模板 ⇒ 默认六节）。
+  //
+  // ⚠️ **`templateId` 是纯记录**（哪份文档按哪套结构建的）；真正生效的是节名。
+  // ══════════════════════════════════════════════════════════════════════
+  const isNewProjForTpl = existing === undefined
+  let newSections: string[] = existing?.frontmatter.sections ?? []
+  let templateId = existing?.frontmatter.template ?? ''
+  let newTruncateSection = existing?.frontmatter.truncateSection ?? ''
+  /** 该文档的节名（**所有按节工作的机制都用它**；老文档回落默认六节）。 */
+  let docSections: readonly string[] = sectionsOf(existing?.frontmatter.sections)
+  /** 该文档要截断的节名（空串 = 不截）。 */
+  let docTruncateTitle: string = defaultTruncateTitle(
+    existing?.frontmatter.sections,
+    existing?.frontmatter.truncateSection,
+  )
+
+  if (isNewProjForTpl) {
+    const wantTpl = (req.template ?? '').trim()
+    if (wantTpl !== '') {
+      const t = wantTpl === 'default' ? defaultTemplate() : await loadTemplate(wantTpl)
+      if (t === undefined) {
+        return { ...fail(`模板 \`${wantTpl}\` 不存在。可用：${(await listTemplates()).map((x) => `\`${x.id}\``).join('、')}`), similarProjects: [] }
+      }
+      const tErrs = validateTemplate(t)
+      if (tErrs.length > 0) {
+        return { ...fail(`模板 \`${wantTpl}\` 不合法（它坏了，不是你的输入问题）：\n${tErrs.map((e) => `  · ${e}`).join('\n')}`), similarProjects: [] }
+      }
+      newSections = templateSectionNames(t)
+      newTruncateSection = templateTruncateTitle(t)
+      templateId = wantTpl === 'default' ? '' : wantTpl
+      docSections = newSections
+      docTruncateTitle = newTruncateSection
+    }
+  }
   const newCovers: Cover[] = []
   /** ⭐ 本次**覆盖**掉的知识（决策 104）——回执要单独报，语义与"新增"不同。 */
   const overwritten: Cover[] = []
@@ -1935,8 +2046,8 @@ export async function runHandoff(
       ? // 🔴 **合并，不是替换**（决策 109）：`doc` 当成"补丁"——
         //    本次写了的节替换、**没写的节保留旧值**。
         //    ⚠️ 新项目时 `existing === undefined` ⇒ 退回原来的"规范成固定六节"。
-        mergeNarrative(narrativeFromDocBare(req.doc), existing?.narrative)
-      : (existing?.narrative ?? narrativeFromDoc(undefined))
+        mergeNarrative(narrativeFromDocBare(req.doc), existing?.narrative, docSections)
+      : (existing?.narrative ?? narrativeFromDoc(undefined, docSections))
 
   // ⭐ `drop` 之后**必须检查有没有产生空壳节**（决策 134 §3.1 / 用户裁定：
   //    "允许删到只剩标题，但回执必须报警"）——工具分不清"故意删空"与"误删"。
@@ -1997,6 +2108,8 @@ export async function runHandoff(
       config: env.config,
       narrateNow,
       sessionId,
+      // ⭐ 决策 204：该文档自己的截断目标（默认六节 == 「当前进度」；空串 = 不截）。
+      truncateTitle: docTruncateTitle,
     })
     finalNarrative = trunc.narrative
     historyArchived = trunc.archived
@@ -2033,6 +2146,16 @@ export async function runHandoff(
       //    （正常路径下归档项目会在更早处被拒，这里是**纵深防御**：
       //      万一哪条路径绕过了那道闸门，也绝不静默改掉人的设置。）
       archivedAt: existing?.frontmatter.archivedAt ?? '',
+      // ⭐⭐ 节名清单（决策 204）：**必须沿用已有的**——与 `title`/`themes`/`archivedAt`
+      //    是**同一类陷阱**：漏了它 ⇒ **每次 handoff 都把自定义模板的节名擦成空**
+      //    ⇒ 那份文档立刻退回默认六节（用户会看到"我的模板过了几轮自己失效了"）。
+      //    ⚠️ 新建项目时 `existing === undefined` ⇒ 用本次选中的模板节名（见 `newSections`）。
+      sections: existing !== undefined ? existing.frontmatter.sections : newSections,
+      // ⭐ 建文档用的模板 id（决策 204）：同样**必须沿用已有的**（纯记录，但别擦）。
+      template: existing !== undefined ? (existing.frontmatter.template ?? '') : templateId,
+      // ⭐⭐ 自动截断目标节（决策 204）：同样**必须沿用已有的**（否则自定义模板的文档
+      //    过了几轮就"忘记自己哪节能截"⇒ 静默不再瘦身）。
+      truncateSection: existing !== undefined ? existing.frontmatter.truncateSection : newTruncateSection,
     },
     finalNarrative,
     allCovers,
@@ -2182,26 +2305,29 @@ export async function runHandoff(
       const n = s.lines.join('\n').trim().length
       sizes.set(s.title, (sizes.get(s.title) ?? 0) + n)
     }
-    const progressChars = sizes.get(PROGRESS_TITLE) ?? 0
+    // ⭐⭐ 体量行按**该文档自己的节名**展示（决策 204）。
+    //    🔴 原来是写死的默认六节 ⇒ 自定义模板的文档会**报错节名 / 漏报自定义节**
+    //       （那正是"回执在撒谎"的一类）。现在：本研究文档记着的节名在前，
+    //       文档里实际出现的其它节（如 LLM 自己加的自定义节）附后。
+    const order = docSections
+    // ⭐ 截断目标也按**该文档自己的**（默认六节时就是「当前进度」）。
+    const truncTitle = docTruncateTitle
+    const progressChars = truncTitle === '' ? 0 : (sizes.get(truncTitle) ?? 0)
     const total = [...sizes.values()].reduce((a, b) => a + b, 0)
     if (progressChars > 0 || sizes.size > 0) {
       const warn = env.config.progressCharsWarn
       const over = progressChars > warn
-      // 展示顺序：标准六节在前（按设计顺序），自定义节附后。
-      // ⭐ 用**唯一源头** `NARRATIVE_TITLES`——这里原来是**第三份**节名数组副本
-      //   （2026-09-30 合并）。
-      const order = NARRATIVE_TITLES
       const shown = [
         ...order.filter((t) => sizes.has(t)),
         ...[...sizes.keys()].filter((t) => !order.includes(t)),
       ]
       const detail = shown
-        .map((t) => (t === PROGRESS_TITLE ? `**${t} ${sizes.get(t)}**` : `${t} ${sizes.get(t)}`))
+        .map((t) => (t === truncTitle ? `**${t} ${sizes.get(t)}**` : `${t} ${sizes.get(t)}`))
         .join(' ｜ ')
       lines.push(
         `📋 **叙事共 ${total} 字符**，${shown.length} 节：\n    ${detail}` +
           (progressChars > 0
-            ? `\n📏 **「${PROGRESS_TITLE}」${progressChars} 字符**（阈值 ${warn}）。` +
+            ? `\n📏 **「${truncTitle}」${progressChars} 字符**（阈值 ${warn}）。` +
               (over
                 ? '\n    ⚠️ **已超过阈值**——请把已完结的历史归并（判据见 `context()` 的压缩规范）。'
                 : '')
@@ -2598,6 +2724,11 @@ async function runHistoryArchive(args: {
   config: MemjConfig
   narrateNow: boolean
   sessionId: string
+  /**
+   * ⭐⭐ **该文档要截断哪一节**（决策 204）。
+   * `''` = 本模板不声明自动截断 ⇒ 不截（如实报，不算错误）。
+   */
+  truncateTitle: string
 }): Promise<{ narrative: string; lines: string[]; archived: boolean; covers: Cover[] }> {
   const lines: string[] = []
   const { projectId, config } = args
@@ -2611,11 +2742,13 @@ async function runHistoryArchive(args: {
 
   // 🔴🔴 **两个配额都要传**（实测踩到过）：只传 `keep` 会让"在 keep 与 warn 之间"
   //     的文档**也被截**，而用户的本意是"**超过阈值才动手、截到 12000 以内**"。
+  // ⭐ 第 5 参 = **该文档自己的截断目标节**（决策 204；默认六节时 == 「当前进度」）。
   const r = truncateProgress(
     args.narrative,
     config.progressCharsWarn,
     config.progressCharsKeep,
     priorLines,
+    args.truncateTitle,
   )
   if (r.warning !== '') {
     lines.push(`\n📦 **历史归档未执行**：${r.warning}`)

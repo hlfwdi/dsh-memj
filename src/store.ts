@@ -82,8 +82,10 @@ import {
   PROGRESS_TITLE,
   KNOWLEDGE_TITLE,
   KNOWLEDGE_SECTION,
+  buildSkeleton,
   isKnowledgeHeading,
   cutKnowledgeSection,
+  sectionsOf,
 } from './sections.ts'
 
 export {
@@ -92,8 +94,10 @@ export {
   PROGRESS_TITLE,
   KNOWLEDGE_TITLE,
   KNOWLEDGE_SECTION,
+  buildSkeleton,
   isKnowledgeHeading,
   cutKnowledgeSection,
+  sectionsOf,
 }
 
 /** 一个项目在库里的全貌。 */
@@ -142,6 +146,8 @@ function normalizeProjectFrontmatter(
     return {
       project: fallbackId, title: '', desc: '', themes: [],
       createdAt: '', updatedAt: '', archivedAt: '',
+      // ⭐ 决策 204：老文档没这两行 ⇒ 读出空（由 `sectionsOf` 回落默认六节）。
+      sections: [], template: '', truncateSection: '',
     }
   }
   const project = typeof data['project'] === 'string' && data['project'].trim() !== ''
@@ -158,6 +164,12 @@ function normalizeProjectFrontmatter(
     updatedAt: typeof data['updatedAt'] === 'string' ? data['updatedAt'] : '',
     // ⭐ 归档时间（决策 133）：老数据没这行 ⇒ 空串 = 活跃。
     archivedAt: typeof data['archivedAt'] === 'string' ? data['archivedAt'] : '',
+    // ⭐⭐ 节名清单（决策 204）：老数据没这行 ⇒ 空数组 ⇒ `sectionsOf` 回落默认六节。
+    sections: toStringArray(data['sections']),
+    // ⭐ 建文档时用的模板 id（决策 204）：纯记录，空串 = 默认模板。
+    template: typeof data['template'] === 'string' ? data['template'] : '',
+    // ⭐⭐ 自动截断目标节（决策 204）：空串 = 不截（老文档由调用方按默认六节兜底）。
+    truncateSection: typeof data['truncateSection'] === 'string' ? data['truncateSection'] : '',
   }
 }
 
@@ -544,6 +556,25 @@ export async function writeProjectDoc(
     //    表现为"归档过的项目自己又冒出来了"。
     ...((frontmatter.archivedAt ?? '') !== ''
       ? ([['archivedAt', yamlScalar(frontmatter.archivedAt)]] as Array<readonly [string, string]>)
+      : []),
+    // ⭐⭐ 节名清单（决策 204）：**空就不写行** —— 与 `title`/`archivedAt` 同一套规矩。
+    //    🔴 **为什么必须"空就不写"**：老文档（或未指定模板的）读出来是空数组
+    //    ⇒ 写回时若渲染成 `sections: []`，会让**每一份老文档都被改一次**
+    //    （凭空产生一次全库 diff），而语义上它并没有变化。
+    ...(frontmatter.sections.length > 0
+      ? ([['sections', renderYamlArray(frontmatter.sections)]] as Array<readonly [string, string]>)
+      : []),
+    // ⭐ 建文档时用的模板 id（决策 204）：空就不写行。
+    //    ⚠️ **必须从 frontmatter 透传**（同 `archivedAt` 的理由）——
+    //    否则任何一次重写（改描述 / rename / rebuild）都会**把这个记录擦掉**。
+    ...((frontmatter.template ?? '') !== ''
+      ? ([['template', yamlScalar(frontmatter.template)]] as Array<readonly [string, string]>)
+      : []),
+    // ⭐⭐ 自动截断目标节（决策 204）：**空就不写行**。
+    //    🔴 **只有"自定义模板且声明了截断节"时才有值** ⇒ 老文档与默认模板
+    //    都不会被写这一行（**零 diff**）。
+    ...((frontmatter.truncateSection ?? '') !== ''
+      ? ([['truncateSection', yamlScalar(frontmatter.truncateSection)]] as Array<readonly [string, string]>)
       : []),
   ])
 

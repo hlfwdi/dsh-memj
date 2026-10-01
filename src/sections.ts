@@ -88,3 +88,34 @@ export function cutKnowledgeSection(text: string): string {
   }
   return text
 }
+
+/**
+ * ⭐⭐⭐ **取"这份文档自己的节名清单"**（决策 204）——所有机制的**统一入口**。
+ *
+ * 🔴🔴 **为什么必须有它**：交接文档的节名从"全局硬编码六节"变成了
+ *   "**每份文档自己记一份**"（`ProjectFrontmatter.sections`，支持用户自定义模板）。
+ *   任何要按节工作的机制（合并 / 截断 / 回执 / 骨架重建）**都必须经由本函数**取节名，
+ *   而不是直接用 `NARRATIVE_TITLES` —— 否则它会**按错误的节名工作**
+ *   （表现为：自定义模板的文档里，那些机制静默失效或错位）。
+ *
+ * ⭐ **回落规则**：文档没记节名（老文档 / 未指定）⇒ **默认六节**。
+ *   ⇒ 这就是**零行为变化**的保证：改造前建的所有文档行为一字不变。
+ * @param sections - 文档 frontmatter 里的节名清单（可能为空）。
+ * @returns 该文档的节名（顺序即文档顺序）。
+ */
+export function sectionsOf(sections: readonly string[] | undefined): readonly string[] {
+  const cleaned = (sections ?? []).map((s) => s.trim()).filter((s) => s !== '')
+  return cleaned.length > 0 ? cleaned : NARRATIVE_TITLES
+}
+
+/**
+ * ⭐ **按给定节名生成"骨架"**（每节一个空标题）——建文档 / 规范化时用。
+ *
+ * ⚠️ 与 `NARRATIVE_SECTIONS` 的区别：那个是**默认六节的**固定形态；
+ *   本函数接受任意节名清单（用户自定义模板用）。
+ * @param sections - 节名清单。
+ * @returns 形如 `## 目标\n\n## 进展\n` 的骨架文本。
+ */
+export function buildSkeleton(sections: readonly string[]): string {
+  return sections.map((t) => `## ${t}\n`).join('\n')
+}

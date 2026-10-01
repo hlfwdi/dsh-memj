@@ -392,6 +392,31 @@ export function promptHistoryDir(): string {
 }
 
 /**
+ * ⭐⭐ **交接文档模板目录**（决策 204）——`<库根>/templates/<id>.json`。
+ *
+ * 🔴 **为什么放库根而不是插件仓**：模板是**用户数据**（用户自己建、可能改、会删），
+ *   而插件仓是交付物（升级会覆盖）⇒ 放库根才能跟着库走、也能被 git 维护。
+ * ⚠️ **与 `prompts/` 的区别**：那里是**插件文本的覆盖值**（改措辞）；
+ *    这里是**文档结构的定义**（改节名/节数/每节用途），语义不同 ⇒ 不混放。
+ * @returns 模板目录绝对路径。
+ */
+export function templatesDir(): string {
+  return join(libraryRoot(), 'templates')
+}
+
+/**
+ * 一份模板文件的绝对路径。
+ *
+ * ⚠️ **内部自己做 `safeName` 消毒** —— 调用方**不要**再消毒一遍
+ *    （两处各消一次会让"该不该消毒"变成调用方的记忆负担，本项目吃过这类漂移）。
+ * @param id - 模板 id。
+ * @returns 绝对路径。
+ */
+export function templatePath(id: string): string {
+  return join(templatesDir(), `${safeName(id)}.json`)
+}
+
+/**
  * 把文件名/id 里的危险字符换掉，避免路径穿越与非法文件名。
  *
  * 项目 id 与主题 id 会直接进文件名，必须消毒。
