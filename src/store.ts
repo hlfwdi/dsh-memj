@@ -146,8 +146,8 @@ function normalizeProjectFrontmatter(
     return {
       project: fallbackId, title: '', desc: '', themes: [],
       createdAt: '', updatedAt: '', archivedAt: '',
-      // ⭐ 决策 204：老文档没这两行 ⇒ 读出空（由 `sectionsOf` 回落默认六节）。
-      sections: [], template: '', truncateSection: '',
+      // ⭐ 决策 204：老文档没这几行 ⇒ 读出空（由 `sectionsOf` 回落默认六节）。
+      sections: [], template: '', truncateSections: [],
     }
   }
   const project = typeof data['project'] === 'string' && data['project'].trim() !== ''
@@ -168,9 +168,29 @@ function normalizeProjectFrontmatter(
     sections: toStringArray(data['sections']),
     // ⭐ 建文档时用的模板 id（决策 204）：纯记录，空串 = 默认模板。
     template: typeof data['template'] === 'string' ? data['template'] : '',
-    // ⭐⭐ 自动截断目标节（决策 204）：空串 = 不截（老文档由调用方按默认六节兜底）。
-    truncateSection: typeof data['truncateSection'] === 'string' ? data['truncateSection'] : '',
+    // ⭐⭐ 自动截断目标节（决策 204 / 206）：**数组**；空 = 不截
+    //    （老文档由调用方按默认六节兜底）。
+    //    🔴🔴 **必须兼容老的单值形态**（决策 204 时代写的是 `truncateSection: 当前进度`）：
+    //       生产库 18 个文档当时全是那个写法 ⇒ 不接住它们就会**全部静默变成"不截"**。
+    truncateSections: readTruncateSections(data),
   }
+}
+
+/**
+ * ⭐ 读 `truncateSections`，**同时兼容老的单值字段 `truncateSection`**。
+ *
+ * 🔴 **为什么必须兼容**：决策 204 存的是**单个字符串**，决策 206 改成数组。
+ *    老文档若不被接住 ⇒ 读出来是空数组 ⇒ 调用方理解成"不截"
+ *    ⇒ **那些文档的「当前进度」再也不会自动瘦身**（正是 `a113fcb` 那个事故的同族）。
+ * ⚠️ 两个字段**同时存在**时以新的（数组）为准。
+ * @param data - frontmatter 原始数据。
+ * @returns 节名数组（已去掉空串）。
+ */
+function readTruncateSections(data: Record<string, unknown>): string[] {
+  const arr = toStringArray(data['truncateSections']).map((s) => s.trim()).filter((s) => s !== '')
+  if (arr.length > 0) return arr
+  const single = typeof data['truncateSection'] === 'string' ? data['truncateSection'].trim() : ''
+  return single === '' ? [] : [single]
 }
 
 /**
@@ -572,11 +592,12 @@ export async function writeProjectDoc(
     ...((frontmatter.template ?? '') !== ''
       ? ([['template', yamlScalar(frontmatter.template)]] as Array<readonly [string, string]>)
       : []),
-    // ⭐⭐ 自动截断目标节（决策 204）：**空就不写行**。
+    // ⭐⭐ 自动截断目标节（决策 204 / 206）：**数组**，**空就不写行**。
     //    🔴 **只有"自定义模板且声明了截断节"时才有值** ⇒ 老文档与默认模板
     //    都不会被写这一行（**零 diff**）。
-    ...((frontmatter.truncateSection ?? '') !== ''
-      ? ([['truncateSection', yamlScalar(frontmatter.truncateSection)]] as Array<readonly [string, string]>)
+    //    ⚠️ 写成 `truncateSections: [A, B]`（与 `sections`/`themes` 同一套 `renderYamlArray`）。
+    ...((frontmatter.truncateSections ?? []).length > 0
+      ? ([['truncateSections', renderYamlArray(frontmatter.truncateSections ?? [])]] as Array<readonly [string, string]>)
       : []),
   ])
 

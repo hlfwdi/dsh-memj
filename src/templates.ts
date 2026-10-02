@@ -122,10 +122,12 @@ export function validateTemplate(t: Template): string[] {
     }
   }
 
-  const truncs = t.sections.filter((s) => s.truncate === true)
-  if (truncs.length > 1) {
-    errs.push(`只能有 **1 节**声明 \`truncate: true\`（当前有 ${truncs.length} 节：${truncs.map((s) => s.name).join('、')}）。`)
-  }
+  // ⭐⭐ 决策 206（用户 2026-10-02）：**允许多节声明可截断**。
+  //    🔴 原先限制"至多 1 节"是**错的**（用户指出）——
+  //       交接文档里可能有好几节都会无限膨胀（比如「当前进度」+「失败/踩坑」）。
+  //    ⭐ 语义（用户拍板）：**各自独立** —— 每节各自与阈值比、各自截、
+  //       各自产出自己的历史归档块（`history.ts` 的 `truncateProgress` 已支持）。
+  //    （因此这里**不再有任何数量校验**。）
   return errs
 }
 

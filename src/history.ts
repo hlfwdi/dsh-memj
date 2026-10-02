@@ -208,10 +208,11 @@ export function slugSegment(titles: readonly string[]): string {
  * @param warnChars - **触发点**（超过它才截）。
  * @param keepChars - **截断目标**（截后应 ≤ 它）。⚠️ 应 ≤ `warnChars`。
  * @param historyLines - ⭐ **已有的「历史进展」行**（调用方从旧文档里取，用于保留历史指针）。
- * @param targetTitle - ⭐⭐ **要截哪一节**（决策 204）。
+ * @param targetTitle - ⭐⭐ **要截哪一节**（决策 204；决策 206 起**支持多节**）。
  *   · 省略 ⇒ `PROGRESS_TITLE`（**默认六节的行为，一字不变**）；
  *   · 传 `''`（空串）⇒ ⭐ **本模板没有声明可截断的节** ⇒ **不截断**，
- *     并回一条说明性 warning（**如实报，不是错误**）。
+ *     并回一条说明性 warning（**如实报，不是错误**）；
+ *   · 传**数组** ⇒ 逐节**各自独立**判断与截断（见 `truncateProgress` 的说明）。
  *   ⚠️ 参数**必须加在末尾且可选** —— 测试里有 12 处按前三/四参调用。
  * @returns 截断结果。
  */
@@ -220,10 +221,12 @@ export function truncateProgress(
   warnChars: number,
   keepChars: number,
   historyLines: readonly string[] = [],
-  targetTitle: string = PROGRESS_TITLE,
+  targetTitle: string | readonly string[] = PROGRESS_TITLE,
 ): TruncateResult {
+  // ⭐ 规范化成数组（单字符串 = 只截一节，**保持旧的调用形态可用**）。
+  const targets = typeof targetTitle === 'string' ? [targetTitle] : [...targetTitle]
   // ⭐ 模板声明"没有可截断的节" ⇒ 明确不截（不是找不到节那种异常）。
-  if (targetTitle === '') {
+  if (targets.length === 0 || (targets.length === 1 && targets[0] === '')) {
     return {
       narrative,
       beforeChars: 0,
@@ -232,6 +235,58 @@ export function truncateProgress(
       warning: '本模板没有声明可自动截断的节 ⇒ 未截断（文档不会自动瘦身，需要手动归并）。',
     }
   }
+
+  // ══════════════════════════════════════════════════════════════════════
+  // ⭐⭐⭐ **逐节各自独立截断**（决策 206 / 用户 2026-10-02 裁定）
+  //
+  // 🔴 **为什么是"各自独立"而不是"合计判断"**（用户拍板）：
+  //    · 每节**各自**与 `warnChars` 比、**各自**截到 `keepChars` 以内；
+  //    · 各节**各自**产出自己的历史归档块；
+  //    ⇒ 语义与"单节版"**完全同构**，只是把同一套逻辑跑 N 遍。
+  //    ⚠️ 合计判断会让"哪一节该截"变模糊、归档块归属不清 —— 所以不采用。
+  //
+  // ⚠️ **必须逐节跑、不能合并成一次**：`truncateOneSection` 会重写该节，
+  //    而每节的行区间在重写后会变 ⇒ **必须每次重新解析**（下面循环里就是这么做的）。
+  // ══════════════════════════════════════════════════════════════════════
+  let current = narrative
+  const allChunks: HistoryChunk[] = []
+  const warns: string[] = []
+  let totalBefore = 0
+  let totalAfter = 0
+  for (const t of targets) {
+    if (t.trim() === '') continue
+    const r = truncateOneSection(current, warnChars, keepChars, historyLines, t)
+    current = r.narrative
+    totalBefore += r.beforeChars
+    totalAfter += r.afterChars
+    allChunks.push(...r.chunks)
+    if (r.warning !== '') warns.push(r.warning)
+  }
+  // ⚠️ 只有**一节都没截成**时才把 warning 透出去（有些节本来就不需要截，那是正常的）。
+  const warning = allChunks.length === 0 && warns.length > 0 ? warns[0] ?? '' : ''
+  return { narrative: current, beforeChars: totalBefore, afterChars: totalAfter, chunks: allChunks, warning }
+}
+
+/**
+ * ⭐ **截断【一节】**（决策 206 从 `truncateProgress` 抽出来的主体）。
+ *
+ * 🔴 **为什么抽出来**：原先整段逻辑写死在 `truncateProgress` 里、只处理一节。
+ *    允许多节后若**复制一份**去处理第二节，就是本项目最忌讳的"同一逻辑两份实现"
+ *    ⇒ 抽成函数、外层循环调用。
+ * @param narrative - 完整叙事。
+ * @param warnChars - 触发点。
+ * @param keepChars - 截断目标。
+ * @param historyLines - 已有的「历史进展」行。
+ * @param targetTitle - 要截的那一节。
+ * @returns 截断结果（`narrative` 是**该节处理完之后**的整份叙事）。
+ */
+function truncateOneSection(
+  narrative: string,
+  warnChars: number,
+  keepChars: number,
+  historyLines: readonly string[],
+  targetTitle: string,
+): TruncateResult {
   const lines = narrative.split(/\r?\n/)
   const secs = splitSectionsForHistory(lines)
   // ── 找目标节（默认「当前进度」，自定义模板由调用方传入） ──

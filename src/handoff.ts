@@ -896,40 +896,39 @@ function narrativeTopSections(narrative: string): string[] {
 }
 
 /**
- * ⭐⭐ **该文档要自动截断的那一节**（决策 204）——**完全从文档自己身上取**。
+ * ⭐⭐ **该文档要自动截断的那些节**（决策 204 / 206）——**完全从文档自己身上取**。
  *
  * 🔴🔴 **为什么不查模板**：模板**可以被改、被删**，而文档与它**解耦**
  *   ⇒ 文档必须**自描述**。光有节名不够（节名不表达"哪节能截"）
- *   ⇒ 所以 `truncateSection` 也存进 frontmatter。
+ *   ⇒ 所以 `truncateSections` 也存进 frontmatter。
  *
  * ⚠️ **判据分两步（顺序有意义）**：
  *   · `sections` **为空**（老文档 / 未指定）⇒ 用默认六节的目标（「当前进度」）
  *     —— 这是**零行为变化**的保证；
- *   · `sections` **非空**（自定义模板建的）⇒ **以 `truncateSection` 为准**，
- *     空串就是**真的不截**。
+ *   · `sections` **非空**（自定义模板建的）⇒ **以 `truncateSections` 为准**，
+ *     空数组就是**真的不截**。
  * @param sections - 文档 frontmatter 里的节名清单。
- * @param truncateSection - 文档 frontmatter 里的截断目标节。
- * @returns 要截断的节名；`''` = 不截。
+ * @param truncateSections - 文档 frontmatter 里的截断目标节（**可多个**，决策 206）。
+ * @returns 要截断的节名数组；空数组 = 不截。
  */
 function defaultTruncateTitle(
   sections: readonly string[] | undefined,
-  truncateSection: string | undefined,
-): string {
+  truncateSections: readonly string[] | undefined,
+): string[] {
   const mine = (sections ?? []).map((s) => s.trim()).filter((s) => s !== '')
   // 老文档（没记节名）⇒ 默认六节的目标节。
-  if (mine.length === 0) return PROGRESS_TITLE
+  if (mine.length === 0) return [PROGRESS_TITLE]
   // 自定义模板建的文档 ⇒ 自己记着目标；空 = 不截（**不猜**）。
-  return (truncateSection ?? '').trim()
+  return (truncateSections ?? []).map((s) => s.trim()).filter((s) => s !== '')
 }
 
 /**
- * ⭐ 从模板取"要截断的节名"。
+ * ⭐ 从模板取"要截断的节名"（**可多个**，决策 206）。
  * @param t - 模板。
- * @returns 节名；没有节声明 `truncate` ⇒ `''`。
+ * @returns 节名数组；没有节声明 `truncate` ⇒ **空数组**。
  */
-function templateTruncateTitle(t: { sections: Array<{ name: string; truncate?: boolean }> }): string {
-  const hit = t.sections.find((s) => s.truncate === true)
-  return hit === undefined ? '' : hit.name
+function templateTruncateTitle(t: { sections: Array<{ name: string; truncate?: boolean }> }): string[] {
+  return t.sections.filter((s) => s.truncate === true).map((s) => s.name)
 }
 
 /**
@@ -1573,13 +1572,13 @@ export async function runHandoff(
   const isNewProjForTpl = existing === undefined
   let newSections: string[] = existing?.frontmatter.sections ?? []
   let templateId = existing?.frontmatter.template ?? ''
-  let newTruncateSection = existing?.frontmatter.truncateSection ?? ''
+  let newTruncateSection: string[] = existing?.frontmatter.truncateSections ?? []
   /** 该文档的节名（**所有按节工作的机制都用它**；老文档回落默认六节）。 */
   let docSections: readonly string[] = sectionsOf(existing?.frontmatter.sections)
-  /** 该文档要截断的节名（空串 = 不截）。 */
-  let docTruncateTitle: string = defaultTruncateTitle(
+  /** 该文档要截断的**那些**节（决策 206：可多节；空数组 = 不截）。 */
+  let docTruncateTitle: string[] = defaultTruncateTitle(
     existing?.frontmatter.sections,
-    existing?.frontmatter.truncateSection,
+    existing?.frontmatter.truncateSections,
   )
 
   if (isNewProjForTpl) {
@@ -2153,9 +2152,9 @@ export async function runHandoff(
       sections: existing !== undefined ? existing.frontmatter.sections : newSections,
       // ⭐ 建文档用的模板 id（决策 204）：同样**必须沿用已有的**（纯记录，但别擦）。
       template: existing !== undefined ? (existing.frontmatter.template ?? '') : templateId,
-      // ⭐⭐ 自动截断目标节（决策 204）：同样**必须沿用已有的**（否则自定义模板的文档
+      // ⭐⭐ 自动截断目标节（决策 204 / 206）：同样**必须沿用已有的**（否则自定义模板的文档
       //    过了几轮就"忘记自己哪节能截"⇒ 静默不再瘦身）。
-      truncateSection: existing !== undefined ? existing.frontmatter.truncateSection : newTruncateSection,
+      truncateSections: existing !== undefined ? existing.frontmatter.truncateSections : newTruncateSection,
     },
     finalNarrative,
     allCovers,
@@ -2311,8 +2310,11 @@ export async function runHandoff(
     //       文档里实际出现的其它节（如 LLM 自己加的自定义节）附后。
     const order = docSections
     // ⭐ 截断目标也按**该文档自己的**（默认六节时就是「当前进度」）。
-    const truncTitle = docTruncateTitle
-    const progressChars = truncTitle === '' ? 0 : (sizes.get(truncTitle) ?? 0)
+    //    ⭐⭐ 决策 206：**可多节** ⇒ 合计它们的字符数做阈值判断，
+    //       并在"已超阈值"那句里**逐个列出**（否则用户看不出是哪一节超了）。
+    const truncTitles = docTruncateTitle
+    const truncSet = new Set(truncTitles)
+    const progressChars = truncTitles.reduce((a, t) => a + (sizes.get(t) ?? 0), 0)
     const total = [...sizes.values()].reduce((a, b) => a + b, 0)
     if (progressChars > 0 || sizes.size > 0) {
       const warn = env.config.progressCharsWarn
@@ -2322,12 +2324,17 @@ export async function runHandoff(
         ...[...sizes.keys()].filter((t) => !order.includes(t)),
       ]
       const detail = shown
-        .map((t) => (t === truncTitle ? `**${t} ${sizes.get(t)}**` : `${t} ${sizes.get(t)}`))
+        .map((t) => (truncSet.has(t) ? `**${t} ${sizes.get(t)}**` : `${t} ${sizes.get(t)}`))
         .join(' ｜ ')
+      // ⚠️ 多节时写出每节各多少（单节时就是那一节的数），措辞按节数分叉。
+      const perSec = truncTitles
+        .filter((t) => (sizes.get(t) ?? 0) > 0)
+        .map((t) => `${t} ${sizes.get(t)}`)
+        .join('、')
       lines.push(
         `📋 **叙事共 ${total} 字符**，${shown.length} 节：\n    ${detail}` +
           (progressChars > 0
-            ? `\n📏 **「${truncTitle}」${progressChars} 字符**（阈值 ${warn}）。` +
+            ? `\n📏 **可截断节合计 ${progressChars} 字符**（${perSec}；阈值 ${warn}）。` +
               (over
                 ? '\n    ⚠️ **已超过阈值**——请把已完结的历史归并（判据见 `context()` 的压缩规范）。'
                 : '')
@@ -2725,10 +2732,10 @@ async function runHistoryArchive(args: {
   narrateNow: boolean
   sessionId: string
   /**
-   * ⭐⭐ **该文档要截断哪一节**（决策 204）。
-   * `''` = 本模板不声明自动截断 ⇒ 不截（如实报，不算错误）。
+   * ⭐⭐ **该文档要截断哪些节**（决策 204 / 206）——**可多节**。
+   * 空数组 = 本模板不声明自动截断 ⇒ 不截（如实报，不算错误）。
    */
-  truncateTitle: string
+  truncateTitle: readonly string[]
 }): Promise<{ narrative: string; lines: string[]; archived: boolean; covers: Cover[] }> {
   const lines: string[] = []
   const { projectId, config } = args
@@ -2742,7 +2749,7 @@ async function runHistoryArchive(args: {
 
   // 🔴🔴 **两个配额都要传**（实测踩到过）：只传 `keep` 会让"在 keep 与 warn 之间"
   //     的文档**也被截**，而用户的本意是"**超过阈值才动手、截到 12000 以内**"。
-  // ⭐ 第 5 参 = **该文档自己的截断目标节**（决策 204；默认六节时 == 「当前进度」）。
+  // ⭐ 第 5 参 = **该文档自己的截断目标节**（决策 204 / 206；默认六节时 == 「当前进度」）。
   const r = truncateProgress(
     args.narrative,
     config.progressCharsWarn,

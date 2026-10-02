@@ -62,8 +62,12 @@ for (const file of files) {
   }
 
   const fm = lines.slice(1, fmEnd)
-  // 已有 `truncateSection:` ⇒ 跳过（幂等）。
-  if (fm.some((l) => /^truncateSection:/.test(l))) { alreadyOk += 1; continue }
+  // 已有截断字段 ⇒ 跳过（幂等）。
+  //   ⚠️ **两种字段名都要认**：老的 `truncateSection:`（单值）与
+  //      新的 `truncateSections:`（数组，决策 206）—— 只认新的会让**已修好的文档被再补一遍**。
+  const hasOld = fm.some((l) => /^truncateSection:/.test(l))
+  const hasNew = fm.some((l) => /^truncateSections:/.test(l))
+  if (hasOld || hasNew) { alreadyOk += 1; continue }
 
   // 没有 `sections:` ⇒ 不归本补丁管（那是 migration 脚本的事）。
   const secLine = fm.find((l) => /^sections:/.test(l))
@@ -78,11 +82,12 @@ for (const file of files) {
   }
 
   // 插在 `sections:` 行之后（保持同类字段相邻）。
+  //   ⭐ 写**新字段名**（数组形态，决策 206）；读侧两种都接得住。
   const idx = lines.findIndex((l) => /^sections:/.test(l))
-  const next = [...lines.slice(0, idx + 1), 'truncateSection: 当前进度', ...lines.slice(idx + 1)].join('\n')
+  const next = [...lines.slice(0, idx + 1), 'truncateSections: [当前进度]', ...lines.slice(idx + 1)].join('\n')
   if (!DRY) writeFileSync(path, next, 'utf8')
   migrated += 1
-  console.log(`  ✅ ${file} → truncateSection: 当前进度`)
+  console.log(`  ✅ ${file} → truncateSections: [当前进度]`)
 }
 
 console.log(`\n═══ 补丁结果 ═══`)

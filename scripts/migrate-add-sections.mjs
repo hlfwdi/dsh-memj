@@ -119,15 +119,17 @@ for (const file of files) {
   if (insertAt === -1) insertAt = fmEnd
 
   const yamlArr = `[${finalSections.join(', ')}]`
-  // 🔴🔴 **必须同时补 `truncateSection`**（第一版漏了 ⇒ 真出过一次事故）：
+  // 🔴🔴 **必须同时补截断字段**（第一版漏了 ⇒ 真出过一次事故）：
   //    写入 `sections` 之后，读取侧 `defaultTruncateTitle()` 的判据变成了
-  //    "`sections` 非空 ⇒ 以 `truncateSection` 为准"，而它是空的
+  //    "`sections` 非空 ⇒ 以截断字段为准"，而它是空的
   //    ⇒ **那个项目的「当前进度」从此再也不会自动截断**（文档无限膨胀）。
-  //    ⭐ 补的值 = `PROGRESS_TITLE`（文档里有这一节时）—— 与"默认六节"的行为**完全一致**。
-  //    ⚠️ 文档里**没有**「当前进度」⇒ 补空串（`truncateSection: ""` 不写行 ⇒ 真的不截，如实）。
-  const truncTarget = finalSections.includes('当前进度') ? '当前进度' : ''
+  //    ⭐ 补的值 = `当前进度`（文档里有这一节时）—— 与"默认六节"的行为**完全一致**。
+  //    ⚠️ 文档里**没有**「当前进度」⇒ 不写这一行（空数组 ⇒ 真的不截，如实）。
+  //    ⭐⭐ **决策 206（2026-10-02）：字段名从单值 `truncateSection` 改成数组 `truncateSections`**
+  //       （用户要求"可多选"）。读侧**两种都接得住**，但**写侧统一用新的**。
+  const truncTarget = finalSections.includes('当前进度') ? ['当前进度'] : []
   const insertLines = [`sections: ${yamlArr}`]
-  if (truncTarget !== '') insertLines.push(`truncateSection: ${truncTarget}`)
+  if (truncTarget.length > 0) insertLines.push(`truncateSections: [${truncTarget.join(', ')}]`)
   const next = [...lines.slice(0, insertAt), ...insertLines, ...lines.slice(insertAt)].join('\n')
 
   if (!DRY) writeFileSync(path, next, 'utf8')

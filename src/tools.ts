@@ -703,9 +703,10 @@ export function registerTools(deps: ToolDeps): void {
                 if (t !== undefined) {
                   tplNotice = `\n\n---\n\n## 本文档的写作指导（按模板 \`${t.id}\` 生成）\n\n${renderTemplateGuidance(t)}`
                 } else {
+                  const truncSet = new Set(doc2?.frontmatter.truncateSections ?? [])
                   const secLines = secs
                     .map((s) => {
-                      const trunc = s === (doc2?.frontmatter.truncateSection ?? '') ? '　⭐ **本节的较早内容会被自动截断归档**' : ''
+                      const trunc = truncSet.has(s) ? '　⭐ **本节的较早内容会被自动截断归档**' : ''
                       return `- \`## ${s}\`${trunc}`
                     })
                     .join('\n')
@@ -1769,7 +1770,7 @@ export function registerTools(deps: ToolDeps): void {
             additionalProperties: false,
             description:
               '`create` 时给。⭐ `desc` 必填（这一节要干嘛，会拼进写作指导）；' +
-              '`truncate` 至多一节设 true，**一节都不设 = 该文档不会自动截断**。',
+              '`truncate` **可多节**设 true（各自独立），**一节都不设 = 该文档不会自动截断**。',
             properties: {
               id: {
                 type: 'string',
@@ -1793,7 +1794,7 @@ export function registerTools(deps: ToolDeps): void {
                     },
                     truncate: {
                       type: 'boolean',
-                      description: '该节是否参与自动截断（**至多一节**设 true；一节都不设 = 不自动截断）。',
+                      description: '该节是否参与自动截断（**可多节**设 true，各自独立；一节都不设 = 不自动截断）。',
                     },
                   },
                 },

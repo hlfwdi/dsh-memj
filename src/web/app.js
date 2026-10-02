@@ -3599,10 +3599,9 @@ function renderTemplateSections() {
     trunc.type = 'checkbox'
     trunc.checked = s.truncate === true
     trunc.addEventListener('change', () => {
-      // ⭐ **至多一节**：勾上新的 ⇒ 自动取消其余（否则保存时会被服务端拒）。
-      if (trunc.checked) for (const o of tplState.sections) o.truncate = false
+      // ⭐⭐ 决策 206（用户 2026-10-02）：**可多选** —— 不再"勾一个取消其余"。
+      //    每节各自独立：各自与阈值比、各自截、各自归档。
       s.truncate = trunc.checked
-      renderTemplateSections()
     })
     truncWrap.append(trunc, document.createTextNode('可截断'))
 
@@ -6606,11 +6605,60 @@ function promptCard(it) {
  * @param key - 稳定键。
  */
 function selectPromptKey(key) {
-  if (promptState.selected === key) return
+  // ⚠️ **同一条重复选中也要滚**（用户 2026-10-02 的场景就是这个）：
+  //    他在下拉里再选一次当前那条 ⇒ 期望"列表跳回去"，而不该因为
+  //    "选中项没变"就什么都不做（那正是"点了没反应"）。
+  if (promptState.selected === key) {
+    scrollPromptCardIntoView(key)
+    return
+  }
   promptState.selected = key
   promptState.editingKey = ''
   renderPromptsPage()
   void loadPromptText(key)
+  // ⭐⭐ 用户 2026-10-02 要求：**用顶部下拉选中时，左侧列表要跳到那一条**。
+  //    🔴 **必须在 `renderPromptsPage()` 之后调** —— 重画会把列表重建、
+  //       滚动位置清零；先滚后画等于白滚（本项目"滚动记忆"那条知识的同族）。
+  scrollPromptCardIntoView(key)
+}
+
+/**
+ * ⭐ **把左侧列表滚到指定条目**（用户 2026-10-02 要求）。
+ *
+ * 🔴🔴 **判据与坑**（都是本项目记过的）：
+ *  · **滚动容器不是 `.prompt-card` 的父级**，而是**真正在滚的那个祖先** ——
+ *    判据是 `scrollHeight > clientHeight`（`scrollHostOf`），**不是**"有没有 overflow:auto"；
+ *    这里优先用 `.prompt-side-scroll`（宽屏列表的滚动区），取不到再退回 `scrollHostOf`。
+ *  · **必须在渲染之后调用**（重画会重置滚动位置）。
+ *  · 用 `block:'nearest'` 而不是 `'center'`：**已经在视野里就不动**，
+ *    避免用户手动浏览时被莫名拽走。
+ * @param key - 要定位的条目稳定键。
+ */
+function scrollPromptCardIntoView(key) {
+  if (key === '') return
+  // ⚠️ 卡片是重画出来的 ⇒ 用 `requestAnimationFrame` 等这一帧的 DOM 落地。
+  requestAnimationFrame(() => {
+    // 找那张卡片：⭐ 属性名是 **`data-prompt-key`**（`promptCard()` 里就有的稳定标识，
+    //    当初就是为"按下标取卡片会漂移"而加的 —— 正好这里也用它）。
+    let card = document.querySelector(`.prompt-card[data-prompt-key="${CSS.escape(key)}"]`)
+    if (!card) card = document.querySelector('.prompt-card.prompt-card-active')
+    if (!card) return
+    const host = document.querySelector('.prompt-side-scroll') ?? scrollHostOf(card)
+    if (!host) return
+    // ⭐ 先算"卡片相对容器的位置"，只有**不在视野内**才滚。
+    //    🔴🔴 **不用 `scrollIntoView`** —— 实测它在**嵌套滚动容器**里滚不到位
+    //      （`block:'nearest'` 会去滚外层/整页，卡片仍停在视口外：实测 `cardTop=986`
+    //       而容器底边只有 830）。⇒ 改为**直接算并设置容器的 `scrollTop`**，
+    //      这是确定性的（也避免 `behavior:'smooth'` 的异步时序）。
+    const c = card.getBoundingClientRect()
+    const hn = host.getBoundingClientRect()
+    const above = c.top < hn.top
+    const below = c.bottom > hn.bottom
+    if (!above && !below) return
+    // 目标：把卡片顶对齐到容器顶部（留 8px 余量）；已在上方时同理。
+    const delta = above ? c.top - hn.top - 8 : c.bottom - hn.bottom + 8
+    host.scrollTop = host.scrollTop + delta
+  })
 }
 
 /**

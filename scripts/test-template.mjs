@@ -86,8 +86,13 @@ console.log('\n【2】模板校验')
   check('节名 = 沉淀知识 ⇒ 拒绝',
     validate(mk([{ name: '沉淀知识', desc: 'x' }])).some((e) => e.includes('由工具维护')))
   check('desc 为空 ⇒ 拒绝', validate(mk([{ name: '目标', desc: '' }])).some((e) => e.includes('desc')))
-  check('两个 truncate ⇒ 拒绝',
-    validate(mk([{ name: 'A', desc: 'x', truncate: true }, { name: 'B', desc: 'y', truncate: true }])).some((e) => e.includes('只能有')))
+  // ⭐⭐ 决策 206（2026-10-02）：**多个 truncate 现在是允许的**（用户要求"可多选"）。
+  //    ⚠️ 原先这条断言是"两个 truncate ⇒ 拒绝" —— 判据随设计更新，不是代码 bug。
+  check('多个 truncate ⇒ **允许**（决策 206）',
+    validate(mk([{ name: 'A', desc: 'x', truncate: true }, { name: 'B', desc: 'y', truncate: true }])).length === 0)
+  check('3 个 truncate 也允许', validate(mk([
+    { name: 'A', desc: 'x', truncate: true }, { name: 'B', desc: 'y', truncate: true }, { name: 'C', desc: 'z', truncate: true },
+  ])).length === 0)
   check('0 个 truncate ⇒ 允许', validate(mk([{ name: 'A', desc: 'x' }])).length === 0)
   check('id 非法 ⇒ 拒绝', validate(mk([{ name: 'A', desc: 'x' }])).length === 0 && validate({ version: 1, id: 'BAD ID', title: 'T', sections: [{ name: 'A', desc: 'x' }] }).length > 0)
 }
@@ -140,6 +145,44 @@ console.log('\n【4】API 契约')
   check('GET 接口只收 GET（405）', r7.status === 405)
 }
 
+console.log('\n【5b】⭐⭐ 多节截断（决策 206）—— 各自独立')
+{
+  // ⚠️ `truncateProgress` 在 **offline-bundle** 里（`lib/index.js` 是插件主入口，不含它）。
+  const { truncateProgress } = B
+  // 造一份文档：两节都超标。
+  // ⚠️ **每节必须有 ≥3 个 `###` 小节** —— 截断有"**至少保留一个小节**"的规则
+  //    （否则等于把这一节清空）。第一版我只放了 2 个 ⇒ 只截走 1 个、留下的那个
+  //    正是我拿来断言"已被截走"的那段 ⇒ **假失败**。
+  const big = (tag) => `### 第3批\n\n${tag.repeat(300)}\n\n### 第2批\n\n${tag.repeat(300)}\n\n### 第1批\n\n${tag.repeat(300)}\n`
+  const doc = [
+    '# HANDOFF — x', '',
+    '## 甲节', '', big('甲'), '',
+    '## 乙节', '', big('乙'), '',
+    '## 丙节', '', '短的。', '',
+  ].join('\n')
+
+  // ① 只截「甲节」⇒ 只有甲被截
+  const one = truncateProgress(doc, 100, 50, [], ['甲节'])
+  check('单节：截到 1 个归档块', one.chunks.length > 0 && one.warning === '', `chunks=${one.chunks.length} warn=${one.warning}`)
+  check('单节：甲节被截（最早的「第1批」已移走）', !one.narrative.includes('### 第1批\n\n' + '甲'.repeat(300)))
+  check('单节：乙节**没被动**（乙的最早那批还在）', one.narrative.includes('### 第1批\n\n' + '乙'.repeat(300)))
+
+  // ② 两节都列为可截 ⇒ **两块**都被截（各自独立）
+  const two = truncateProgress(doc, 100, 50, [], ['甲节', '乙节'])
+  check('多节：两节各自产出归档块（chunks ≥ 2）', two.chunks.length >= 2, `chunks=${two.chunks.length}`)
+  check('多节：甲节被截', !two.narrative.includes('### 第1批\n\n' + '甲'.repeat(300)))
+  check('多节：乙节也被截', !two.narrative.includes('### 第1批\n\n' + '乙'.repeat(300)))
+  check('多节：丙节（未列）**原样保留**', two.narrative.includes('丙节') && two.narrative.includes('短的。'))
+
+  // ③ 兼容：老的单值字符串形态仍然可用
+  const legacy = truncateProgress(doc, 100, 50, [], '甲节')
+  check('兼容：单值字符串参数仍可用', legacy.chunks.length > 0)
+
+  // ④ 空数组 = 不截（明确报，不是错误）
+  const none = truncateProgress(doc, 100, 50, [], [])
+  check('空数组 ⇒ 不截 + 明确说明', none.chunks.length === 0 && none.warning.includes('没有声明'))
+}
+
 console.log('\n【5】⭐⭐ 模板不回溯已有文档（用户裁定核心）')
 {
   await saveTpl({
@@ -154,7 +197,7 @@ console.log('\n【5】⭐⭐ 模板不回溯已有文档（用户裁定核心）
   check('用模板建项目成功', r1.ok, r1.message.slice(0, 160))
   const d1 = await loadProjectDoc('nb-proj')
   check('文档记了节名', (d1?.frontmatter.sections ?? []).join(',') === '目标,进展')
-  check('文档记了截断节', d1?.frontmatter.truncateSection === '进展')
+  check('文档记了截断节（数组，决策 206）', (d1?.frontmatter.truncateSections ?? []).join(',') === '进展')
   check('文档记了模板 id', d1?.frontmatter.template === 'nb-tpl')
 
   // ⭐ 再传另一个模板更新它 —— 应被**忽略**
@@ -172,7 +215,7 @@ console.log('\n【5】⭐⭐ 模板不回溯已有文档（用户裁定核心）
   await delTpl('nb-tpl')
   const d3 = await loadProjectDoc('nb-proj')
   check('⭐ 模板被删后，文档仍记着自己的节名', (d3?.frontmatter.sections ?? []).join(',') === '目标,进展')
-  check('  截断节也还在', d3?.frontmatter.truncateSection === '进展')
+  check('  截断节也还在', (d3?.frontmatter.truncateSections ?? []).join(',') === '进展')
   // 而且还能正常 handoff
   await appendDocRead('s-nb', { project: 'nb-proj', turn: 3, readAt: new Date().toISOString(), full: true, sections: [] })
   const r3 = await runHandoff(
