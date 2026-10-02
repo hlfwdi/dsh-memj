@@ -938,7 +938,6 @@ button.danger:hover { background: var(--hover); }
   padding: 10px 20px 0;
   border-bottom: 1px solid var(--border);
 }
-
 .subtab {
   font: inherit;
   font-size: 13px;
@@ -955,6 +954,34 @@ button.danger:hover { background: var(--hover); }
 
 .subtab:hover { color: var(--fg); }
 .subtab.active { background: var(--bg-2); border-color: var(--border); color: var(--fg); font-weight: 600; }
+
+/* ── 窄屏：设置页的子导航改成**横向可滑动**（用户 2026-10-02 要求）──
+   🔴 问题：6 个标签在窄屏放不下 ⇒ 默认 flex 会**挤成两行**（实测截图），
+      而且"模板"被挤到右边、看起来像另一个东西。
+   ⭐ 做法：不换行 + 横向滚动 + 隐藏滚动条。
+   ⚠️ **必须同时加 `overflow-x:auto` 与 `flex-wrap:nowrap`** ——
+      只加前者而允许换行，仍然会折行（那才是本次的真实症状）。
+   ⚠️ 作用域**只到窄屏**：宽屏放得下、保持原来的样子。 */
+@media (max-width: 900px) {
+  .subtabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    /* ⭐ 滚动时不要连带页面：`overscroll-behavior` 防"滑到头继续滚整页"。 */
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+    /* ⚠️ 隐藏滚动条（各引擎写法不同，三条都要）——**内容仍可滑动**。 */
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .subtabs::-webkit-scrollbar { display: none; }
+  /* ⚠️ 标签**不许被压扁**：`flex:0 0 auto` 保证每个按自身宽度占位，
+        否则 flex 会把它们挤小（症状是文字竖排换行）。 */
+  .subtab { flex: 0 0 auto; white-space: nowrap; }
+  /* ⭐ 状态行（热重载策略 + 配置文件路径）窄屏不显示 —— 用户 2026-10-02 要求。
+     ⚠️ 只隐藏显示，**数据照常写入**（宽屏/其它逻辑仍能读到）。 */
+  .set-head .set-status { display: none; }
+}
 
 .subpanel { flex: 1 1 auto; overflow: auto; padding: 16px 20px 40px; }
 .subpanel .hint { margin: 0 0 12px; color: var(--fg-dim); font-size: 12.5px; }
