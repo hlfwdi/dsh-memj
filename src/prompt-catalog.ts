@@ -585,15 +585,23 @@ function typeText(v: unknown): string {
 /**
  * 渲染**参数表**。
  *
+ * ── 格式选择：为什么用「分条列表」而不是 markdown 表格 ──────────────────────
+ * 🔴 **第一版用了 markdown 表格**（`| 参数 | 类型 | 说明 |`），而它是**贴在 `<pre>` 里**
+ *    当纯文本显示的 ⇒ 两个后果：
+ *      · 等宽字体里**中文宽度是 2、竖线是 1** ⇒ **列永远对不齐**（看起来像没排版）；
+ *      · **窄屏**（420px）下换行后彻底散架（用户正是要在移动端看）。
+ *    ⭐ 换成**分条列表**：参数名 + 类型一行，说明缩进在下面。
+ *      ⇒ 宽窄屏都清晰，且**不需要前端做表格渲染**（少一层可能出错的东西）。
+ *
  * 🔴 **必须处理"JSON Schema 形状"**（实测踩到）：`defineTool` 的 `parameters`
  *    **不是**扁平的 `{参数名: 定义}`，而是 `{ type: 'object', properties: {…} }`
  *    ⇒ 直接 `Object.entries` 会渲染出 `type` / `properties` 两行（**看起来像参数名，其实是壳**）。
  *    ⭐ 判据：**渲染前先看数据的真实形状**，别按想象的形状写。
  * @param parameters - `defineTool` 的 `parameters` 对象。
- * @returns markdown 表格；无参数时回一句说明。
+ * @returns 人读文本；无参数时回一句说明。
  */
 export function renderParametersText(parameters: unknown): string {
-  if (parameters === undefined || parameters === null) return '_（该工具不需要参数）_'
+  if (parameters === undefined || parameters === null) return '（该工具不需要参数）'
   if (typeof parameters !== 'object') return String(parameters)
   const p = parameters as { properties?: Record<string, FieldDef> } & Record<string, FieldDef>
   // ⭐ 兼容两种形状：JSON Schema（`properties` 包一层）与扁平表。
@@ -602,43 +610,51 @@ export function renderParametersText(parameters: unknown): string {
       ? p.properties
       : (p as Record<string, FieldDef>)
   const entries = Object.entries(fields)
-  if (entries.length === 0) return '_（该工具不需要参数）_'
-  const out = ['| 参数 | 类型 | 说明 |', '|---|---|---|']
+  if (entries.length === 0) return '（该工具不需要参数）'
+  const blocks: string[] = []
   for (const [name, def] of entries) {
     const t = typeText(def?.type)
-    let d = typeof def?.description === 'string' ? def.description : ''
-    if (Array.isArray(def?.enum)) d += `${d === '' ? '' : ' '}（可选值：${def.enum.map((e) => `\`${String(e)}\``).join(' / ')}）`
+    const head = t === '—' ? name : `${name}（${t}）`
+    const lines: string[] = []
+    if (typeof def?.description === 'string' && def.description !== '') lines.push(def.description)
+    if (Array.isArray(def?.enum)) lines.push(`可选值：${def.enum.map((e) => String(e)).join(' / ')}`)
     const items = def?.items as FieldDef | undefined
-    if (items !== undefined && items !== null) d += `${d === '' ? '' : ' '}（数组，元素类型 ${typeText(items.type)}）`
-    out.push(`| \`${name}\` | ${t} | ${d.replace(/\n/g, ' ').replace(/\|/g, '\\|')} |`)
+    if (items !== undefined && items !== null) lines.push(`数组，元素类型 ${typeText(items.type)}`)
+    // ⚠️ 说明按行缩进 —— 缩进是"这属于上一个参数"的唯一视觉线索。
+    const body = lines.map((l) => l.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim()).filter((l) => l !== '')
+    blocks.push(body.length === 0 ? head : `${head}\n${body.map((l) => `    ${l}`).join('\n')}`)
   }
-  return out.join('\n')
+  return blocks.join('\n\n')
 }
 
 /**
  * 渲染**返回值契约**。
+ *
+ * ⚠️ 与 `renderParametersText` 同因：**不用 markdown 表格**（`<pre>` 里对不齐、窄屏散架）。
  * @param output - `defineTool` 的 `output` 对象（形如 `{ schema: {...} }`）。
- * @returns markdown 说明。
+ * @returns 人读文本。
  */
 export function renderOutputText(output: unknown): string {
-  if (output === undefined || output === null) return '_（该工具没有声明返回值 schema）_'
+  if (output === undefined || output === null) return '（该工具没有声明返回值 schema）'
   const o = output as { schema?: { properties?: Record<string, FieldDef>; additionalProperties?: unknown } }
   const schema = o.schema
-  if (schema === undefined || schema === null) return '_（该工具没有声明返回值 schema）_'
+  if (schema === undefined || schema === null) return '（该工具没有声明返回值 schema）'
   const props = schema.properties ?? {}
-  const lines: string[] = []
   const entries = Object.entries(props)
+  const lines: string[] = []
   if (entries.length > 0) {
-    lines.push('| 返回字段 | 类型 | 说明 |', '|---|---|---|')
+    lines.push('返回字段：')
     for (const [name, def] of entries) {
-      const d = typeof def?.description === 'string' ? def.description : ''
-      lines.push(`| \`${name}\` | ${typeText(def?.type)} | ${d.replace(/\n/g, ' ').replace(/\|/g, '\\|')} |`)
+      const t = typeText(def?.type)
+      const d = typeof def?.description === 'string' ? def.description.replace(/\s+/g, ' ').trim() : ''
+      lines.push(`    ${t === '—' ? name : `${name}（${t}）`}${d === '' ? '' : `\n        ${d}`}`)
     }
   } else {
-    lines.push('_（该工具的返回值没有具名字段）_')
+    lines.push('（该工具的返回值没有具名字段）')
   }
   if (schema.additionalProperties === false) {
-    lines.push('', '⚠️ **`additionalProperties: false`** —— 多返回一个未声明的字段，**整次调用会被拒收**。')
+    // ⚠️ 这条是**硬契约**，必须让读者看见（多一个字段就整次调用被拒）。
+    lines.push('', '⚠️ 多返回一个未声明的字段，整次调用会被拒收（additionalProperties: false）。')
   }
   return lines.join('\n')
 }
