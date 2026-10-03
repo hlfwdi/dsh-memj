@@ -506,13 +506,13 @@ function splitAny(text: string): AnySection[] {
 function findAnySection(
   text: string,
   name: string,
-): { section?: AnySection | undefined; all: AnySection[] } {
+): { section?: AnySection | undefined; all: AnySection[]; exact: boolean } {
   const secs = splitAny(text)
   const exact = secs.filter((s) => s.title === name)
-  if (exact.length > 0) return { section: exact[0], all: exact }
+  if (exact.length > 0) return { section: exact[0], all: exact, exact: true }
   const key = name.trim().toLowerCase()
   const subs = secs.filter((s) => s.title.toLowerCase().includes(key))
-  return { section: subs[0], all: subs }
+  return { section: subs[0], all: subs, exact: false }
 }
 
 /** `docOp` 的四种取值（决策 134）。 */
@@ -526,6 +526,19 @@ export interface SectionOpResult {
   error?: string
   /** 命中的节名（成功时）。 */
   hitTitle?: string
+  /**
+   * ⭐⭐ **命中是否为精确匹配**（2026-10-12 新增，真实事故修）。
+   *
+   * 🔴 **为什么必须有它**：子串匹配会把「目标」命中到「研究目标」——
+   *   而**回执报的是调用方请求的名字**，于是那次操作看起来「成功」，
+   *   调用方完全看不出自己改错了对象。
+   * 🔴 **真实事故**：模型传 `docSection:"目标"`，工具改的是 `## 研究目标`，
+   *   回执报「替换了该节 `目标`：5 → 51 字符」⇒ 手误被完全掩盖。
+   *
+   * ⭐ 精确匹配（`section.title === name`）时为 `false`；靠子串兜底命中时为 `true`
+   *   ⇒ 回执如实说「你传的是 A，实际命中的是 B」。
+   */
+  fuzzyHit?: boolean
   /** 该节操作前后的字符数（供回执回声）。 */
   beforeChars?: number
   afterChars?: number
@@ -631,7 +644,7 @@ export function applySectionOp(
 ): SectionOpResult {
   const name = sectionName.trim()
   if (name === '') return { error: '`docSection` 不能为空。' }
-  const { section, all } = findAnySection(text, name)
+  const { section, all, exact } = findAnySection(text, name)
   if (section === undefined) {
     return {
       error:
@@ -695,6 +708,8 @@ export function applySectionOp(
   return {
     narrative: next,
     hitTitle: section.title,
+    // 🔴 精确匹配为 false；靠子串兜底命中为 true（供回执点破"你传的 ≠ 我改的"）。
+    fuzzyHit: !exact,
     beforeChars,
     afterChars,
   }
@@ -2030,7 +2045,7 @@ export async function runHandoff(
   } else if (narrateNow && docSectionName !== '' && existing === undefined) {
     sectionOpError =
       '`docSection` 只能用于**已有项目**（新项目没有旧叙事可"按节改"）——' +
-      '请直接用 `doc` 给出前六节。'
+      '请直接用 `doc` 给出该项目的各节。'
   }
 
   // 🔴 **按节操作失败 ⇒ 在落盘之前直接拒绝**（决策 134）。
@@ -2304,6 +2319,57 @@ export async function runHandoff(
       const n = s.lines.join('\n').trim().length
       sizes.set(s.title, (sizes.get(s.title) ?? 0) + n)
     }
+
+    // ⭐⭐⭐ **节名清单回声 + 结构一致性检出**（2026-10-12 新增，真实事故修）。
+    //
+    // 🔴🔴 **为什么必须有**（真实事故）：
+    //    模型在一个**用了自定义模板**（6 个自定义节）的项目里，传了
+    //    `docSection:"目标"` ⇒ 子串匹配命中了 `## 研究目标` ⇒ 整节被替换成
+    //    默认六节骨架。**根因是模型不知道这个项目的节名**——而工具描述当时
+    //    硬编码了"项目文档共七节"，模型只能凭印象猜。
+    //    ⭐ 光改描述不够：**每一轮都把"本项目真实的节名清单"摆在回执最前面**，
+    //    模型下一次就不用猜。
+    // 🔴 **一致性检出**：`sections`（建档时定的契约）与文档现状可能已经不一致
+    //    （本次事故就是典型：多出 6 个默认节、少了 1 个自定义节）⇒ 必须如实报出。
+    if (existing !== undefined || newSections.length > 0) {
+      const actualTop = [...new Set(splitH2(finalNarrative).map((s) => s.title))]
+      const declared = [...docSections]
+      const missing = declared.filter((t) => !actualTop.includes(t))
+      // 🔴🔴 **只报「与默认六节同名」的多余节**（2026-10-12 收窄，防误报）。
+      //
+      // ⭐ 为什么必须收窄：**"文档里有额外自定义节"在这个库里是既成事实、不是异常**
+      //    （实例：`dsh-memj` 项目自己的文档就有一个 `第十二批…` 自定义节，
+      //     而 `第十二批` 是它自己有意加的）。
+      // ⇒ 若把所有多余节都报成"不一致"，会**天天误报**，真问题就被淹掉了。
+      // 🔴 **真正的误写特征**：多出的节名**恰好在默认六节里**
+      //    且**不在本项目的清单里** —— 那说明有人把"别套模板的节名"写了进来。
+      const defaultSet = new Set(NARRATIVE_TITLES)
+      const suspicious = actualTop.filter(
+        (t) => !declared.includes(t) && defaultSet.has(t),
+      )
+      const tplLabel =
+        (existing?.frontmatter.template ?? templateId ?? '') !== ''
+          ? `（模板 \`${existing?.frontmatter.template ?? templateId}\`）`
+          : '（默认模板）'
+      lines.push(
+        `📐 **本项目节名${tplLabel}**：${declared.join(' / ')}` +
+          (declared.length > 0 ? '' : '（空）'),
+      )
+      if (suspicious.length > 0 || missing.length > 0) {
+        lines.push(
+          `\n⚠️ **文档结构异常**（\`sections\` = 建档时的契约，现状 = 盘上真实结构）：` +
+            (suspicious.length > 0
+              ? `\n    🔴 多出了**默认模板的节**：${suspicious.map((t) => `\`${t}\``).join('、')}` +
+                '\n       这多半是**误写**——把别套模板的默认节名写进了本项目的文档。'
+              : '') +
+            (missing.length > 0
+              ? `\n    清单里有、文档里没有：${missing.map((t) => `\`${t}\``).join('、')}`
+              : '') +
+            '\n    🔴 清理：对每个多出的节用 `docSection` + `docOp: \'drop\'` 逐个删。',
+        )
+      }
+    }
+
     // ⭐⭐ 体量行按**该文档自己的节名**展示（决策 204）。
     //    🔴 原来是写死的默认六节 ⇒ 自定义模板的文档会**报错节名 / 漏报自定义节**
     //       （那正是"回执在撒谎"的一类）。现在：本研究文档记着的节名在前，
@@ -2607,6 +2673,19 @@ export async function runHandoff(
           : `：${sectionOp.beforeChars} → ${sectionOp.afterChars} 字符（${sign}${Math.abs(delta)}）`) +
         '。\n    其余节**一个字都没动**。',
     )
+    // 🔴🔴 **非精确命中必须点破**（2026-10-12 新增，真实事故修）。
+    //    ⭐ 事故：模型传 `docSection:"目标"`，实际改的是 `## 研究目标`
+    //       （子串匹配），而回执只打节名 ⇒ 手误被完全掩盖。
+    //    ⇒ 这里把"你传的"与"我改的"并排写出来，让人与模型都能一眼看出不一致。
+    if (sectionOp.fuzzyHit === true && sectionOp.hitTitle !== undefined) {
+      lines.push(
+        `\n⚠️ **非精确匹配**：你传的是 \`${docSectionName}\`，` +
+          `工具按子串匹配命中的是 \`${sectionOp.hitTitle}\`。\n` +
+          '    ⭐ 上面那句「按节写」改的**就是后者**。\n' +
+          '    🔴 若这不是你的本意 ⇒ 用 `memj_read({ project })` 核对真实节名，' +
+          '下一次传**完整节名**（精确匹配优先于子串）。',
+      )
+    }
     // 🔴 **`drop` 之后必须检查空壳节**（用户裁定：允许删空、但回执必须报警）。
     if (sectionEmptyWarn.length > 0) {
       lines.push(

@@ -34,7 +34,7 @@ import type { Candidate } from './active-recall.ts'
 import { deadline } from '@deepseek-ai/dsh-timeout'
 import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
 // ⭐⭐⭐ 提示词运行期覆盖（本次新增）：规则段走 `promptText` 取值。
-import { promptText, registerPromptDefault } from './prompts.ts'
+import { fillSlots, promptText, registerPromptDefault } from './prompts.ts'
 
 /** chat 通路的判定结果。 */
 export interface ChatScoreOutcome {
@@ -89,25 +89,72 @@ function empty(error: string, raw = ''): ChatScoreOutcome {
  * ⚠️ `wantReasons` 分支要用的 JSON 形状**仍由代码拼**（那是与解析器配对的**契约**，
  *    模型改了它就会解析失败 ⇒ 不开放自由编辑）。
  */
-const SCORE_SYSTEM_BASE = [
-  '你是一个知识库复盘助手。你的任务是**回顾刚刚结束的一轮工作**，',
-  '从下面的【知识库清单】里挑出**真正能帮助到这个项目**的知识条目。',
-  '',
-  '【判断要求】',
-  '逐条判断这条知识**对这个项目的长期工作有没有实际帮助**，具体指两种情况：',
-  '(a) 这一轮**需要**这类知识，但当时手头没有 —— 包括"它忘了自己库里有"的情况；',
-  '(b) 这一轮**犯了错**，而这条知识本来能让它不犯。',
-  '',
-  '⭐ 判据：**"如果工程师下次遇到同样的事，提前读到这条会不会做得更好？"**',
-  '⚠️ 只是话题沾边**不算**；这条知识必须**真的能改变做法**。',
-  '⚠️ **不要因为"它这一轮已经做对了"就排除** —— 只要这条知识对项目有用就选。',
-  '',
-  '【输出格式】',
-  '只输出一个 JSON 对象，没有任何其他文字、没有 markdown 代码块。',
-].join('\n')
+const SCORE_SYSTEM_BASE = `你是一个知识库复盘助手。你的任务是**回顾刚刚结束的一轮工作**，
+从下面的【知识库清单】里挑出**真正能帮助到这个项目**的知识条目。
+
+【判断要求】
+逐条判断这条知识**对这个项目的长期工作有没有实际帮助**，具体指两种情况：
+(a) 这一轮**需要**这类知识，但当时手头没有 —— 包括"它忘了自己库里有"的情况；
+(b) 这一轮**犯了错**，而这条知识本来能让它不犯。
+
+⭐ 判据：**"如果工程师下次遇到同样的事，提前读到这条会不会做得更好？"**
+⚠️ 只是话题沾边**不算**；这条知识必须**真的能改变做法**。
+⚠️ **不要因为"它这一轮已经做对了"就排除** —— 只要这条知识对项目有用就选。
+
+【输出格式】
+只输出一个 JSON 对象，没有任何其他文字、没有 markdown 代码块。`
 
 /** ⭐ **登记默认值**（展示页要用）。 */
 registerPromptDefault('score:system', SCORE_SYSTEM_BASE)
+
+// ⭐⭐⭐ **引文硬要求的措辞 + 取舍原则**（2026-10-12 抽成常量 + 走 `promptText`）。
+//
+// 🔴 **为什么它们也算提示词**：这两段**逐字进到评分子代理的 `system` 里**，
+//    而且它们**直接决定模型挑什么**：
+//    · 引文段说清"是**逐字复制**、不是概括"——措辞一松，模型就会写"意思差不多"的话，
+//      而机械校验只认逐字子串 ⇒ **入选全被丢掉**（本项目实测过这个坑）；
+//    · 取舍段说清"宁少勿滥"——它决定**分数会不会被拉平**（实测：不限条数时模型会选 18~24 条）。
+//    ⭐ 判据同 `inject.ts`：**能改变模型怎么做的文本就是提示词**。
+//
+// ⚠️ **不抽**：JSON 形状行（与解析器配对的**契约**，改坏就解析失败）、
+//    编号范围与 `budgetNote`（含运行时数字 `pool.length`）——那些仍由代码拼。
+export const SCORE_QUOTE_RULE: string = `【\`quote\` 是硬要求】
+\`quote\` 必须是【本轮工作内容】里**逐字复制**的一句原话（不要改写、不要概括、不要翻译）。
+⚠️ 它会与上下文做**逐字比对**：不是原文里出现过的原句 ⇒ **该条不予加分**。
+⭐ \`why\` 必须说明：**上面那句原话里的需求/错误，被这条知识的哪一点解决了**。
+🔴 **只是"话题相关"不够** —— 必须能指出"靠这句原话 + 这条知识，下次会做对什么"。`
+
+export const SCORE_PICK_PRINCIPLE: string = `⭐ **宁少勿滥** —— 只选真的能改变做法的；**一条都没有就回 \`{"picks":[]}\`**。
+🔴 **不要为了凑数而选** —— 选错会污染这个项目的注入内容。
+⚠️ 如果够格的条目多于本次允许的条数，**只留最能改变做法的那几条**。`
+
+// ⭐⭐ **登记默认值**（2026-10-12）——漏了这两行会让它们在页面上**显示为空、改不了**
+//    （本项目已有机械对账盯着这个方向：`scripts/diag-prompt-coverage.mjs` 的检查 ①）。
+registerPromptDefault('score:quote-rule', SCORE_QUOTE_RULE)
+registerPromptDefault('score:pick-principle', SCORE_PICK_PRINCIPLE)
+
+// ⭐⭐⭐ **`user` 段的骨架**（2026-10-12 开放编辑；`{{k}}` 是插槽）。
+//
+// 🔴 **为什么它必须留在 `user`、不能挪进 `system`**（§6.4 的硬约束，别改）：
+//    `{{k}}`（每轮最多几条）是**可配变量**，每轮都可能变 ⇒ 写进 `system` 会让
+//    整份 `system` 失效、**把知识库清单一起拖出前缀缓存**。放 `user` 是零成本的
+//    —— 那里本来就装着"本轮内容"，每轮都变。
+//
+// 🔴 **三处 `{{k}}` 都有用，别合并**：第一处给上限，后两处把"上限"变成**排序要求**
+//    （实测：只给数字时模型会理解成"随便挑 K 条"，于是选了 18~24 条、把分数拉平）。
+export const SCORE_USER_TASK: string = `请从上面的【知识库清单】里挑出真正能帮助到这个项目的条目，**最多 {{k}} 条**。
+⚠️ 如果够格的超过 {{k}} 条，请**按"能改变做法"的程度排序，只留最前面的 {{k}} 条** —— **宁缺勿滥**，凑数会污染这个项目的注入内容。`
+
+registerPromptDefault('score:user-task', SCORE_USER_TASK)
+
+// ⭐⭐⭐ **`system` 里两处带运行时数字的行**（2026-10-12 开放编辑；`{{n}}` 是插槽）。
+//    ⚠️ 这两行的数字是**候选池条数**（每轮都变）⇒ 它们本来就住在 `system` 里，
+//       而 `system` 只在"库变化"时失效；**别把可配的 K 也搬进来**（见上一条注释）。
+export const SCORE_INDEX_RANGE: string = '⚠️ 编号必须在 1 到 {{n}} 之间。'
+export const SCORE_POOL_HEADER: string = '【知识库清单】（共 {{n}} 条）'
+
+registerPromptDefault('score:index-range', SCORE_INDEX_RANGE)
+registerPromptDefault('score:pool-header', SCORE_POOL_HEADER)
 
 /**
  * ⭐⭐ **`system`：判断要求 + 知识库清单**。
@@ -138,26 +185,27 @@ export function buildChatScoreSystem(opts: {
     //    挑出至少一句原句来，阐述知识解决了该理由。……当做一个硬校验。"*）
     //    ⇒ ⭐ 这段措辞必须说清"是**逐字复制**，不是概括" ——
     //      否则模型会写一句"意思差不多"的话，而**机械校验只认逐字子串** ⟹ 全被丢掉。
-    lines.push('【`quote` 是硬要求】')
-    lines.push('`quote` 必须是【本轮工作内容】里**逐字复制**的一句原话（不要改写、不要概括、不要翻译）。')
-    lines.push('⚠️ 它会与上下文做**逐字比对**：不是原文里出现过的原句 ⇒ **该条不予加分**。')
-    lines.push('⭐ `why` 必须说明：**上面那句原话里的需求/错误，被这条知识的哪一点解决了**。')
-    lines.push('🔴 **只是"话题相关"不够** —— 必须能指出"靠这句原话 + 这条知识，下次会做对什么"。')
+    lines.push(
+      promptText('score:quote-rule', SCORE_QUOTE_RULE),
+    )
   } else {
     lines.push('{"picks":[编号,...]}')
   }
-  lines.push('⚠️ 编号必须在 1 到 ' + String(opts.pool.length) + ' 之间。')
+  lines.push(
+    fillSlots(promptText('score:index-range', SCORE_INDEX_RANGE), { n: String(opts.pool.length) }),
+  )
   // 🔴🔴 **"最多几条"这个数字【绝不能】写在这里**（决策 180；§6.4 的硬约束）：
   //    `system` 里装着**知识库清单**（输入大头 ≈35k 字符）——
   //    一旦把可配的 K 写进来，K 一变就**整份 `system` 失效** ⇒ 清单跟着被拖出缓存。
   //    ⭐ 所以这里只写**与 K 无关的原则**，K 由 `buildChatScoreUser` 放进 `user`。
-  lines.push('⭐ **宁少勿滥** —— 只选真的能改变做法的；**一条都没有就回 `{"picks":[]}`**。')
-  lines.push('🔴 **不要为了凑数而选** —— 选错会污染这个项目的注入内容。')
-  // ⚠️ 这句**暗示有上限**但**不给出数字** ⇒ 既让模型知道要排序取舍，又不引入缓存失效。
-  lines.push('⚠️ 如果够格的条目多于本次允许的条数，**只留最能改变做法的那几条**。')
+  //    ⚠️ 这三句 2026-10-12 走 `promptText`（措辞可改）；**"与 K 无关"这个性质不能改**
+  //      —— 用户若在这里写进具体数字，会让 `system` 随 K 变化、把清单拖出前缀缓存。
+  lines.push(promptText('score:pick-principle', SCORE_PICK_PRINCIPLE))
   if (opts.budgetNote !== '') lines.push(`⚠️ ${opts.budgetNote}`)
   lines.push('')
-  lines.push(`【知识库清单】（共 ${opts.pool.length} 条）`)
+  lines.push(
+    fillSlots(promptText('score:pool-header', SCORE_POOL_HEADER), { n: String(opts.pool.length) }),
+  )
   opts.pool.forEach((c, i) => {
     const title = opts.english ? (c.titleEn !== '' ? c.titleEn : c.title) : c.title
     const desc = opts.english ? (c.descEn !== '' ? c.descEn : c.desc) : c.desc
@@ -191,15 +239,11 @@ export function buildChatScoreSystem(opts: {
  */
 export function buildChatScoreUser(turnContent: string, maxPicks: number): string {
   const k = Math.max(1, Math.floor(maxPicks))
-  return [
-    '【本轮工作内容】',
-    turnContent,
-    '',
-    `请从上面的【知识库清单】里挑出真正能帮助到这个项目的条目，**最多 ${k} 条**。`,
-    // ⭐ 这一句是关键：把"上限"变成"排序要求"（否则模型会当成随便挑 K 条）。
-    `⚠️ 如果够格的超过 ${k} 条，请**按"能改变做法"的程度排序，只留最前面的 ${k} 条** —— ` +
-      '**宁缺勿滥**，凑数会污染这个项目的注入内容。',
-  ].join('\n')
+  // ⭐⭐⭐ **插槽模板**（2026-10-12）：`{{k}}` 由程序填，骨架可编辑。
+  //    🔴 **`{{k}}` 必须保留三次** —— 三处都在说"最多几条"，
+  //       少一处模型就会拿到一句没有数字的要求（本项目 `slots` 校验**双向**拦这个）。
+  const head = `【本轮工作内容】\n${turnContent}\n\n`
+  return head + fillSlots(promptText('score:user-task', SCORE_USER_TASK), { k: String(k) })
 }
 
 /**

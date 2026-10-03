@@ -34,6 +34,118 @@ import { loadEntryDoc, loadThemeFrontmatter } from './store.ts'
 import { HANDOFF_STEP_ORDER, type HandoffStep } from './handoff.ts'
 // ⭐⭐ 「取交接」的三档渲染（决策 110）。
 import { DEFAULT_LEVEL, LEVEL_LABELS, parseLevel, renderProjectHandoff, renderThemeHandoff } from './inject.ts'
+import { fillSlots, promptText, registerPromptDefault } from './prompts.ts'
+
+// ══════════════════════════════════════════════════════════════════════════
+// ⭐⭐⭐ 命令描述常量（2026-10-12 新增）——从字面串抽出来，改成可被覆盖层替换
+//
+// 🔴🔴 **为什么必须抽成常量 + 走 `promptText`**（原来是硬编码字面串）：
+//   【提示词】设置页要能编辑命令描述，而**覆盖层只能通过 `promptText(key, fallback)` 生效**。
+//   原来写的是 `description: '...'` 字面串 ⇒ 即使页面存了覆盖值，**也没有任何代码读它**
+//   ⇒ 改了等于白改（这正是"给了一个改了不生效的输入框"的反面教材）。
+//
+// 🔴🔴 **命令描述是【重启才生效】的，不是热更新**（实测，见 `prompts.ts` 的 `HotReload`）：
+//   `dsh-commands` 在 **注册那一刻就把 description 固化进 descriptor**，
+//   且**没有 getter 通路**（对比工具描述：`tools.ts` 用 `Object.defineProperty` 改成了 getter，
+//   所以工具描述能热更新）。
+//   ⇒ 所以页面会如实标「⚠️ 改完需重启实例」——**不许假装它即刻生效**。
+//
+// ⚠️ 这些常量**不进模型上下文**（消费方是命令菜单/协议，不是 wire `tools` 段）
+//   ⇒ 改它们不会影响模型行为，只是界面上的说明文字。
+// ══════════════════════════════════════════════════════════════════════════
+
+/** `/memj-handoff` 的描述（默认值）。 */
+export const CMD_HANDOFF_DESCRIPTION = '按 memj 规范做一次记忆 handoff（写叙事 + 沉淀知识 + 归属推进）。'
+/** `/memj-review` 的描述（默认值）。 */
+export const CMD_REVIEW_DESCRIPTION = '人侧状态面板：待批 global 提名 / 断链 / 非法封面。'
+/** `/memj-get-handoff-project` 的描述（默认值）。 */
+export const CMD_GET_PROJECT_DESCRIPTION = '把某个项目的交接内容注入会话（文档 / +项目知识 / +主题知识）。'
+/** `/memj-get-handoff-theme` 的描述（默认值）。 */
+export const CMD_GET_THEME_DESCRIPTION = '把某个主题的封面与知识清单注入会话（正文按需读）。'
+
+// ⭐⭐⭐ **三个命令的 `input.hint`**（2026-10-12 抽成常量 + 走 `promptText`）。
+//
+// 🔴🔴 **为什么这些 hint 也算"提示词"**（用户 2026-10-12 点名要求接进来）：
+//    它们**不是纯装饰** —— 声明了 `input` 的命令被选中后，宿主会把
+//    `/命令名 ` **连同这句 hint 一起落进输入框**，用户看到的就是它。
+//    ⇒ 它决定了用户**知不知道这个命令能补话、能补什么**（例如"可再补档位"）。
+//
+// 🔴 **硬约束：不能为空** —— `dsh-commands` 的 `normalizeDefinition()` 对空 hint
+//    **直接 throw**（`input hint must not be empty`，判据是 `rawInput.hint.trim().length === 0`）
+//    ⇒ 所以它们必须有 `nonEmpty` 校验；用户清空后保存会被拒（否则命令注册会挂）。
+//
+// ⚠️ **热生效档位 = `restart`**（与命令描述同因）：`normalizeDefinition()` 把 `input`
+//    **`Object.freeze` 进 descriptor**（`lib/index.js:149-171` 实测），注册后改无效。
+export const HINT_HANDOFF = '（可补充本次重点，或直接回车）'
+export const HINT_GET_PROJECT = '（项目 id，可再补档位：只看文档 / 连带项目知识 / 全部）'
+export const HINT_GET_THEME = '（主题 id）'
+
+// ══════════════════════════════════════════════════════════════════════════
+// ⭐⭐⭐ `/memj-handoff` 的**启动提示词**（2026-10-12 开放编辑：骨架可改 + 插槽硬校验）
+//
+// 🔴🔴 **它是什么**：人打 `/memj-handoff` 之后，插件**注入进会话**、让模型开始做交接的
+//    那段指令。**只负责"叫模型去做"**，真正的落盘由模型随后调 `memj_handoff` 完成。
+//
+// 🔴 **为什么以前是只读**：正文里嵌着**运行时才算得出来的值**
+//    （用户补充的那句话、他指定的步骤列表）⇒ 它是**参数化模板**，
+//    不是一段可整体替换的常量。
+//
+// ⭐⭐ **现在怎么做到"可编辑又破坏不了"**（用户 2026-10-12 裁定）：
+//    把正文写成**带插槽的模板**（`{{名字}}`），运行时由 `fillSlots()` 填值；
+//    保存时 `slots` 校验**双向机械拦**（少一个拒、多一个也拒）。
+//    ⇒ 用户能改措辞，**但破坏不了"值一定会被填进去"**。
+//
+// ⚠️ **插槽是契约，不是示例文本**：`{{steps}}` / `{{stepsJson}}` / `{{userNote}}`
+//    这三个名字由 `renderHandoffPrompt` 提供，改名字必须两边一起改。
+// ══════════════════════════════════════════════════════════════════════════
+
+/** 分步分支：用户用 `/memj-handoff knowledge` 之类指定了步骤时走这条。 */
+export const HANDOFF_PROMPT_STEPS: string = `## 请做一次记忆 handoff（分步）
+
+用户指定**只做这几步**：{{steps}}
+
+请调用 \`memj_handoff\`，带上 \`step: {{stepsJson}}\`——**各步要见该工具的说明**。
+
+🔴 **参数必须与 \`step\` 一致**——传了不属于这几步的参数会被**直接拒绝**
+（这是防"你以为写了、其实没写"）。
+🔴 **执行顺序固定** narrative → theme → knowledge，与你给的顺序无关。
+🔴 **只做这几步**——其余步骤**不在本次范围**，**不是欠账**：
+回执会列出"本次范围之外"的步骤，**不要为了"补齐"再调一次**。`
+
+/** 普通分支：不带步骤时走这条（四条要点）。 */
+export const HANDOFF_PROMPT: string = `## 请做一次记忆 handoff
+
+按 \`memj_handoff\` 工具的说明执行。要点：
+
+1. **写哪个项目**——判据见 \`memj_handoff\` 的说明与运行时上下文；
+   ⭐ **上文能确定就直接沿用，不必再查库**（那才是重复劳动）。
+2. **先读一遍现有交接文档，再写叙事**（**硬性要求**）：
+   \`memj_read({ project: "<项目 id>" })\` 读全文；或按 \`section\` **逐节读完**。
+   ⚠️ **不读就写 \`doc\` 会被直接拒绝**——凭记忆重写必然压缩、丢细节；
+   ⚠️ **上一轮读过也不算**（有效期是**一个完整轮次**），要看**最新**内容。
+   节结构**以 \`memj_read\` 返回里的「本文档的写作指导」为准**（默认六节；
+   若该项目用了自定义模板，那里会列出实际的节名与每节用途）。
+   ⚠️ **既有节要写在它自己那一节里**——别为了让新内容不覆盖旧内容就另起一个平行节，
+      那是把"该写没写"伪装成"结构选择"。
+3. **沉淀知识**：把值得跨会话复用的知识写进 \`entries\`（每条一个 \`slug\`/\`desc\`/\`body\`/\`tags\`）。
+   \`desc\` 是**检索键不是摘要**——写清"什么场景下的什么知识；当什么场景时读它"。
+4. **归属**：能挂到本项目已关联的主题就挂（免批准）；
+   要建主题就用 \`newThemes\` 声明 \`{ id, desc }\`——
+   ⚠️ **能不能建取决于本实例的校验模式**（严格 / 宽松），\`memj_snapshots\` 的返回值会明说；
+   要进全局就登记提名（\`entries[].global = true\`）——**封面 \`global\` 保持 false、批准时才置位**；
+   ⚠️ **不要自己把封面写成 \`global: true\`**（那等于自己批准了，而你不能批准）。
+
+⚠️ 没有值得记的内容时**不要硬凑**——只更新叙事即可，\`entries\` 留空是正确行为。
+💡 **只想做其中一步**？可以带上 \`step\`（\`narrative\` / \`theme\` / \`knowledge\`），
+   或直接用 \`/memj-handoff knowledge\` 这样的命令。`
+
+/** 普通分支后面**追加**的那块（仅当用户在命令后补了话）。 */
+export const HANDOFF_PROMPT_NOTE: string = `---
+
+⭐ **用户随命令补充的话**：{{userNote}}
+
+⚠️ 这是**额外交代**，**不是对上面规范的替代**——四条照常走，再按这句调整侧重。`
+
 
 /** 命令依赖。 */
 export interface CommandDeps {
@@ -141,70 +253,22 @@ function renderHandoffPrompt(userNote = ''): string {
   const steps = parseStepRequest(userNote)
   // ⭐ 识别出步骤 ⇒ 走"只做这几步"的短提示词，不必再讲全套规范。
   if (steps !== undefined && steps[0] !== 'all') {
-    return [
-      '## 请做一次记忆 handoff（分步）',
-      '',
-      `用户指定**只做这几步**：${steps.map((s) => `\`${s}\``).join('、')}`,
-      '',
-      `请调用 \`memj_handoff\`，带上 \`step: ${JSON.stringify(steps)}\`——**各步要见该工具的说明**。`,
-      '',
-      '🔴 **参数必须与 `step` 一致**——传了不属于这几步的参数会被**直接拒绝**',
-      '（这是防"你以为写了、其实没写"）。',
-      '🔴 **执行顺序固定** narrative → theme → knowledge，与你给的顺序无关。',
-      '🔴 **只做这几步**——其余步骤**不在本次范围**，**不是欠账**：',
-      '回执会列出"本次范围之外"的步骤，**不要为了"补齐"再调一次**。',
-    ].join('\n')
+    // ⭐⭐⭐ 骨架走覆盖层、值由 `fillSlots` 填（2026-10-12）。
+    //    🔴 **两侧缺一不可**：没有 `promptText` ⇒ 页面改了没用；
+    //      没有 `fillSlots` ⇒ 模型收到的是 `{{steps}}` 字面量。
+    return fillSlots(promptText('handoff:prompt-steps', HANDOFF_PROMPT_STEPS), {
+      steps: steps.map((s) => `\`${s}\``).join('、'),
+      stepsJson: JSON.stringify(steps),
+    })
   }
 
-  const lines = [
-    '## 请做一次记忆 handoff',
-    '',
-    '按 `memj_handoff` 工具的说明执行。要点：',
-    '',
-    // ⭐⭐ **决策 124 第 2 步**：本条的完整判断方法**已搬到 `systemPrompt.context()`**
-    //    （§5.2 块 B「落到哪个项目（handoff 时）」）——那里**每轮可见**，
-    //    且**改它不破缓存**。此处只留**指针**，避免同一件事在第三处再抄一遍。
-    //    ⚠️ 代价：命令提示词不再自带全套判据；但 context() 与工具说明都比它更权威。
-    '1. **写哪个项目**——判据见 `memj_handoff` 的说明与运行时上下文；',
-    '   ⭐ **上文能确定就直接沿用，不必再查库**（那才是重复劳动）。',
-    '2. **先读一遍现有交接文档，再写叙事**（**硬性要求**）：',
-    '   `memj_read({ project: "<项目 id>" })` 读全文；或按 `section` **逐节读完**。',
-    '   ⚠️ **不读就写 `doc` 会被直接拒绝**——凭记忆重写必然压缩、丢细节；',
-    '   ⚠️ **上一轮读过也不算**（有效期是**一个完整轮次**），要看**最新**内容。',
-    // ⭐⭐ **决策 205：节结构改成动态的**（原先这里写死"写的是六节：目标 / 当前进度 / …"）。
-    //    🔴 **为什么必须动态**：文档结构可由用户自定义模板（节名/节数/每节用途都不同）
-    //    ⇒ 写死六节会**误导模型**（它会按错的节名写，结果那些节被当成"自定义节"追加）。
-    //    ⭐ 而这里**拿不到具体是哪个项目**（命令是会话级的）⇒ 只能是**中性措辞 + 指向**：
-    //      真正的节结构在 `memj_read` 的返回里**按需给出**（见 tools.ts 的写作指导注入）。
-    '   节结构**以 `memj_read` 返回里的「本文档的写作指导」为准**（默认六节；',
-    '   若该项目用了自定义模板，那里会列出实际的节名与每节用途）。',
-    '   ⚠️ **既有节要写在它自己那一节里**——别为了让新内容不覆盖旧内容就另起一个平行节，',
-    '      那是把"该写没写"伪装成"结构选择"。',
-    '3. **沉淀知识**：把值得跨会话复用的知识写进 `entries`（每条一个 `slug`/`desc`/`body`/`tags`）。',
-    '   `desc` 是**检索键不是摘要**——写清"什么场景下的什么知识；当什么场景时读它"。',
-    '4. **归属**：能挂到本项目已关联的主题就挂（免批准）；',
-    '   要建主题就用 `newThemes` 声明 `{ id, desc }`——',
-    '   ⚠️ **能不能建取决于本实例的校验模式**（严格 / 宽松），`memj_snapshots` 的返回值会明说；',
-    '   要进全局就登记提名（`entries[].global = true`）——**封面 `global` 保持 false、批准时才置位**；',
-    '   ⚠️ **不要自己把封面写成 `global: true`**（那等于自己批准了，而你不能批准）。',
-    '',
-    '⚠️ 没有值得记的内容时**不要硬凑**——只更新叙事即可，`entries` 留空是正确行为。',
-    // ⭐ 提示"可以分步"，让模型/用户知道这个能力存在（否则没人会用）。
-    '💡 **只想做其中一步**？可以带上 `step`（`narrative` / `theme` / `knowledge`），',
-    '   或直接用 `/memj-handoff knowledge` 这样的命令。',
-  ]
+  let text = promptText('handoff:prompt', HANDOFF_PROMPT)
   // ⭐ 用户补充的话：它不是**替代**上面的规范，而是对本次的**额外交代**。
+  //    ⚠️ 整块（含分隔线）走覆盖层 ⇒ 那一块也是可编辑的；仅在真有补充时才追加。
   if (userNote !== '') {
-    lines.push(
-      '',
-      '---',
-      '',
-      `⭐ **用户随命令补充的话**：${userNote}`,
-      '',
-      '⚠️ 这是**额外交代**，**不是对上面规范的替代**——四条照常走，再按这句调整侧重。',
-    )
+    text += '\n\n' + fillSlots(promptText('handoff:prompt-note', HANDOFF_PROMPT_NOTE), { userNote })
   }
-  return lines.join('\n')
+  return text
 }
 
 /**
@@ -213,6 +277,25 @@ function renderHandoffPrompt(userNote = ''): string {
  */
 export function registerCommands(deps: CommandDeps): void {
   const { ctx } = deps
+
+  // ⭐⭐⭐ **登记命令描述的默认值**（2026-10-12 新增）——设置页要并排显示「默认 vs 当前」，
+  //   且"恢复默认"需要有依据（与 `tools.ts` 的 `safeRegister` 同一做法）。
+  // ⚠️ 必须在 `ctx.commands.register(...)` **之前**登记：注册会把描述固化进 descriptor，
+  //   若此时覆盖值还没进内存缓存，注册拿到的就是 fallback（那正是我们要的默认行为）。
+  registerPromptDefault('command:memj-handoff:description', CMD_HANDOFF_DESCRIPTION)
+  registerPromptDefault('command:memj-review:description', CMD_REVIEW_DESCRIPTION)
+  registerPromptDefault('command:memj-get-handoff-project:description', CMD_GET_PROJECT_DESCRIPTION)
+  registerPromptDefault('command:memj-get-handoff-theme:description', CMD_GET_THEME_DESCRIPTION)
+  // ⭐⭐ 三个 `input.hint`（2026-10-12）——它们是**用户在输入框里真正看到的那行字**。
+  registerPromptDefault('command:memj-handoff:hint', HINT_HANDOFF)
+  registerPromptDefault('command:memj-get-handoff-project:hint', HINT_GET_PROJECT)
+  registerPromptDefault('command:memj-get-handoff-theme:hint', HINT_GET_THEME)
+  // ⭐⭐⭐ `/memj-handoff` 的启动提示词（2026-10-12 由只读改为可编辑）。
+  //    ⚠️ 登记的是**带插槽的模板**（`{{steps}}` 等），不是填好值的成品 ——
+  //       页面上就该看到模板，因为用户编辑的就是模板。
+  registerPromptDefault('handoff:prompt', HANDOFF_PROMPT)
+  registerPromptDefault('handoff:prompt-steps', HANDOFF_PROMPT_STEPS)
+  registerPromptDefault('handoff:prompt-note', HANDOFF_PROMPT_NOTE)
 
   /**
    * 逐个注册，一个失败不拖垮其余。
@@ -247,8 +330,9 @@ export function registerCommands(deps: CommandDeps): void {
   safeRegister('memj-handoff', () =>
     ctx.commands.register({
       name: 'memj-handoff',
-      description: '按 memj 规范做一次记忆 handoff（写叙事 + 沉淀知识 + 归属推进）。',
-      input: { hint: '（可补充本次重点，或直接回车）' },
+      // ⭐ 走覆盖层（页面可改）；⚠️ 命令描述**重启才生效**（无 getter 通路）。
+      description: promptText('command:memj-handoff:description', CMD_HANDOFF_DESCRIPTION),
+      input: { hint: promptText('command:memj-handoff:hint', HINT_HANDOFF) },
       handler: (invocation) => {
         const agent = invocation.agent
         if (agent === undefined) {
@@ -273,7 +357,7 @@ export function registerCommands(deps: CommandDeps): void {
   safeRegister('memj-review', () =>
     ctx.commands.register({
       name: 'memj-review',
-      description: '人侧状态面板：待批 global 提名 / 断链 / 非法封面。',
+      description: promptText('command:memj-review:description', CMD_REVIEW_DESCRIPTION),
       handler: async (invocation) => {
         const raw = (invocation.rawInput ?? '').trim()
         const lines: string[] = []
@@ -360,8 +444,8 @@ export function registerCommands(deps: CommandDeps): void {
   safeRegister('memj-get-handoff-project', () =>
     ctx.commands.register({
       name: 'memj-get-handoff-project',
-      description: '把某个项目的交接内容注入会话（文档 / +项目知识 / +主题知识）。',
-      input: { hint: '（项目 id，可再补档位：只看文档 / 连带项目知识 / 全部）' },
+      description: promptText('command:memj-get-handoff-project:description', CMD_GET_PROJECT_DESCRIPTION),
+      input: { hint: promptText('command:memj-get-handoff-project:hint', HINT_GET_PROJECT) },
       handler: async (invocation) => {
         const agent = invocation.agent
         if (agent === undefined) return { kind: 'success', text: '当前上下文没有 agent。' }
@@ -445,8 +529,8 @@ export function registerCommands(deps: CommandDeps): void {
   safeRegister('memj-get-handoff-theme', () =>
     ctx.commands.register({
       name: 'memj-get-handoff-theme',
-      description: '把某个主题的封面与知识清单注入会话（正文按需读）。',
-      input: { hint: '（主题 id）' },
+      description: promptText('command:memj-get-handoff-theme:description', CMD_GET_THEME_DESCRIPTION),
+      input: { hint: promptText('command:memj-get-handoff-theme:hint', HINT_GET_THEME) },
       handler: async (invocation) => {
         const agent = invocation.agent
         if (agent === undefined) return { kind: 'success', text: '当前上下文没有 agent。' }

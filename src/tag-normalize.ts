@@ -182,91 +182,87 @@ function emptyTail(
  * （进了词表就再也动不了）。⭐ 用户指出："词表只作为选项和上下文，
  * **所有的处理全都应该交给模型**"。
  */
-const ADJUDICATE_SYSTEM = [
-  'You curate the TAG VOCABULARY of a personal knowledge base.',
-  '',
-  'INPUT',
-  '- "VOCABULARY": the canonical tags that already exist, each with its aliases.',
-  '  ⚠️ This is a list of OPTIONS to prefer and reuse — it is NOT a whitelist.',
-  '  You MAY merge, rename or drop an existing canonical when it is genuinely wrong,',
-  '  but you MUST justify it (see RULES).',
-  '- "TAGS IN SCOPE": every tag used by the entries being processed, with its',
-  '  frequency in the whole library. Tags already in VOCABULARY appear here too.',
-  '- "ENTRIES": the knowledge entries (id, title, current tags, and optionally an',
-  '  excerpt of the body).',
-  '',
-  'TASK — decide, and explain every decision:',
-  '1. "merge": <tag> means the SAME concept as <target>. Give the target and WHY.',
-  '   Typical cases: case/spelling variants (dsh -> DSH, css -> CSS); synonyms',
-  '   (排查 -> 排障); a variant folding into a higher-frequency entry point.',
-  '2. "drop": <tag> conveys nothing on its own and has no suitable target.',
-  '   Give WHY. (e.g. 设计 / 顺序 / 边界 / 处理 / 问题 as a bare word)',
-  '3. "add": <tag> is a genuinely NEW topic that the existing vocabulary does not',
-  '   cover. Give WHY — and the reason must show that the entries actually discuss',
-  '   something the vocabulary cannot express. ⚠️ Do NOT add a new canonical merely',
-  '   because a tag is missing from the vocabulary — if it is a synonym or a',
-  '   variant of an existing canonical, use "merge" instead.',
-  '4. "retag": for an entry whose tags do NOT fit its body, give the corrected list',
-  '   and WHY. This is the only place where a tag may be ADDED to or REMOVED from',
-  '   an entry. ⚠️ Only do this when the body clearly supports it; when in doubt,',
-  '   leave the entry alone (do not output it).',
-  '',
-  'RULES',
-  '',
-  '🔴 RULE 1 — LEVEL CHECK (this is the rule most often violated; read it first).',
-  'Before ANY merge, ask these two questions about the source and target:',
-  '  (a) Is the TARGET a general category (other, more specific things could also be called by it)?',
-  '  (b) Is the SOURCE a specific form, implementation, or proper name of that category?',
-  '  If BOTH are yes, it is a broader-into-narrower (or narrower-into-broader) relation:',
-  '  **DO NOT MERGE.** Keep both.',
-  '',
-  'Concrete patterns that MUST NOT be merged (regardless of how similar they look):',
-  '  - generic noun  vs  specific name     : 钩子 vs turn-stopping ; 工具 vs memj_read',
-  '  - category  vs  specific implementation: agent vs 子代理 ; 模型 vs JEV',
-  '  - same concept in two LANGUAGES        : 会话 vs session ; 缓存 vs cache',
-  '    (the user ruled that Chinese and English tags stay separate — do NOT unify them)',
-  '  - broader term vs its subtype          : 前端 vs UI ; 缓存 vs 前缀缓存 ; 注入 vs 主动注入',
-  '',
-  '⚠️ Do NOT reason "they are related, so merge them". Related is not the same as same.',
-  '⚠️ Do NOT merge a HIGH-frequency general word into a LOW-frequency specific one,',
-  '   or the reverse — frequency difference is itself a hint that levels differ.',
-  '   If "TAGS IN SCOPE" shows one tag covering many entries across different topics',
-  '   while the other covers one narrow entry, they are almost certainly different levels.',
-  '',
-  'RULE 2 — PREFER REUSE over invention. A new canonical is a long-term commitment —',
-  'only add one when the concept is real, recurring, and not already expressible.',
-  'When in doubt, do NOT add.',
-  '',
-  'RULE 3 — A high-frequency generic tag can be a useful ENTRY POINT: prefer merging its',
-  'variants INTO it (测试策略 -> 测试) rather than dropping it. NOTE: this is about the',
-  'generic tag KEEPING its role as an entry point — it does NOT license merging a',
-  'specific name into it when that name denotes a distinct thing (see RULE 1).',
-  '',
-  '⚠️ "why" must be a REAL reason (one short clause), not a restatement of the',
-  'decision. "they are the same" is not a reason; "same concept, dsh is just the',
-  'lowercase spelling" is. Decisions without a reason are REJECTED.',
-  '⭐ When you merge, state in "why" WHICH case it is (spelling variant / synonym /',
-  'plural / abbreviation) — if you cannot name one of those cases, do not merge.',
-  '- Only mention tags that appear in "TAGS IN SCOPE", and entry ids from "ENTRIES".',
-  '',
-  'Reply with ONLY a JSON object, no prose, no code fence. Every value needs "why":',
-  '{"merge":{"<tag>":{"to":"<target>","why":"..."}},',
-  ' "drop":{"<tag>":{"why":"..."}},',
-  ' "add":{"<tag>":{"why":"..."}},',
-  ' "retag":{"<entry id>":{"tags":["..."],"why":"..."}}}',
-  'Use {} for any category you have no decision about.',
-].join('\n')
+const ADJUDICATE_SYSTEM = `You curate the TAG VOCABULARY of a personal knowledge base.
+
+INPUT
+- "VOCABULARY": the canonical tags that already exist, each with its aliases.
+  ⚠️ This is a list of OPTIONS to prefer and reuse — it is NOT a whitelist.
+  You MAY merge, rename or drop an existing canonical when it is genuinely wrong,
+  but you MUST justify it (see RULES).
+- "TAGS IN SCOPE": every tag used by the entries being processed, with its
+  frequency in the whole library. Tags already in VOCABULARY appear here too.
+- "ENTRIES": the knowledge entries (id, title, current tags, and optionally an
+  excerpt of the body).
+
+TASK — decide, and explain every decision:
+1. "merge": <tag> means the SAME concept as <target>. Give the target and WHY.
+   Typical cases: case/spelling variants (dsh -> DSH, css -> CSS); synonyms
+   (排查 -> 排障); a variant folding into a higher-frequency entry point.
+2. "drop": <tag> conveys nothing on its own and has no suitable target.
+   Give WHY. (e.g. 设计 / 顺序 / 边界 / 处理 / 问题 as a bare word)
+3. "add": <tag> is a genuinely NEW topic that the existing vocabulary does not
+   cover. Give WHY — and the reason must show that the entries actually discuss
+   something the vocabulary cannot express. ⚠️ Do NOT add a new canonical merely
+   because a tag is missing from the vocabulary — if it is a synonym or a
+   variant of an existing canonical, use "merge" instead.
+4. "retag": for an entry whose tags do NOT fit its body, give the corrected list
+   and WHY. This is the only place where a tag may be ADDED to or REMOVED from
+   an entry. ⚠️ Only do this when the body clearly supports it; when in doubt,
+   leave the entry alone (do not output it).
+
+RULES
+
+🔴 RULE 1 — LEVEL CHECK (this is the rule most often violated; read it first).
+Before ANY merge, ask these two questions about the source and target:
+  (a) Is the TARGET a general category (other, more specific things could also be called by it)?
+  (b) Is the SOURCE a specific form, implementation, or proper name of that category?
+  If BOTH are yes, it is a broader-into-narrower (or narrower-into-broader) relation:
+  **DO NOT MERGE.** Keep both.
+
+Concrete patterns that MUST NOT be merged (regardless of how similar they look):
+  - generic noun  vs  specific name     : 钩子 vs turn-stopping ; 工具 vs memj_read
+  - category  vs  specific implementation: agent vs 子代理 ; 模型 vs JEV
+  - same concept in two LANGUAGES        : 会话 vs session ; 缓存 vs cache
+    (the user ruled that Chinese and English tags stay separate — do NOT unify them)
+  - broader term vs its subtype          : 前端 vs UI ; 缓存 vs 前缀缓存 ; 注入 vs 主动注入
+
+⚠️ Do NOT reason "they are related, so merge them". Related is not the same as same.
+⚠️ Do NOT merge a HIGH-frequency general word into a LOW-frequency specific one,
+   or the reverse — frequency difference is itself a hint that levels differ.
+   If "TAGS IN SCOPE" shows one tag covering many entries across different topics
+   while the other covers one narrow entry, they are almost certainly different levels.
+
+RULE 2 — PREFER REUSE over invention. A new canonical is a long-term commitment —
+only add one when the concept is real, recurring, and not already expressible.
+When in doubt, do NOT add.
+
+RULE 3 — A high-frequency generic tag can be a useful ENTRY POINT: prefer merging its
+variants INTO it (测试策略 -> 测试) rather than dropping it. NOTE: this is about the
+generic tag KEEPING its role as an entry point — it does NOT license merging a
+specific name into it when that name denotes a distinct thing (see RULE 1).
+
+⚠️ "why" must be a REAL reason (one short clause), not a restatement of the
+decision. "they are the same" is not a reason; "same concept, dsh is just the
+lowercase spelling" is. Decisions without a reason are REJECTED.
+⭐ When you merge, state in "why" WHICH case it is (spelling variant / synonym /
+plural / abbreviation) — if you cannot name one of those cases, do not merge.
+- Only mention tags that appear in "TAGS IN SCOPE", and entry ids from "ENTRIES".
+
+Reply with ONLY a JSON object, no prose, no code fence. Every value needs "why":
+{"merge":{"<tag>":{"to":"<target>","why":"..."}},
+ "drop":{"<tag>":{"why":"..."}},
+ "add":{"<tag>":{"why":"..."}},
+ "retag":{"<entry id>":{"tags":["..."],"why":"..."}}}
+Use {} for any category you have no decision about.`
 
 /** C 层：生成英文规范词的提示词。 */
-const TRANSLATE_SYSTEM = [
-  'Translate each Chinese knowledge-base tag into a short English canonical tag.',
-  'Rules:',
-  '- Lowercase, except well-known acronyms and product names (CSS, DSH, PowerShell, YAML, CDP, UI, JEV).',
-  '- Keep it 1-3 words, no punctuation, no trailing period.',
-  '- Use the same English term for tags that mean the same thing.',
-  'Reply with ONLY a JSON object mapping the Chinese tag to its English form,',
-  'no prose, no code fence.',
-].join('\n')
+const TRANSLATE_SYSTEM = `Translate each Chinese knowledge-base tag into a short English canonical tag.
+Rules:
+- Lowercase, except well-known acronyms and product names (CSS, DSH, PowerShell, YAML, CDP, UI, JEV).
+- Keep it 1-3 words, no punctuation, no trailing period.
+- Use the same English term for tags that mean the same thing.
+Reply with ONLY a JSON object mapping the Chinese tag to its English form,
+no prose, no code fence.`
 
 // ⭐⭐⭐ **登记默认值**（本次新增；展示页要用）。
 // 🔴 **判据段必须保持英文**：这两段是给标签规范化模型看的，且 B 层的"层级自检"

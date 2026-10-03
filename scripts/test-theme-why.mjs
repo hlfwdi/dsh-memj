@@ -124,7 +124,7 @@ console.log('\n【2】静态接线：警告真的接上了吗（不是写了个�
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-console.log('\n【3】⭐ 规范（context.ts）—— 这是生成物，源头在设计文档 §5.2')
+console.log('\n【3】⭐ 规范（context.ts）—— 本文件是源头，直接改它')
 {
   const ctx = readFileSync(join(SRC, 'context.ts'), 'utf8')
   check('⭐⭐ 规范里写了**挂靠的目的**（让别人直接拿去用）',
@@ -135,13 +135,26 @@ console.log('\n【3】⭐ 规范（context.ts）—— 这是生成物，源头�
   check('⭐⭐ 规范里要求填 `themeWhy`（引 desc + 说明用途）', /themeWhy/.test(ctx))
   check('⭐⭐ 规范里说明**引不出 ⇒ 警告**', /警告/.test(ctx))
   // ⭐⭐ 2026-10-02 更正：原来这里断言的是"本文件由 gen-context.mjs 生成"那句标注，
-  //    但**那条生成链已不在 `run-all-tests` 回路里**（对比 `gen-descriptions.mjs` 仍在），
+  //    但**那条生成链已不在 `run-all-tests` 回路里**，
   //    而 `context.ts` 现在是"默认值 / 回落值"、可以直接改。
-  //    ⇒ 判据随之改成验**新的、如实的说明**（两个源头 + 生成链已失效）。
+  // ⭐⭐ **2026-10-12 再改**：`protocol.ts` / `tool-descriptions.ts` 也按同一做法解耦了
+  //    ⇒ 判据从"只有本文件可直接改"改为"**这三个文件都是源头**"。
+  //    ⚠️ 不要再断言"只有 context.ts 解耦"——那会随本次解耦而假红。
   check('⭐ 说明「运行期唯一源头是设置页【提示词】」',
-    /设置页【提示词】子页/.test(ctx) && /唯一源头/.test(ctx))
-  check('⭐ 说明「生成链已不在套件回路里」（不再误导"先改设计文档"）',
-    /生成链已不在/.test(ctx))
+    /设置页【提示词】子页|设置页【提示词】/.test(ctx))
+  check('⭐ 说明「生成链已解耦」（不再误导"先改设计文档"）',
+    /解耦/.test(ctx) || /生成链已不在/.test(ctx))
+  // ⭐⭐⭐ 2026-10-12 新增：另外两个文件的头注释也必须是"本文件是源头"口径。
+  //    🔴 为什么必须一起查：解耦只改了 `run-all-tests` 的登记、没改头注释的话，
+  //      文件里那句「先改设计文档，再重跑生成脚本」会**继续教后来人走错的流程**
+  //      （生成器虽然不再自动跑，但有人照着注释手工跑一次就**回退整次解耦**）。
+  const proto = readFileSync(join(SRC, 'protocol.ts'), 'utf8')
+  const descs = readFileSync(join(SRC, 'tool-descriptions.ts'), 'utf8')
+  for (const [label, src] of [['protocol.ts', proto], ['tool-descriptions.ts', descs]]) {
+    check(`⭐⭐⭐ ${label} 头注释说明「本文件是源头」`, /本文件是【源头】/.test(src))
+    check(`⭐⭐⭐ ${label} 头注释不再写「先改设计文档，再重跑生成脚本」`,
+      !/先改 `?memj-design\.md`?/.test(src))
+  }
   // ⭐⭐ 2026-10-02：正文那句**不得再出现"六节 / 第七节"**。
   //    🔴 为什么要有这条：文档结构现在**可由用户自定义模板**（决策 204/205），
   //       常驻文本里写死"前六节/第七节"会与"这份文档可能只有 3 节"**自相矛盾**。

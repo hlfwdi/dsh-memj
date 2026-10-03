@@ -48,9 +48,12 @@ import { loadEntryDoc, rebuildDerivedLayers, scanLibrary, loadProjectDoc, append
 import { recordRead, renderSnapshotList, pendingSnapshots } from './reads.ts'
 import { decideRead } from './read.ts'
 // ⭐⭐⭐ 提示词运行期覆盖（本次新增）：`safeRegister` 用它把工具描述改成 getter。
-import { promptText, registerPromptDefault } from './prompts.ts'
+import { fillSlots, promptText, registerPromptDefault } from './prompts.ts'
 // ⭐ 决策 205：模板工具的两段式确认（纯函数，可单测）。
 import { decideTemplateTool } from './template-tool.ts'
+// ⭐ 模板写作指导的骨架（可编辑常量与插槽标记都在 templates.ts）。
+import { TPL_GUIDANCE_TRUNC_MARK } from './templates.ts'
+import { KNOWLEDGE_TITLE } from './sections.ts'
 import { bodySize, filterByContext, filterContextByTerms, normalizeQuery, scoreCover, sortHits } from './search.ts'
 import { resolveRef } from './paths.ts'
 // ⭐ `kind` 的受控词表判据（决策 114 的 `setFields.kind` 用）。
@@ -70,6 +73,40 @@ import {
   MEMJ_SEARCH_DESCRIPTION,
   MEMJ_SNAPSHOTS_DESCRIPTION,
 } from './tool-descriptions.ts'
+
+// ══════════════════════════════════════════════════════════════════════════
+// ⭐⭐⭐ **`memj_read` 附带的「写作指导」外壳**（2026-10-12 开放编辑；`{{…}}` 是插槽）
+//
+// 🔴 **它是什么**：读一个**用了自定义模板**的项目文档时，`memj_read` 的返回值末尾会
+//    附上这段（"+ 本文档的节结构 / 每节要干嘛"）。⚠️ 默认六节的项目**一字不加**。
+//
+// ⚠️ **两个分支**：找得到原模板 ⇒ 走 `tpl:notice-templated`（内含 `tpl:guidance-*` 拼的正文）；
+//    模板已被删/改名 ⇒ 走 `tpl:notice-fallback`（从**文档自己记着的节名**还原）。
+export const TPL_NOTICE_TEMPLATED: string = `
+
+---
+
+## 本文档的写作指导（按模板 \`{{tplId}}\` 生成）
+
+{{guidance}}`
+
+export const TPL_NOTICE_FALLBACK: string = `
+
+---
+
+## 本文档的节结构（共 {{count}} 节，顺序固定）
+
+{{secLines}}
+
+{{missingNote}}
+🔴 \`## {{knowledgeTitle}}\` 由工具生成（放封面），**不在上面这几节里**。`
+
+export const TPL_NOTICE_MISSING: string =
+  '⚠️ 原模板 `{{tplId}}` 已不存在 —— 上面这份是从**文档自己记着的节名**还原的，**它才是准的**。'
+
+registerPromptDefault('tpl:notice-templated', TPL_NOTICE_TEMPLATED)
+registerPromptDefault('tpl:notice-fallback', TPL_NOTICE_FALLBACK)
+registerPromptDefault('tpl:notice-missing', TPL_NOTICE_MISSING)
 
 /** 工具依赖。 */
 export interface ToolDeps {
@@ -701,21 +738,30 @@ export function registerTools(deps: ToolDeps): void {
                 //    用**文档自己记着的节名**现拼一份（**不撒谎**：它就是这份文档的结构）。
                 const t = all.find((x) => x.id === tplId)
                 if (t !== undefined) {
-                  tplNotice = `\n\n---\n\n## 本文档的写作指导（按模板 \`${t.id}\` 生成）\n\n${renderTemplateGuidance(t)}`
+                  tplNotice = fillSlots(promptText('tpl:notice-templated', TPL_NOTICE_TEMPLATED), {
+                    tplId: t.id,
+                    guidance: renderTemplateGuidance(t),
+                  })
                 } else {
                   const truncSet = new Set(doc2?.frontmatter.truncateSections ?? [])
                   const secLines = secs
                     .map((s) => {
-                      const trunc = truncSet.has(s) ? '　⭐ **本节的较早内容会被自动截断归档**' : ''
+                      const trunc = truncSet.has(s)
+                        ? promptText('tpl:guidance-trunc-mark', TPL_GUIDANCE_TRUNC_MARK)
+                        : ''
                       return `- \`## ${s}\`${trunc}`
                     })
                     .join('\n')
-                  tplNotice =
-                    `\n\n---\n\n## 本文档的节结构（共 ${secs.length} 节，顺序固定）\n\n${secLines}\n\n` +
-                    (tplId !== ''
-                      ? `⚠️ 原模板 \`${tplId}\` 已不存在 —— 上面这份是从**文档自己记着的节名**还原的，**它才是准的**。`
-                      : '') +
-                    `\n🔴 \`## 沉淀知识\` 由工具生成（放封面），**不在上面这几节里**。`
+                  tplNotice = fillSlots(promptText('tpl:notice-fallback', TPL_NOTICE_FALLBACK), {
+                    count: String(secs.length),
+                    secLines,
+                    // ⚠️ 原模板已被删/改名时才有这一句；没有就填空串（插槽仍保留）。
+                    missingNote:
+                      tplId !== ''
+                        ? fillSlots(promptText('tpl:notice-missing', TPL_NOTICE_MISSING), { tplId })
+                        : '',
+                    knowledgeTitle: KNOWLEDGE_TITLE,
+                  })
                 }
               }
             } catch {
@@ -1020,7 +1066,8 @@ export function registerTools(deps: ToolDeps): void {
           doc: {
             type: 'string',
             description:
-              'handoff 文档的叙事（前六节 markdown）。\n' +
+              'handoff 文档的叙事（markdown，按该项目的节清单写）。\n' +
+              '⚠️ **节名不是固定的**——由建档时的模板决定，回执会回声本项目节名清单。\n' +
               '⭐ **给了 `docSection` 时**：这里只写**该节要变的那部分**' +
               '（`append`/`prepend` 时**不要带节标题**，工具会加）；\n' +
               '**没给 `docSection` 时**：按 `##` 节名对号入座，写了的那一节**整节替换**' +

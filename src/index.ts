@@ -477,6 +477,11 @@ export function apply(ctx: Context, config: MemjConfig = DEFAULT_CONFIG): void {
       `${API_BASE}/prompt/history`,
       // ⭐ 回退到某一版历史（"备份回退"的第二个方向）。
       `${API_BASE}/prompt/restore`,
+      // ⭐⭐⭐ 写回源码（2026-10-12 新增）——**同一个坑又踩了一次**：
+      //    我加了 `api.ts` 的分支却漏了这里 ⇒ `test-web-api.mjs` 当场抓住
+      //    （"未注册：/prompt/writeback —— 会落 SPA 兜底、返回 HTML"）。
+      //    ⭐ 这条断言**每次都跑**，所以"两份清单"不会静默漂开——留在这里当样例。
+      `${API_BASE}/prompt/writeback`,
       // ⭐⭐⭐【模板】子页（决策 204/205）——**同上**：
       //    🔴 漏了这三行 ⇒ 模板页"加载失败"（请求落 SPA 兜底返回 HTML），
       //       而服务端毫无异常。本项目已因同一原因踩过三次。
@@ -525,6 +530,10 @@ export { PROTOCOL_TEXT, PROTOCOL_SECTION_ORDER, protocolText } from './protocol.
 //    测试（`scripts/test-prompt-override.mjs`）要直接验校验规则 / 覆盖优先级 /
 //    运行期生效 / 恢复默认 / 历史备份这些**纯逻辑**（不必起服务）。
 export * from './prompts.ts'
+// ⭐⭐⭐ 写回源码（2026-10-12）——单独模块：它要 import `paths.ts` 的 `pluginRoot()`，
+//    而 `prompts.ts` 是**叶子模块**（不 import 任何提示词源模块，见其模块头注释）
+//    ⇒ 把写回逻辑塞进 `prompts.ts` 会破坏那条依赖纪律。
+export * from './prompt-writeback.ts'
 export * from './parse.ts'
 export * from './paths.ts'
 export * from './read.ts'

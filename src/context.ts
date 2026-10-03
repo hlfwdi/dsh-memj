@@ -33,7 +33,15 @@ export const CONTEXT_NAME = 'memj:usage-guidance'
 export const CONTEXT_ORDER = 125
 
 
-/** 运行时上下文全文（逐字取自 `memj-design.md` §5.2）。 */
+/**
+ * 运行时上下文全文。
+ *
+ * 🔴 **本文件是源头——直接改它。**
+ *   ⭐ **运行期唯一源头是设置页【提示词】子页**（那里改完写 `overrides.json`、即刻生效）；
+ *     本文件是它**没被覆盖时的默认值 / 回落值**。
+ *   ⚠️ **生成链已解耦**（`gen-context.mjs` 不在 `run-all-tests` 回路里）。
+ *   ⭐ 2026-10-12 起 `protocol.ts` / `tool-descriptions.ts` 也按同一做法解耦了。
+ */
 export const CONTEXT_TEXT = `### memj 触发条件（用户这么说 ⇒ 调对应工具）
 
 | 用户说法（示例） | 该调的工具 |

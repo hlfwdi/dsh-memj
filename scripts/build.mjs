@@ -21,6 +21,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { auditPromptLedger, renderLedgerReport } from './shared/prompt-ledger.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const root = join(here, '..')
@@ -65,3 +66,30 @@ console.log(
     '   ⚠️ **改了代码后要让运行中的实例生效，必须重启那个实例**——' +
     '实例在启动时就 import 完了，构建不会热更新它。',
 )
+
+// ── ④ 提示词账本一致性（⭐ **警告但继续**，用户 2026-10-12 裁定）─────────────
+//
+// 🔴🔴 **为什么在这里查**：漏登记 `TOOL_META` 的后果是「**提示词设置页上缺失**」
+//   （看不到 / 改不了 / API 404），而运行时一切正常 ⇒ 平时发现不了。
+//   构建正是"要把这东西交给运行时"的那一刻 ⇒ 在这里提醒最合时宜。
+//
+// ⚠️ **为什么是警告而不是硬失败**（用户裁定）：构建要能照常产出 `lib/`
+//   ——否则"先构建看看"会被挡住，而缺一个只读展示项并不影响运行。
+//   ⭐ 本项目的既有边界：**机械层负责让"没做那个动作"可见，语义裁决仍靠人**。
+//
+// ⛔ **不得自行补代码**：报错后**先向用户报告、等确认**，再改 `TOOL_META`。
+{
+  const audit = auditPromptLedger(root)
+  if (!audit.ok) {
+    console.log(
+      '\n' +
+        '─'.repeat(66) +
+        '\n⚠️⚠️ **提示词账本不一致**（不影响本次构建产物，但**提示词设置页有缺失**）\n' +
+        '─'.repeat(66) +
+        '\n' +
+        renderLedgerReport(audit) +
+        '\n' +
+        '─'.repeat(66),
+    )
+  }
+}

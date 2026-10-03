@@ -27,6 +27,10 @@ import {
   savePromptOverride,
   specOf,
 } from './prompts.ts'
+// ⭐⭐⭐ 写回源码（2026-10-12 新增）——注意它在**单独模块**里，不在 `prompts.ts`
+//    （那个模块要 import `paths.ts` 的 `pluginRoot()`，而 `prompts.ts` 是叶子模块、
+//      不 import 任何提示词源模块 ⇒ 放进去会破坏那条依赖纪律）。
+import { writeBackToSource, writeBackState } from './prompt-writeback.ts'
 import { promptOverridesPath } from './paths.ts'
 // ⭐ 决策 204：模板 CRUD（人侧管理页的数据源）。
 import {
@@ -1354,6 +1358,12 @@ export async function handleApi(
         })),
         overridden: hasOverride(s.key),
         textLen: promptCurrent(s.key).length,
+        // ⭐⭐ 写回相关（2026-10-12 新增）：页面据此决定「写回」按钮是否可用、以及显示三态。
+        //    ⚠️ 只有 `editable: true` 且 `sourceConst` 非空才可写回
+        //      （参数/输出 schema 在源码里没有对应常量）。
+        canWriteBack: s.editable === true && (s.sourceConst ?? '') !== '',
+        writeBackState: s.editable === true ? writeBackState(s.key) : '',
+        sourceConst: s.sourceConst ?? '',
       }))
       return {
         status: 200,
@@ -1397,6 +1407,32 @@ export async function handleApi(
       }
       const r = await savePromptOverride(key, text)
       return { status: r.ok ? 200 : 400, body: { ok: r.ok, errors: r.errors, saved: r.saved, backupPath: r.backupPath ?? '' } }
+    }
+
+    // ⭐⭐⭐ 写回源码：把当前生效文本固化进 `src/*.ts`（2026-10-12 新增）。
+    //
+    // 🔴 **它不改变运行时行为**：运行期永远读覆盖层 ⇒ 写回**不需要重启就已"生效"**
+    //   （本来就在生效）。它改的是**归属**——从库里的临时覆盖变成源码里的正式默认值。
+    //   ⚠️ 唯一例外是命令描述（`hotReload: 'restart'`）：它本来就要重启才生效。
+    // ⚠️ **保留覆盖项**（用户裁定）⇒ 页面要靠三态显示让"写回做过没有"可见。
+    if (route === '/prompt/writeback') {
+      if (method !== 'POST') return { status: 405, body: { ok: false, error: '该接口只接受 POST' } }
+      let keys: string[] = []
+      try {
+        const body = JSON.parse(rawBody) as { keys?: unknown; key?: unknown }
+        // 允许传单个 key（`key`）或一批（`keys`）——前者是"只写回这一条"的常用形态。
+        if (typeof body.key === 'string' && body.key !== '') keys = [body.key]
+        else if (Array.isArray(body.keys)) keys = body.keys.filter((k): k is string => typeof k === 'string')
+      } catch {
+        return { status: 400, body: { ok: false, error: '请求体不是合法 JSON' } }
+      }
+      if (keys.length === 0) return { status: 400, body: { ok: false, error: '没有给要写回的 key' } }
+      const unknown = keys.filter((k) => specOf(k) === undefined)
+      if (unknown.length > 0) {
+        return { status: 404, body: { ok: false, error: `未知的提示词键：${unknown.join('、')}` } }
+      }
+      const r = await writeBackToSource(keys)
+      return { status: r.ok ? 200 : 400, body: { ok: r.ok, items: r.items, filesChanged: r.filesChanged, summary: r.summary } }
     }
 
     // 恢复默认（删掉覆盖项）。

@@ -302,10 +302,31 @@ for (const { file, name } of found) {
 //    ⭐ 但**空列表是强信号**：说明没有漏网的。
 check('8a 源码里没有"像提示词却未登记"的常量', suspicious.length === 0,
   suspicious.length > 0 ? `可疑：${suspicious.join('、')}` : '')
-check('8b 规格表条数与分区合理（常驻 2 / 工具 36 / 内部 ≥13）',
+// 🔴 **8b 的判据在 2026-10-12 改过**：原来把数字**写死**（工具 36）——
+//    而"加一个工具"是**合法变更**（决策 205 加了 `memj_template`，工具区 36 → 39）
+//    ⇒ 写死的数字会**必然假红**，且逼着人每次去改测试（那正是"测试跟着实现跑"的坏味道）。
+//    ⭐ 改成**从源头推导期望值**：工具区 = 工具数 × 3（description/parameters/output）
+//      + 命令数 + 其它手工项；工具数直接**读 `TOOL_META`**（与 `check-prompt-specs.mjs`
+//      同一份判据口径：账本 = 实际注册的工具）。
+//    ⚠️ 这样它仍然抓得住"分区串了/少登记了"，但**不再因合法增删而假红**。
+const metaToolCount = (() => {
+  const src = rf(jp(SRC, 'prompts.ts'), 'utf8').replace(/\r\n/g, '\n')
+  const i = src.indexOf('const TOOL_META')
+  const a = src.indexOf('[', i)
+  const b = src.indexOf('\n]', a)
+  return (src.slice(a, b).match(/\{\s*name:\s*'[a-z_]+'/g) ?? []).length
+})()
+const toolsZone = specs.filter((s) => s.zone === 'tools').length
+// 工具类条目 = 每工具 3 条；其余是命令描述(4) + inject:closing + handoff:prompt。
+const expectedToolsMin = metaToolCount * 3
+check(
+  `8b 规格表条数与分区合理（常驻 2 / 工具 ≥${expectedToolsMin}（${metaToolCount} 工具 × 3）/ 内部 ≥13）`,
   specs.filter((s) => s.zone === 'resident').length === 2 &&
-  specs.filter((s) => s.zone === 'tools').length === 36 &&
-  specs.filter((s) => s.zone === 'internal').length >= 13)
+    toolsZone >= expectedToolsMin &&
+    specs.filter((s) => s.zone === 'internal').length >= 13,
+  `实际：常驻 ${specs.filter((s) => s.zone === 'resident').length} / ` +
+    `工具 ${toolsZone} / 内部 ${specs.filter((s) => s.zone === 'internal').length}`,
+)
 check('8c ⭐ 知识评分 JEV 通路的提问也在表里（第一版漏过它）',
   specs.some((s) => s.key === 'score:jev-instruction' && s.checks.some((c) => c.kind === 'englishOnly')))
 

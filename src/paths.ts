@@ -33,6 +33,30 @@
 
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+/**
+ * ⭐⭐⭐ **插件仓根**（2026-10-12 新增）——「写回源码」功能的定位基准。
+ *
+ * 🔴 **为什么需要它**：写回要把覆盖文本替换进 `src/*.ts` 的模板串，而这需要一个
+ *   **插件自己的安装位置**。此前所有路径都只指向库根（`~/.dsh-memj`），
+ *   插件**完全不知道自己源码在哪** ⇒ 写回无从下手。
+ *
+ * ⭐ **怎么定位**：本模块编译后在 `<仓根>/lib/*.js`（`package.json` 的 `main` 是 `lib/index.js`）
+ *   ⇒ `import.meta.url` 往上一级就是仓根。**这是最可靠的**——它跟着实际加载的文件走，
+ *   不依赖 `process.cwd()`（那会随调用方变）、也不依赖任何配置项。
+ *
+ * ⚠️ **边界**：本函数**只给"写回源码"用**，不要把库内数据路径改到这里——
+ *   库根（`libraryRoot()`）与插件仓**是两回事**（前者是用户数据、后者是交付物）。
+ *   本项目的铁律：**用户数据放库根，绝不写进插件仓**。
+ * @returns 插件仓根绝对路径。
+ */
+export function pluginRoot(): string {
+  // `lib/paths.js` → 上一级 = 仓根。⚠️ 用 fileURLToPath 而不是手工切字符串，
+  // 否则 Windows 的盘符与 URL 编码（空格成 %20）会出错。
+  const here = fileURLToPath(import.meta.url)
+  return resolve(join(here, '..', '..'))
+}
 
 /**
  * 库根：`$MEMJ_DATA_DIR`（为空则回落 `~/.dsh-memj`）。

@@ -50,16 +50,14 @@ import {
  * 2. ⭐ **"你本身寻求的信息"**（用户原话）——它给了模型一个**主动取正文**的正当理由；
  * 3. ⭐ **禁止客套寒暄**（用户原话）——针对"好的，我已了解背景……"这类纯噪音。
  */
-export const HOT_CLOSING_INSTRUCTION: string = [
-  '---',
-  '',
-  '⭐ **以上内容已注入完毕——这就够了。**',
-  '',
-  '除非**用户的问题**、或**你本身正在寻求的信息**正好落在上面某条（`meta` 形态的）条目上',
-  '（那时用 `memj_read` 传 `id` 取正文），否则**继续当前任务**。',
-  '',
-  '🔴 **禁止额外的客套、寒暄**，以及"我已了解上下文"这类确认性输出。',
-].join('\n')
+export const HOT_CLOSING_INSTRUCTION: string = `---
+
+⭐ **以上内容已注入完毕——这就够了。**
+
+除非**用户的问题**、或**你本身正在寻求的信息**正好落在上面某条（\`meta\` 形态的）条目上
+（那时用 \`memj_read\` 传 \`id\` 取正文），否则**继续当前任务**。
+
+🔴 **禁止额外的客套、寒暄**，以及"我已了解上下文"这类确认性输出。`
 
 /**
  * ⭐⭐ **「正文形态」那一段的收尾**（用户 2026-09-24 逐字给定）。
@@ -77,10 +75,28 @@ export const HOT_CLOSING_INSTRUCTION: string = [
 export const HOT_BODY_CLOSING_INSTRUCTION: string =
   '以上是用户要求或者背景知识，但不是任务；结合上述要求或知识继续当前工作。'
 
+// ⭐⭐⭐ **热知识的段头与表头**（2026-10-12 抽成常量 + 走 `promptText`）。
+//
+// 🔴 **为什么它们也算提示词**：它们**逐字写在注入给模型的那段文本里** ——
+//    · 消息头两行**告诉模型"这是什么"**（本次会话相关 / 补充）——
+//      ⭐ 尤其"（补充）"这行**有实质语义**：模型据此知道"这不是新的一批、是补发的缺项"；
+//    · "直接可用的内容"那行**告诉模型这批条目的形态**（画像 + 正文已在眼前，
+//      不需要再去 `memj_read`）—— 与只用 meta 的那两行的语义**正好相反**。
+//    ⭐ 判据同 `inject.ts`：**能改变模型怎么做的文本就是提示词**。
+// ⚠️ 改它们**不改变注入哪些条目**（那是 `collectHotItems` / `wanted()` 的判据）。
+export const HOT_HEAD_FIRST = '## memj 热知识（本次会话相关）'
+export const HOT_HEAD_SUPPLEMENT = '## memj 热知识（补充）'
+export const HOT_DIRECT_SECTION = '### 直接可用的内容（画像 + 正文形态的知识）'
+export const HOT_META_HINT = '⭐ **以下只给标题与描述，正文按需读**——用 `memj_read` 传 `id` 取正文。'
+
 // ⭐⭐⭐ **登记默认值**（本次新增；覆盖优先级与热更新机制见 `prompts.ts`）。
 // ⚠️ **这两个收尾的措辞原本是用户逐字给的** —— 页面上允许改，属于用户自己的决定。
 registerPromptDefault('hot:closing', HOT_CLOSING_INSTRUCTION)
 registerPromptDefault('hot:body-closing', HOT_BODY_CLOSING_INSTRUCTION)
+registerPromptDefault('hot:head-first', HOT_HEAD_FIRST)
+registerPromptDefault('hot:head-supplement', HOT_HEAD_SUPPLEMENT)
+registerPromptDefault('hot:direct-section', HOT_DIRECT_SECTION)
+registerPromptDefault('hot:meta-hint', HOT_META_HINT)
 
 /**
  * 一条待注入的条目（渲染层的输入单元）。
@@ -321,7 +337,7 @@ export function renderHotText(
   /** ⭐ meta 段的行（**单独攒**，好让补注时分成两条消息、各带各的收尾）。 */
   const metaParts: string[] = []
   if (direct.length > 0) {
-    parts.push('### 直接可用的内容（画像 + 正文形态的知识）', '')
+    parts.push(promptText('hot:direct-section', HOT_DIRECT_SECTION), '')
     parts.push(...direct)
   }
   for (const g of groups) {
@@ -332,7 +348,7 @@ export function renderHotText(
     if (rows.length === 0) continue
     counts[g.key] = rows.length
     metaParts.push('', `### ${g.title}（${rows.length} 条）`, '')
-    metaParts.push('⭐ **以下只给标题与描述，正文按需读**——用 `memj_read` 传 `id` 取正文。', '')
+    metaParts.push(promptText('hot:meta-hint', HOT_META_HINT), '')
     for (const it of rows) {
       metaParts.push(renderMetaLine(it.cover))
       preview.push({
@@ -352,7 +368,7 @@ export function renderHotText(
   if (opts.supplement !== true) {
     const both = metaParts.length === 0 ? parts : [...parts, ...metaParts]
     if (both.length === 0) return { text: '', counts, preview }
-    const text = ['## memj 热知识（本次会话相关）', '', ...both, '', promptText('hot:closing', HOT_CLOSING_INSTRUCTION)].join('\n')
+    const text = [promptText('hot:head-first', HOT_HEAD_FIRST), '', ...both, '', promptText('hot:closing', HOT_CLOSING_INSTRUCTION)].join('\n')
     return { text, counts, preview }
   }
 
@@ -364,7 +380,7 @@ export function renderHotText(
   //    原来两者拼在**同一条消息**、只有**一段收尾** ⇒ 分不开。
   // ⚠️ **标题也要区分**（用户裁定）：补注用「（补充）」，
   //    免得模型以为"又来了一整批新的"（首次那行**一个字不动**）。
-  const head = '## memj 热知识（补充）'
+  const head = promptText('hot:head-supplement', HOT_HEAD_SUPPLEMENT)
   const bodyText = parts.length === 0
     ? ''
     : [head, '', ...parts, '', promptText('hot:body-closing', HOT_BODY_CLOSING_INSTRUCTION)].join('\n')

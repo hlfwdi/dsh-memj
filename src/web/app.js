@@ -6519,6 +6519,14 @@ function promptCard(it) {
   head.append(h('strong', { text: it.owner }))
   // ⭐ "已改过"标记：让用户一眼看出哪些不是原版。
   if (it.overridden) head.append(h('span', { class: 'prompt-tag prompt-tag-changed', text: '已改过' }))
+  // ⭐⭐ 写回三态标签（2026-10-12 新增）。
+  //    🔴 **为什么必须显示**：写回**保留覆盖项**（用户裁定）⇒ 覆盖值会一直挡着源码。
+  //      不显示状态的话，用户**看不出写回做过没有**，也看不出"改了源码怎么没生效"。
+  if (it.writeBackState === 'written') {
+    head.append(h('span', { class: 'prompt-tag prompt-tag-written', text: '✅ 已写回源码' }))
+  } else if (it.writeBackState === 'edited') {
+    head.append(h('span', { class: 'prompt-tag prompt-tag-edited', text: '⚠️ 已改未写回' }))
+  }
   if (!it.editable) head.append(h('span', { class: 'prompt-tag', text: '只读' }))
   card.append(head)
 
@@ -6538,6 +6546,10 @@ function promptCard(it) {
   else addRow('缓存影响', '— 与主会话缓存无关（不进主会话）')
   addRow('源文件', it.sourceFile)
   if (it.hotReload === 'immediate') addRow('保存后', '✅ 立即生效（无需重启）', 'prompt-ok')
+  // ⭐⭐ 第三档（2026-10-12 新增）：**能改，但要重启才生效**。
+  //    ⚠️ 必须如实说——原来标"不可改"是低估（重启后明明生效），
+  //      若标"立即生效"则是撒谎（`dsh-commands` 注册时固化 descriptor，没有 getter 通路）。
+  else if (it.hotReload === 'restart') addRow('保存后', '⚠️ 需重启实例才生效（本页改动已存，但运行时不会自动重读）', 'prompt-warn')
   else addRow('保存后', '🔒 不可改', 'prompt-warn')
   card.append(rows)
 
@@ -6761,6 +6773,26 @@ function promptDetailPane() {
       const resetBtn = h('button', { type: 'button', class: 'prompt-btn prompt-reset', text: '恢复默认' })
       resetBtn.addEventListener('click', () => void resetPrompt(it.key))
       foot.append(resetBtn)
+    }
+    // ⭐⭐⭐ **「写回源码」按钮**（2026-10-12 新增，用户要求）。
+    //
+    // 🔴🔴 **它在做什么、不在做什么**（措辞必须准确，否则用户会误解）：
+    //    · **在做的**：把当前生效文本**固化进 `src/*.ts` 的常量**，让它进版本库、
+    //      不怕"恢复默认"、不随换机器丢失。
+    //    · **不在做的**：**它不改变运行时行为**——运行期永远读覆盖层，
+    //      所以这条编辑**本来就在生效**，写回**不需要重启**（用户确认过这个判据）。
+    //    ⚠️ 唯一的例外是命令描述（`hotReload === 'restart'`）：那种**本来就要重启才生效**。
+    //
+    // ⚠️ **只在有改动、且与源码不同时**才给按钮——否则点了只会回一句"已相同"，
+    //    徒增噪音（`already-same` 那条分支仍保留，用于批量写回的场景）。
+    if (it.canWriteBack === true && it.writeBackState === 'edited') {
+      const wbBtn = h('button', {
+        type: 'button',
+        class: 'prompt-btn prompt-writeback',
+        text: '写回源码',
+      })
+      wbBtn.addEventListener('click', () => void writeBackPrompt(it.key))
+      foot.append(wbBtn)
     }
     // ⭐⭐ **「历史版本」按钮**（用户要求："退回历史版本也应该有个按钮入口，不要全展开。
     //     点击后弹窗显示可选历史版本，应该有预览功能"）。
@@ -7180,8 +7212,85 @@ async function resetPrompt(key) {
   }
 }
 
-// ⭐⭐ **筛选切换**（全部 / 只看已改过的）+ **「跳到」下拉**。
-// ⚠️ 用**委托**监听（卡片是每次重画的，逐个绑会积监听器）。
+/**
+ * ⭐⭐⭐ **把某条提示词的改动「写回源码」**（2026-10-12 新增，用户要求）。
+ *
+ * ── 这个按钮到底在做什么（措辞必须准确）────────────────────────────────────
+ * **在做的**：把**当前生效文本**固化进 `src/*.ts` 的常量 ⇒ 它进版本库、
+ *   不怕"恢复默认"、不随换机器或拷库丢失。
+ * **不在做的**：**它不改变运行时行为**——运行期读取值的优先级是
+ *   `覆盖值 ?? 源码默认值`，所以这条编辑**本来就在生效**，
+ *   ⇒ **写回不需要重启**（用户 2026-10-12 确认的判据）。
+ *   ⚠️ **写回后覆盖项【保留】**（用户裁定）：写回是"固化"，不是"撤掉覆盖"。
+ *      这也正是后面要提示"源码改动会被覆盖挡住"的原因。
+ *
+ * ⚠️ **唯一需要重启的情形**：`hotReload === 'restart'` 的条目（命令描述）——
+ *   那种条目**本来就要重启才生效**（`dsh-commands` 注册时固化 descriptor，无 getter 通路）。
+ *   ⇒ 提示语要**按这一档分叉**，不能一律说"无需重启"。
+ *
+ * 流程（用户要求）：**点按钮 → 弹窗确认 → 显示进度 → 报结果 → 提示是否需要重启**。
+ * @param key - 稳定键。
+ */
+async function writeBackPrompt(key) {
+  const msg = document.getElementById('settings-msg-prompts')
+  const it = promptState.items.find((x) => x.key === key)
+  const label = it?.owner ?? key
+  const file = it?.sourceFile ?? '(未知)'
+  const constName = it?.sourceConst ?? '(未知)'
+  const needsRestart = it?.hotReload === 'restart'
+
+  // ── ① 弹窗确认：把"要改哪个文件、会不会影响运行"一次说清 ──
+  const lines = [
+    `把「${label}」的当前内容写回源码？`,
+    '',
+    `目标文件：${file}`,
+    `目标常量：${constName}`,
+    '',
+    '⭐ **这是"固化"，不是"生效"**：这条改动本来就在生效（运行期读的是覆盖层）。',
+    '写回的意义是让它进版本库、不怕「恢复默认」、不随换机器丢失。',
+    '',
+    '⚠️ 写回后**覆盖项会保留** ⇒ 你之后直接改源码时，仍会被这条覆盖挡住。',
+  ]
+  if (needsRestart) {
+    lines.push(
+      '',
+      '🔴 **注意：这一条属于「需重启才生效」**——它是命令描述，',
+      '保存后运行时不会自动重读 ⇒ 想让改动真正起作用，**要重启实例**。',
+    )
+  }
+  if (!confirm(lines.join('\n'))) return
+
+  // ── ② 进度提示 ──
+  if (msg) msg.textContent = `正在写回 ${label} …`
+  try {
+    const r = await postJson('/prompt/writeback', { key })
+    const item = (r.items ?? []).find((x) => x.key === key) ?? (r.items ?? [])[0]
+    const status = item?.status ?? '?'
+
+    // ── ③ 结果 + ④ 是否需要重启 ──
+    let text
+    if (status === 'written') text = `已写回源码：${item.constName ?? constName}（${item.message ?? ''}）`
+    else if (status === 'already-same') text = '源码里已经是这个值，无需写回。'
+    else text = `写回失败：${item?.message ?? r.error ?? '未知原因'}`
+    if (status === 'written' && needsRestart) text += '　⚠️ 该条需重启实例才生效。'
+    if (msg) msg.textContent = text
+
+    // ⭐ 三态与"已改过"标记都依赖服务端重算 ⇒ 重新拉一次列表。
+    //    ⚠️ 清掉 detail 缓存，否则右栏还显示旧的状态行。
+    delete promptState.detail[key]
+    await openPromptsPage({ keepMessage: true })
+    // ⚠️ `openPromptsPage` 会重画整页（含那行 msg）⇒ **重画后要把结果写回去**，
+    //    否则用户看不到刚才的结果（本项目踩过"保存成功被重画冲掉"的坑）。
+    const msg2 = document.getElementById('settings-msg-prompts')
+    if (msg2) msg2.textContent = text
+  } catch (err) {
+    const errs = err?.body?.errors
+    const t = Array.isArray(errs) && errs.length > 0 ? errs.join('；') : (err instanceof Error ? err.message : String(err))
+    if (msg) msg.textContent = `写回失败：${t}`
+  }
+}
+
+// ⭐⭐ **筛选切换**（全部 / 只看已改过的）+ **「跳到」下拉**。// ⚠️ 用**委托**监听（卡片是每次重画的，逐个绑会积监听器）。
 document.addEventListener('change', (e) => {
   const t = e.target
   if (t && t.name === 'prompts-filter') {

@@ -1805,6 +1805,24 @@ footer {
   border-color: var(--accent);
   color: var(--fg);
 }
+/* ⭐⭐ 写回三态标签（2026-10-12 新增）。
+   🔴 为什么必须显式区分：写回**保留覆盖项**（用户裁定）⇒ 覆盖值会一直挡着源码。
+      不显示状态的话，用户看不出写回做过没有，也看不出"改了源码怎么没生效"。
+   ⭐ "已写回"用**虚线**边框：它是好的终态，但不像"已改过"那样需要吸引注意。 */
+.prompt-tag-written {
+  border-style: dashed;
+  color: var(--fg-dim);
+}
+/* "已改未写回"用实心强调：这是**需要注意**的状态（编辑还只在库里）。 */
+.prompt-tag-edited {
+  border-color: var(--accent);
+  border-style: dashed;
+  color: var(--fg);
+}
+/* 「写回源码」按钮：与"恢复默认"同级，但语义不同 ⇒ 轻微区分（不抢 primary）。 */
+.prompt-writeback {
+  border-color: var(--accent);
+}
 .prompt-purpose {
   margin: 6px 0 0;
   font-size: 12.5px;

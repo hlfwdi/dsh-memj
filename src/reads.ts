@@ -15,7 +15,20 @@
  */
 
 import { appendReadSnapshot, readUnconsumedSnapshots } from './store.ts'
+import { promptText, registerPromptDefault } from './prompts.ts'
 import type { ReadSnapshot } from './schema.ts'
+
+// ⭐⭐⭐ **快照清单的收尾指令**（2026-10-12 抽成常量 + 走 `promptText`）。
+//
+// 🔴 **为什么它也算提示词**：这段话**逐字附在 `memj_snapshots` 的返回值里** ——
+//    而它是模型**要不要把某条快照当证据挂上去**的唯一判据来源。
+//    ⚠️ 措辞一松（例如漏掉"读了不等于用上了"），模型就会**照单全收**
+//      ⇒ 拿无关知识去凑主题证据（本项目记过这个真实事故）。
+//    ⭐ 判据同 `inject.ts`：**能改变模型怎么做的文本就是提示词**。
+export const SNAPSHOT_CLOSING: string =
+  `🔴 **逐条判断"它确实和本次要落盘的项目相关吗"**——读了不等于用上了；不相关的要排除，否则会拿无关知识去凑主题证据。`
+
+registerPromptDefault('reads:snapshot-closing', SNAPSHOT_CLOSING)
 
 /**
  * 记一条读快照（由 `memj_read` 在**成功读到正文后**调用）。
@@ -100,9 +113,6 @@ export function renderSnapshotList(snapshots: readonly ReadSnapshot[]): string {
     }
   }
   parts.push('')
-  parts.push(
-    '🔴 **逐条判断"它确实和本次要落盘的项目相关吗"**——读了不等于用上了；' +
-      '不相关的要排除，否则会拿无关知识去凑主题证据。',
-  )
+  parts.push(promptText('reads:snapshot-closing', SNAPSHOT_CLOSING))
   return parts.join('\n')
 }

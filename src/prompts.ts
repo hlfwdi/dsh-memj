@@ -58,6 +58,18 @@ export type PromptZone = 'resident' | 'tools' | 'internal'
 export type HotReload =
   /** 保存后下一轮即生效（覆盖层支撑）。 */
   | 'immediate'
+  /**
+   * ⭐⭐ **保存后需【重启实例】才生效**（2026-10-12 新增第三档）。
+   *
+   * 🔴 **为什么必须有这一档**：原来只有 `immediate` / `readonly` 两档，
+   *   而**命令描述属于第三种情况**——它能改、覆盖层也存得住、**但没有热更新通路**：
+   *   `dsh-commands` 在 **注册那一刻**就把 `description` **固化进 descriptor**
+   *   （对比工具描述：`tools.ts` 用 `Object.defineProperty` 换成了 getter ⇒ 每轮重读）。
+   *   ⇒ 若把它标成 `immediate`，是**界面在撒谎**（用户改完发现没变，会以为功能坏了）；
+   *     标成 `readonly` 又**剥夺了本来可用的能力**（重启后确实生效）。
+   *   ⭐ 判据：**"改了会不会生效"与"什么时候生效"是两个问题**，不能合并成一个布尔。
+   */
+  | 'restart'
   /** 只读展示（改了会破坏契约）。 */
   | 'readonly'
 
@@ -81,6 +93,22 @@ export interface PromptSpec {
   breaksCache: 'yes' | 'no' | 'na'
   /** 具体写在哪个文件里（相对插件仓根）。 */
   sourceFile: string
+  /**
+   * ⭐⭐⭐ **该 key 在源码里的常量名**（2026-10-12 新增）——供「写回源码」功能定位。
+   *
+   * 🔴 **为什么必须有**：写回要做的是「把覆盖文本替换进
+   *   `export const XXX = \`...\`` 的模板串正文」，**光有 `sourceFile` 不够**
+   *   （一个文件里有多个常量，如 `tag-normalize.ts` 同时装
+   *   `ADJUDICATE_SYSTEM` 与 `TRANSLATE_SYSTEM`）⇒ 必须知道替换**哪一个**。
+   *
+   * ⚠️ **空串 = 不支持写回**（下列几种情况）：
+   *   · 参数 / 输出 schema（值由运行时对象提供，源码里没有对应常量）；
+   *   · 动态拼出来的 key（如 `tool:${name}:description`，常量名由扫描得出，
+   *     但目前已在 `TOOL_META` 侧固定，不逐个登记）；
+   *   · 值形态不是单个字符串、无法机械替换的。
+   *   ⇒ 写回 API 遇到空串要**明确报"该条不支持写回"**，不许静默跳过。
+   */
+  sourceConst?: string
   /** 保存后是否热生效。 */
   hotReload: HotReload
   /** 是否允许在页面上编辑（参数/输出 schema 为只读）。 */
@@ -101,6 +129,22 @@ export type PromptCheck =
   | { kind: 'englishOnly' }
   /** markdown 围栏必须成对（`gen-context.mjs` 会拒两个围栏的块）。 */
   | { kind: 'fencesBalanced' }
+  /**
+   * ⭐⭐⭐ **必须原样保留的变量插槽**（2026-10-12 新增）。
+   *
+   * 🔴 **为什么必须有这一档**：有一类提示词**不是整段常量** —— 正文里嵌着
+   *    **运行时才算得出来的值**（如"用户指定的这几步"、文档节名）。这类文本
+   *    以前只能标 `readonly`（理由是"参数化模板，开放编辑会让分支逻辑与文本脱节"）。
+   *
+   * ⭐ **本档把它变成可编辑的**：正文写成**带插槽的模板**（`{{名字}}`），
+   *    运行时由 `fillSlots()` 填值；保存时**机械校验插槽没被删掉、也没写错**。
+   *    ⇒ 用户能改措辞，**但破坏不了"值一定会被填进去"这件事**。
+   *
+   * ⚠️ **校验是双向的**（缺一个不行、多一个也不行）：
+   *    · 少了登记的插槽 ⇒ 拒（那个值**再也进不去**，且不报错）；
+   *    · 出现**没登记**的插槽 ⇒ 也拒（`fillSlots` 不认识它 ⇒ 会**原样发给模型**）。
+   */
+  | { kind: 'slots'; tokens: readonly string[]; why: string }
 
 // ══════════════════════════════════════════════════════════════════════
 // 注册表元数据
@@ -114,6 +158,8 @@ const F = {
   tools: 'src/tools.ts',
   commands: 'src/commands.ts',
   inject: 'src/inject.ts',
+  reads: 'src/reads.ts',
+  templates: 'src/templates.ts',
   hotInject: 'src/hot-inject.ts',
   recall: 'src/active-recall.ts',
   scoreChat: 'src/score-chat.ts',
@@ -121,7 +167,18 @@ const F = {
   enIndex: 'src/en-index.ts',
 } as const
 
-/** 十个工具的展示名（元数据用）。 */
+/**
+ * 十一个工具的展示名（元数据用）。
+ *
+ * 🔴🔴 **加新工具时必须在这里补一项**（否则它在【提示词】页上**完全不可见**：
+ *   `/api/prompts` 的列表直接来自 `PROMPT_SPECS`，而 `PROMPT_SPECS` 由本数组派生出
+ *   `description` / `parameters` / `output` 三条 ⇒ 漏一项就少三条，页面既看不到、
+ *   也**改不了**，`/api/prompt?key=…` 还会 **404**）。
+ *   ⚠️ **真实事故**（2026-10-12）：决策 205 加 `memj_template` 时漏了这一步，
+ *   十一个月后才被发现。
+ *   ⭐ **防线**：`scripts/check-prompt-specs.mjs` 会断言「实际注册的工具名集合
+ *   == 本数组的名字集合」，漏了当场报错（在 `run-all-tests` 里）。
+ */
 const TOOL_META: ReadonlyArray<{ name: string; purpose: string; owner: string }> = [
   { name: 'memj_info', purpose: '列出库里的项目与主题（语境入口，不返回知识条目）', owner: 'memj_info' },
   { name: 'memj_search', purpose: '按项目/主题/检索词筛封面（只找，不回正文）', owner: 'memj_search' },
@@ -131,6 +188,8 @@ const TOOL_META: ReadonlyArray<{ name: string; purpose: string; owner: string }>
   { name: 'memj_promote', purpose: '事后增删主题归属 / 改封面字段 / 提名全局', owner: 'memj_promote' },
   { name: 'memj_update', purpose: '更新一条已有知识的正文与封面字段', owner: 'memj_update' },
   { name: 'memj_rebuild', purpose: '重建派生层 + 封面体检（人侧也调它）', owner: 'memj_rebuild' },
+  // ⭐⭐⭐ 决策 205：交接文档模板（管理模板：list/create/delete；两段式确认）。
+  { name: 'memj_template', purpose: '管理交接文档模板（列表 / 新建 / 删除；两段式确认）', owner: 'memj_template' },
   { name: 'memj_normalize_tags', purpose: '标签规范化：裁决合并/新增/丢弃/retag', owner: 'memj_normalize_tags' },
   { name: 'memj_score_turn', purpose: '轮末复盘：挑出能帮上忙的知识并加分', owner: 'memj_score_turn' },
 ]
@@ -141,6 +200,59 @@ const CMD_META: ReadonlyArray<{ name: string; purpose: string }> = [
   { name: 'memj-review', purpose: '人侧状态面板：待批提名 / 断链 / 非法封面' },
   { name: 'memj-get-handoff-project', purpose: '把某项目的交接内容注入会话' },
   { name: 'memj-get-handoff-theme', purpose: '把某主题的封面清单注入会话' },
+]
+
+/**
+ * 命令名 → `commands.ts` 里的描述常量名（供「写回源码」定位）。
+ *
+ * ⚠️ **必须显式映射，不能机械推导**：那边导出的常量名与命令名**不是机械对应**
+ *   （`memj-get-handoff-project` → `CMD_GET_PROJECT_DESCRIPTION`，
+ *     而不是 `CMD_MEMJ_GET_HANDOFF_PROJECT_DESCRIPTION`）
+ *   ⇒ 推导会定位到不存在的常量。改 `commands.ts` 的常量名时**这里要一起改**。
+ * @param name - 命令名（不含前导斜杠）。
+ * @returns 常量名；未登记 ⇒ 空串（写回会明确报"不支持"）。
+ */
+function cmdConstName(name: string): string {
+  const M: Record<string, string> = {
+    'memj-handoff': 'CMD_HANDOFF_DESCRIPTION',
+    'memj-review': 'CMD_REVIEW_DESCRIPTION',
+    'memj-get-handoff-project': 'CMD_GET_PROJECT_DESCRIPTION',
+    'memj-get-handoff-theme': 'CMD_GET_THEME_DESCRIPTION',
+  }
+  return M[name] ?? ''
+}
+
+/**
+ * ⭐⭐⭐ **三个带 `input.hint` 的命令**（2026-10-12 新增）——它们是**用户在输入框里
+ * 真正看到的那行字**。
+ *
+ * 🔴 **为什么必须单独一张表**：`/memj-review` **没有** `input`（它是 popupSelect 装饰、
+ *    一选即执行）⇒ 不能像描述那样直接 `CMD_META.map` 出四条。
+ *
+ * 🔴 **为什么 hint 也算提示词**（用户 2026-10-12 点名要求接进来）：
+ *    声明了 `input` 的命令被选中后，宿主会把 `/命令名 ` **连同这句 hint 一起落进输入框**
+ *    ⇒ 它决定用户**知不知道这个命令能补话、能补什么**（如"可再补档位"）。
+ *
+ * ⚠️ **常量名必须显式映射**（与描述同因：常量名与命令名不是机械对应）。
+ * ⚠️ **热生效档位 = `restart`**：`normalizeDefinition()` 把 `input`
+ *    `Object.freeze` 进 descriptor（`lib/index.js:149-171` 实测）⇒ 注册后改无效。
+ */
+const CMD_HINT_META: ReadonlyArray<{ name: string; constName: string; purpose: string }> = [
+  {
+    name: 'memj-handoff',
+    constName: 'HINT_HANDOFF',
+    purpose: '命令选中后落进输入框的提示：可以补充本次重点',
+  },
+  {
+    name: 'memj-get-handoff-project',
+    constName: 'HINT_GET_PROJECT',
+    purpose: '命令选中后落进输入框的提示：填项目 id，可再补档位',
+  },
+  {
+    name: 'memj-get-handoff-theme',
+    constName: 'HINT_GET_THEME',
+    purpose: '命令选中后落进输入框的提示：填主题 id',
+  },
 ]
 
 /**
@@ -159,6 +271,7 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
     injectMode: 'systemPrompt.section() —— system 角色，独占 node 0',
     breaksCache: 'yes',
     sourceFile: F.protocol,
+    sourceConst: 'PROTOCOL_TEXT',
     hotReload: 'immediate',
     editable: true,
     checks: [{ kind: 'nonEmpty' }, { kind: 'maxChars', max: 2500, why: '协议预算 2500（越了要压缩，别抬阈值）' }, { kind: 'fencesBalanced' }],
@@ -171,6 +284,7 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
     injectMode: 'systemPrompt.context() —— user 角色，尾部 append',
     breaksCache: 'no',
     sourceFile: F.context,
+    sourceConst: 'CONTEXT_TEXT',
     hotReload: 'immediate',
     editable: true,
     checks: [{ kind: 'nonEmpty' }, { kind: 'fencesBalanced' }],
@@ -193,6 +307,10 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
       injectMode: 'wire `tools` 段的工具 description',
       breaksCache: 'yes',
       sourceFile: F.descriptions,
+      // ⭐ **写回定位**：工具描述的常量名有固定规律（`src/tool-descriptions.ts`）。
+      //    ⚠️ 它是**推导出来的**而不是登记的——若哪天改了命名规律，写回会定位失败
+      //    （那时 `writeBackToSource()` 会明确报"找不到常量"，不会静默改错）。
+      sourceConst: `${t.name.toUpperCase()}_DESCRIPTION`,
       hotReload: 'immediate',
       editable: true,
       checks: [{ kind: 'nonEmpty' }],
@@ -233,23 +351,49 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   //    而 `list(agent)` 只回那份冻结快照（`:278-280`）⇒ **注册后再改无效**。
   //    ⚠️ 且它**不进模型上下文**（消费方是 UI/协议，不是 wire `tools` 段）
   //      ⇒ 改它对"模型行为"没有影响，只是界面上的说明文字。
-  //    ⇒ ⭐ **如实标只读**：宁可说清"它不可改"，也不要给一个改了不生效的输入框
-  //      （本项目反复强调：界面不许撒谎）。
+  //
+  // 🔴🔴 **2026-10-12 改为开放编辑**（原来是 `editable: false` + `'readonly'`）：
+  //    ① 原来它**根本没有 `promptText` 通路**（`commands.ts` 里是硬编码字面串）
+  //       ⇒ 页面即使存了覆盖值也**没人读** ⇒ 改了等于白改。
+  //       本次已把那 4 处改成走 `promptText`（含 `registerPromptDefault` 登记默认值）。
+  //    ② 它能改、覆盖层也存得住，但**没有热更新通路** ⇒ 需要第三档 `'restart'`。
+  //    ⭐ 判据：**能力接通了就该开放；但"什么时候生效"必须如实标**——
+  //      原标 `readonly` 是**低估自己**（重启后明明生效），改标 `immediate` 则是**撒谎**。
   ...CMD_META.map(
     (c): PromptSpec => ({
       key: `command:${c.name}:description`,
       zone: 'tools',
       purpose: c.purpose,
-      owner: `/\\${c.name}`,
+      owner: `/${c.name}`,
       injectMode: '命令描述符（消费方是界面/协议，不进模型上下文）',
       breaksCache: 'no',
       sourceFile: F.commands,
-      hotReload: 'readonly',
-      editable: false,
-      readonlyWhy:
-        '实测不可热更新：dsh-commands 在注册时就把描述 freeze 进 descriptor，注册后修改无效；' +
-        '且它不进模型上下文（只用于界面展示）⇒ 改了也不会改变模型行为。',
-      checks: [],
+      sourceConst: cmdConstName(c.name),
+      hotReload: 'restart',
+      editable: true,
+      checks: [{ kind: 'nonEmpty' }],
+    }),
+  ),
+
+  // ── B 区：命令 `input.hint`（2026-10-12 新增；⚠️ 与描述同因 ⇒ `restart`）──
+  //
+  // 🔴🔴 **`nonEmpty` 是硬约束，不是客套**：`dsh-commands` 的 `normalizeDefinition()`
+  //    对空 hint **直接 throw**（`input hint must not be empty`）
+  //    ⇒ 用户清空后若被放行，**命令注册会挂**（该命令整条不可用）。
+  //    ⭐ 判据：**校验要配在"会被下游当成硬条件用"的字段上**。
+  ...CMD_HINT_META.map(
+    (c): PromptSpec => ({
+      key: `command:${c.name}:hint`,
+      zone: 'tools',
+      purpose: c.purpose,
+      owner: `/${c.name}`,
+      injectMode: '命令的 `input.hint`（选中后连同命令名落进输入框；不进模型上下文）',
+      breaksCache: 'no',
+      sourceFile: F.commands,
+      sourceConst: c.constName,
+      hotReload: 'restart',
+      editable: true,
+      checks: [{ kind: 'nonEmpty' }],
     }),
   ),
 
@@ -262,25 +406,141 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
     injectMode: '命令 followup 注入文本的末尾',
     breaksCache: 'no',
     sourceFile: F.inject,
+      sourceConst: 'CLOSING_INSTRUCTION',
+    hotReload: 'immediate',
+    editable: true,
+    checks: [{ kind: 'nonEmpty' }],
+  },
+  // ⭐⭐⭐ **注入段表头**（2026-10-12 新增）——它们**逐字写在注入给模型的那段文本里**，
+  //    与收尾指令同性质（本项目判据：**能改变模型怎么做的文本就是提示词**）。
+  //    ⚠️ 它们**不决定注入哪些条目**（那是代码判据）⇒ 改它们只影响措辞。
+  {
+    key: 'inject:target-project',
+    zone: 'tools',
+    purpose: '取项目交接时那句「归档就沿用这个项目、不必再查库」的指路话',
+    owner: '/memj-get-handoff-project',
+    injectMode: '命令 followup 注入文本（跟在本项目 id 之后）',
+    breaksCache: 'no',
+    sourceFile: F.inject,
+    sourceConst: 'TARGET_PROJECT_LINE',
     hotReload: 'immediate',
     editable: true,
     checks: [{ kind: 'nonEmpty' }],
   },
   {
+    key: 'inject:target-theme',
+    zone: 'tools',
+    purpose: '取主题交接时那句「本次目标主题是…」的用途说明（跟在主题 id 之后）',
+    owner: '/memj-get-handoff-theme',
+    injectMode: '命令 followup 注入文本（跟在本主题 id 之后）',
+    breaksCache: 'no',
+    sourceFile: F.inject,
+    sourceConst: 'TARGET_THEME_LINE',
+    hotReload: 'immediate',
+    editable: true,
+    checks: [{ kind: 'nonEmpty' }],
+  },
+  {
+    key: 'inject:project-knowledge-hint',
+    zone: 'tools',
+    purpose: '项目知识清单的表头：「只给标题与描述，正文按需 memj_read」',
+    owner: '/memj-get-handoff-project',
+    injectMode: '命令 followup 注入文本的「本项目的知识」节',
+    breaksCache: 'no',
+    sourceFile: F.inject,
+    sourceConst: 'PROJECT_KNOWLEDGE_HINT',
+    hotReload: 'immediate',
+    editable: true,
+    checks: [{ kind: 'nonEmpty' }],
+  },
+  {
+    key: 'inject:theme-knowledge-hint',
+    zone: 'tools',
+    purpose: '项目交接里「所属主题的知识」节的表头（措辞与上一节呼应，说"同样"）',
+    owner: '/memj-get-handoff-project',
+    injectMode: '命令 followup 注入文本的「所属主题的知识」节',
+    breaksCache: 'no',
+    sourceFile: F.inject,
+    sourceConst: 'THEME_KNOWLEDGE_HINT',
+    hotReload: 'immediate',
+    editable: true,
+    checks: [{ kind: 'nonEmpty' }],
+  },
+  {
+    key: 'inject:theme-covers-hint',
+    zone: 'tools',
+    purpose: '主题交接里「本主题的知识」节的表头：「只给标题与描述，正文按需读」',
+    owner: '/memj-get-handoff-theme',
+    injectMode: '命令 followup 注入文本的「本主题的知识」节',
+    breaksCache: 'no',
+    sourceFile: F.inject,
+    sourceConst: 'THEME_COVERS_HINT',
+    hotReload: 'immediate',
+    editable: true,
+    checks: [{ kind: 'nonEmpty' }],
+  },
+  // ⭐⭐⭐ `/memj-handoff` 的启动提示词（2026-10-12：**由只读改为可编辑**）。
+  //
+  // 🔴🔴 **原来为什么只读**：正文里嵌着运行时才算得出的值（用户补充的话、指定步骤）
+  //    ⇒ 它是**参数化模板**，不是一段可整体替换的常量。
+  //
+  // ⭐⭐ **现在怎么做到可编辑又破坏不了**（用户裁定）：
+  //    正文写成**带插槽的模板**（`{{名字}}`），运行时 `fillSlots()` 填值；
+  //    保存时 `slots` 校验**双向机械拦**（少一个拒、多一个也拒）。
+  //    ⭐ 判据：**"能不能安全地开放"取决于"能不能机械判定它没被改坏"** ——
+  //      参数化本身不是拒绝开放的理由，"无法校验"才是。
+  {
     key: 'handoff:prompt',
     zone: 'tools',
-    purpose: 'handoff 命令的规范提示词（让模型按六节流程做一次交接）',
+    purpose: 'handoff 命令的启动提示词（普通分支：四条要点）——只叫模型去做，落盘由工具完成',
     owner: '/memj-handoff',
     injectMode: '命令 followup 注入（会唤醒模型）',
     breaksCache: 'no',
     sourceFile: F.commands,
-    hotReload: 'readonly',
-    editable: false,
-    readonlyWhy:
-      '它是**参数化模板**：正文里要按用户补充的话/分步参数拼出不同分支，' +
-      '不是一段可整体替换的常量 ⇒ 开放编辑会让分支逻辑与文本脱节。' +
-      '要改措辞请改源码（本页只展示它的固定骨架）。',
-    checks: [],
+    sourceConst: 'HANDOFF_PROMPT',
+    hotReload: 'immediate',
+    editable: true,
+    checks: [{ kind: 'nonEmpty' }],
+  },
+  {
+    key: 'handoff:prompt-steps',
+    zone: 'tools',
+    purpose: 'handoff 命令的启动提示词（分步分支：用户用 /memj-handoff knowledge 之类指定了步骤）',
+    owner: '/memj-handoff',
+    injectMode: '命令 followup 注入（会唤醒模型）',
+    breaksCache: 'no',
+    sourceFile: F.commands,
+    sourceConst: 'HANDOFF_PROMPT_STEPS',
+    hotReload: 'immediate',
+    editable: true,
+    checks: [
+      { kind: 'nonEmpty' },
+      {
+        kind: 'slots',
+        tokens: ['steps', 'stepsJson'],
+        why: '这两个是"用户指定了哪几步"与它的 JSON 形态，由程序填；删掉模型就收不到要做什么',
+      },
+    ],
+  },
+  {
+    key: 'handoff:prompt-note',
+    zone: 'tools',
+    purpose: 'handoff 命令里"用户随命令补充的话"那一块（仅当用户真补了话才追加）',
+    owner: '/memj-handoff',
+    injectMode: '命令 followup 注入的末尾（条件追加）',
+    breaksCache: 'no',
+    sourceFile: F.commands,
+    sourceConst: 'HANDOFF_PROMPT_NOTE',
+    hotReload: 'immediate',
+    editable: true,
+    checks: [
+      { kind: 'nonEmpty' },
+      {
+        kind: 'slots',
+        tokens: ['userNote'],
+        why: '它是用户补充的那句原话，由程序填；删掉这一块就没有内容可交代了',
+      },
+    ],
   },
 
   // ── C 区：插件内部调 LLM 的提示词 ──
@@ -292,6 +552,7 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
     injectMode: 'JEV 请求的 questions[].instructions（不进主会话）',
     breaksCache: 'na',
     sourceFile: F.recall,
+      sourceConst: 'JEV_CANDIDATE_INSTRUCTION',
     hotReload: 'immediate',
     editable: true,
     checks: [{ kind: 'nonEmpty' }, { kind: 'englishOnly' }],
@@ -304,6 +565,7 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
     injectMode: 'JEV 请求的 questions.need.instructions',
     breaksCache: 'na',
     sourceFile: F.recall,
+      sourceConst: 'JEV_NEED_INSTRUCTION',
     hotReload: 'immediate',
     editable: true,
     checks: [{ kind: 'nonEmpty' }, { kind: 'englishOnly' }],
@@ -316,6 +578,7 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
     injectMode: 'JEV 请求的 questions.sufficient.instructions',
     breaksCache: 'na',
     sourceFile: F.recall,
+      sourceConst: 'JEV_SUFFICIENT_INSTRUCTION',
     hotReload: 'immediate',
     editable: true,
     checks: [{ kind: 'nonEmpty' }, { kind: 'englishOnly' }],
@@ -328,6 +591,7 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
     injectMode: 'JEV 请求的 questions.search_intent.instructions',
     breaksCache: 'na',
     sourceFile: F.recall,
+      sourceConst: 'JEV_SEARCH_INTENT_INSTRUCTION',
     hotReload: 'immediate',
     editable: true,
     checks: [{ kind: 'nonEmpty' }, { kind: 'englishOnly' }],
@@ -340,6 +604,35 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
     injectMode: '注入进主会话（pre-step 的 user 消息）',
     breaksCache: 'no',
     sourceFile: F.recall,
+      sourceConst: 'ACTIVE_CLOSING_INSTRUCTION',
+    hotReload: 'immediate',
+    editable: true,
+    checks: [{ kind: 'nonEmpty' }],
+  },
+  // ⭐⭐⭐ 主动召回的两行表头（2026-10-12 新增）——**逐字进注入文本**。
+  //    🔴 尤其 `active:body-hint`：它直接决定模型会不会去 `memj_read` 取正文。
+  {
+    key: 'active:header',
+    zone: 'internal',
+    purpose: '主动召回注入文本的第一行：「以下是…相关的知识（主动召回）」',
+    owner: '主动注入',
+    injectMode: '注入进主会话（pre-step 的 user 消息）',
+    breaksCache: 'no',
+    sourceFile: F.recall,
+    sourceConst: 'ACTIVE_HEADER',
+    hotReload: 'immediate',
+    editable: true,
+    checks: [{ kind: 'nonEmpty' }],
+  },
+  {
+    key: 'active:body-hint',
+    zone: 'internal',
+    purpose: '主动召回注入文本的第二行：「正文按需读」——决定模型去不去 memj_read',
+    owner: '主动注入',
+    injectMode: '注入进主会话（pre-step 的 user 消息）',
+    breaksCache: 'no',
+    sourceFile: F.recall,
+    sourceConst: 'ACTIVE_BODY_HINT',
     hotReload: 'immediate',
     editable: true,
     checks: [{ kind: 'nonEmpty' }],
@@ -352,6 +645,7 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
     injectMode: '注入进主会话（每轮的背景消息）',
     breaksCache: 'no',
     sourceFile: F.hotInject,
+      sourceConst: 'HOT_CLOSING_INSTRUCTION',
     hotReload: 'immediate',
     editable: true,
     checks: [{ kind: 'nonEmpty' }],
@@ -364,6 +658,62 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
     injectMode: '注入进主会话（补注时单独一条消息）',
     breaksCache: 'no',
     sourceFile: F.hotInject,
+      sourceConst: 'HOT_BODY_CLOSING_INSTRUCTION',
+    hotReload: 'immediate',
+    editable: true,
+    checks: [{ kind: 'nonEmpty' }],
+  },
+  // ⭐⭐⭐ 热知识的段头与表头（2026-10-12 新增）——**逐字进注入文本**。
+  //    🔴 `hot:head-supplement` 有**实质语义**：模型据此知道"这是补发的缺项、不是新的一批"。
+  //    🔴 `hot:direct-section` 与 `hot:meta-hint` 的语义**正好相反**（正文已在眼前 vs 需按需读）。
+  {
+    key: 'hot:head-first',
+    zone: 'internal',
+    purpose: '热知识首次全量注入的消息头',
+    owner: '热知识注入',
+    injectMode: '注入进主会话（每轮的背景消息）',
+    breaksCache: 'no',
+    sourceFile: F.hotInject,
+    sourceConst: 'HOT_HEAD_FIRST',
+    hotReload: 'immediate',
+    editable: true,
+    checks: [{ kind: 'nonEmpty' }],
+  },
+  {
+    key: 'hot:head-supplement',
+    zone: 'internal',
+    purpose: '热知识补注的消息头（说清"这是补充、不是新的一批"）',
+    owner: '热知识注入',
+    injectMode: '注入进主会话（补注时）',
+    breaksCache: 'no',
+    sourceFile: F.hotInject,
+    sourceConst: 'HOT_HEAD_SUPPLEMENT',
+    hotReload: 'immediate',
+    editable: true,
+    checks: [{ kind: 'nonEmpty' }],
+  },
+  {
+    key: 'hot:direct-section',
+    zone: 'internal',
+    purpose: '热知识里「直接可用的内容」段的标题（正文形态：已在眼前，无需再读）',
+    owner: '热知识注入',
+    injectMode: '注入进主会话（每轮的背景消息）',
+    breaksCache: 'no',
+    sourceFile: F.hotInject,
+    sourceConst: 'HOT_DIRECT_SECTION',
+    hotReload: 'immediate',
+    editable: true,
+    checks: [{ kind: 'nonEmpty' }],
+  },
+  {
+    key: 'hot:meta-hint',
+    zone: 'internal',
+    purpose: '热知识 meta 段的表头：「只给标题与描述，正文按需 memj_read」',
+    owner: '热知识注入',
+    injectMode: '注入进主会话（每轮的背景消息）',
+    breaksCache: 'no',
+    sourceFile: F.hotInject,
+    sourceConst: 'HOT_META_HINT',
     hotReload: 'immediate',
     editable: true,
     checks: [{ kind: 'nonEmpty' }],
@@ -376,9 +726,102 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
     injectMode: '子代理请求的 system（含知识库清单，不进主会话）',
     breaksCache: 'na',
     sourceFile: F.scoreChat,
+      sourceConst: 'SCORE_SYSTEM_BASE',
     hotReload: 'immediate',
     editable: true,
     checks: [{ kind: 'nonEmpty' }],
+  },
+  // ⭐⭐⭐ 复盘里**决定模型挑什么**的两段（2026-10-12 新增）。
+  //    🔴 `score:quote-rule` 与**机械校验**配对：措辞一松，模型写"意思差不多"的话
+  //      ⇒ 逐字比对全部失败 ⇒ 入选被丢光（本项目实测过这个坑）。
+  //    🔴 `score:pick-principle` 决定分数会不会被拉平（实测：不限条数时模型会选 18~24 条）。
+  //    ⚠️ 两段都**必须与 K（每轮最多几条）无关** —— 写进具体数字会让 `system`
+  //      随 K 变化、把知识库清单一起拖出前缀缓存（§6.4 的硬约束）。
+  {
+    key: 'score:quote-rule',
+    zone: 'internal',
+    purpose: '复盘入选理由的引文硬要求（逐字复制 + 会做逐字比对 + 只话题相关不算）',
+    owner: '知识评分 · chat 通路',
+    injectMode: '子代理请求的 system（不进主会话）',
+    breaksCache: 'na',
+    sourceFile: F.scoreChat,
+    sourceConst: 'SCORE_QUOTE_RULE',
+    hotReload: 'immediate',
+    editable: true,
+    checks: [{ kind: 'nonEmpty' }],
+  },
+  {
+    key: 'score:user-task',
+    zone: 'internal',
+    purpose: '复盘 `user` 段的骨架：「最多几条 + 按能改变做法的程度排序取舍」（可配的 K 放这里，不放 system）',
+    owner: '知识评分 · chat 通路',
+    injectMode: '子代理请求的 user（含本轮内容，不进主会话）',
+    breaksCache: 'na',
+    sourceFile: F.scoreChat,
+    sourceConst: 'SCORE_USER_TASK',
+    hotReload: 'immediate',
+    editable: true,
+    checks: [
+      { kind: 'nonEmpty' },
+      {
+        kind: 'slots',
+        tokens: ['k'],
+        why: '它是"本次最多选几条"的可配数字，由程序填；删掉模型就不知道上限，也不会去排序取舍',
+      },
+    ],
+  },
+  {
+    key: 'score:pick-principle',
+    zone: 'internal',
+    purpose: '复盘的取舍原则（宁少勿滥 / 不凑数 / 够格多于上限就只留最能改变做法的）',
+    owner: '知识评分 · chat 通路',
+    injectMode: '子代理请求的 system（不进主会话）',
+    breaksCache: 'na',
+    sourceFile: F.scoreChat,
+    sourceConst: 'SCORE_PICK_PRINCIPLE',
+    hotReload: 'immediate',
+    editable: true,
+    checks: [{ kind: 'nonEmpty' }],
+  },
+  {
+    key: 'score:index-range',
+    zone: 'internal',
+    purpose: '复盘的编号范围提示（「编号必须在 1 到 N 之间」，N = 候选条数）',
+    owner: '知识评分 · chat 通路',
+    injectMode: '子代理请求的 system（不进主会话）',
+    breaksCache: 'na',
+    sourceFile: F.scoreChat,
+    sourceConst: 'SCORE_INDEX_RANGE',
+    hotReload: 'immediate',
+    editable: true,
+    checks: [
+      { kind: 'nonEmpty' },
+      {
+        kind: 'slots',
+        tokens: ['n'],
+        why: '它是候选条数（每轮都变），由程序填；删掉模型就不知道合法编号范围',
+      },
+    ],
+  },
+  {
+    key: 'score:pool-header',
+    zone: 'internal',
+    purpose: '复盘里【知识库清单】那一节的表头（含候选条数）',
+    owner: '知识评分 · chat 通路',
+    injectMode: '子代理请求的 system（不进主会话）',
+    breaksCache: 'na',
+    sourceFile: F.scoreChat,
+    sourceConst: 'SCORE_POOL_HEADER',
+    hotReload: 'immediate',
+    editable: true,
+    checks: [
+      { kind: 'nonEmpty' },
+      {
+        kind: 'slots',
+        tokens: ['n'],
+        why: '它是候选条数，由程序填；删掉表头就无法把下文识别成清单',
+      },
+    ],
   },
   {
     key: 'score:jev-instruction',
@@ -388,6 +831,7 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
     injectMode: 'JEV 请求的 questions[].instructions（不进主会话）',
     breaksCache: 'na',
     sourceFile: 'src/score-turn.ts',
+      sourceConst: 'JEV_SCORE_INSTRUCTION',
     hotReload: 'immediate',
     editable: true,
     // 🔴 **必须英文**：与主动注入那四条同因 —— 中文会让 JEV 分值分布压平、分辨力归零。
@@ -401,6 +845,7 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
     injectMode: '子代理请求的提示词（不进主会话）',
     breaksCache: 'na',
     sourceFile: F.tagNorm,
+      sourceConst: 'ADJUDICATE_SYSTEM',
     hotReload: 'immediate',
     editable: true,
     checks: [{ kind: 'nonEmpty' }],
@@ -413,6 +858,7 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
     injectMode: '翻译请求的提示词（不进主会话）',
     breaksCache: 'na',
     sourceFile: F.enIndex,
+      sourceConst: 'MT_SYS',
     hotReload: 'immediate',
     editable: true,
     checks: [{ kind: 'nonEmpty' }],
@@ -425,6 +871,7 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
     injectMode: '翻译请求的提示词（不进主会话）',
     breaksCache: 'na',
     sourceFile: F.enIndex,
+      sourceConst: 'MT_SYS_STRONG',
     hotReload: 'immediate',
     editable: true,
     checks: [{ kind: 'nonEmpty' }],
@@ -437,6 +884,7 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
     injectMode: '翻译请求的提示词（不进主会话）',
     breaksCache: 'na',
     sourceFile: F.enIndex,
+      sourceConst: 'INSTRUCT_SYS',
     hotReload: 'immediate',
     editable: true,
     checks: [{ kind: 'nonEmpty' }],
@@ -449,9 +897,168 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
     injectMode: '子代理请求的提示词（不进主会话）',
     breaksCache: 'na',
     sourceFile: F.tagNorm,
+      sourceConst: 'TRANSLATE_SYSTEM',
     hotReload: 'immediate',
     editable: true,
     checks: [{ kind: 'nonEmpty' }],
+  },
+  // ⭐⭐⭐ `memj_snapshots` 返回值末尾的判据句（2026-10-12 新增）。
+  //    🔴 它**逐字附在工具的返回值里**，是模型"要不要把某条快照当跨项目证据"的
+  //      唯一判据来源 ⇒ 措辞一松就会拿无关知识去凑主题证据（本项目记过这个真实事故）。
+  {
+    key: 'reads:snapshot-closing',
+    zone: 'tools',
+    purpose: '读快照清单末尾的判据句：「读了不等于用上了，不相关的要排除」',
+    owner: 'memj_snapshots',
+    injectMode: '工具返回值（进模型上下文；不进 node 0、不破前缀缓存）',
+    breaksCache: 'no',
+    sourceFile: F.reads,
+    sourceConst: 'SNAPSHOT_CLOSING',
+    hotReload: 'immediate',
+    editable: true,
+    checks: [{ kind: 'nonEmpty' }],
+  },
+
+  // ⭐⭐⭐ `memj_read` 附带的「本文档的写作指导」外壳（2026-10-12 新增；`{{…}}` 是插槽）。
+  //    ⚠️ 只对**用了自定义模板**的项目文档生效（默认六节的项目一字不加）。
+  //    🔴 里面嵌着运行时才知道的值（节数、节名、每节用途、模板 id）⇒ 用插槽模板。
+  {
+    key: 'tpl:guidance-head',
+    zone: 'tools',
+    purpose: '写作指导的第一行：「本文档共 N 节（顺序固定，工具按此输出…）」',
+    owner: 'memj_read（按需注入）',
+    injectMode: '工具返回值（进模型上下文；不进 node 0、不破前缀缓存）',
+    breaksCache: 'no',
+    sourceFile: F.templates,
+    sourceConst: 'TPL_GUIDANCE_HEAD',
+    hotReload: 'immediate',
+    editable: true,
+    checks: [
+      { kind: 'nonEmpty' },
+      { kind: 'slots', tokens: ['count'], why: '它是这份文档的节数，由程序填；删掉模型就不知道有几节' },
+    ],
+  },
+  {
+    key: 'tpl:guidance-row',
+    zone: 'tools',
+    purpose: '写作指导的每一节那行：「`## 节名` —— 这一节要干嘛」',
+    owner: 'memj_read（按需注入）',
+    injectMode: '工具返回值（进模型上下文；不进 node 0、不破前缀缓存）',
+    breaksCache: 'no',
+    sourceFile: F.templates,
+    sourceConst: 'TPL_GUIDANCE_ROW',
+    hotReload: 'immediate',
+    editable: true,
+    checks: [
+      { kind: 'nonEmpty' },
+      {
+        kind: 'slots',
+        tokens: ['name', 'desc', 'trunc'],
+        why: '节名与"这一节要干嘛"是用户自己在模板页写的、trunc 是可截断标记；删掉就等于不告诉模型该写什么',
+      },
+    ],
+  },
+  {
+    key: 'tpl:guidance-trunc-mark',
+    zone: 'tools',
+    purpose: '「本节会被自动截断归档」那个小标记（拼在节名行末尾）',
+    owner: 'memj_read（按需注入）',
+    injectMode: '工具返回值（进模型上下文；不进 node 0、不破前缀缓存）',
+    breaksCache: 'no',
+    sourceFile: F.templates,
+    sourceConst: 'TPL_GUIDANCE_TRUNC_MARK',
+    hotReload: 'immediate',
+    editable: true,
+    checks: [{ kind: 'nonEmpty' }],
+  },
+  {
+    key: 'tpl:guidance-no-trunc',
+    zone: 'tools',
+    purpose: '本模板没有可截断节时的如实说明（「文档不会自动瘦身」）',
+    owner: 'memj_read（按需注入）',
+    injectMode: '工具返回值（进模型上下文；不进 node 0、不破前缀缓存）',
+    breaksCache: 'no',
+    sourceFile: F.templates,
+    sourceConst: 'TPL_GUIDANCE_NO_TRUNC',
+    hotReload: 'immediate',
+    editable: true,
+    checks: [{ kind: 'nonEmpty' }],
+  },
+  {
+    key: 'tpl:guidance-foot',
+    zone: 'tools',
+    purpose: '写作指导的收尾：「`## 沉淀知识` 由工具生成，不在上面这几节里」',
+    owner: 'memj_read（按需注入）',
+    injectMode: '工具返回值（进模型上下文；不进 node 0、不破前缀缓存）',
+    breaksCache: 'no',
+    sourceFile: F.templates,
+    sourceConst: 'TPL_GUIDANCE_FOOT',
+    hotReload: 'immediate',
+    editable: true,
+    checks: [
+      { kind: 'nonEmpty' },
+      {
+        kind: 'slots',
+        tokens: ['knowledgeTitle'],
+        why: '那是「沉淀知识」这个钉死的节名（来自 sections.ts），由程序填；写死会与服务端常量漂开',
+      },
+    ],
+  },
+  {
+    key: 'tpl:notice-templated',
+    zone: 'tools',
+    purpose: '找得到原模板时那份通知的外壳（含「按模板 X 生成」标题 + 正文）',
+    owner: 'memj_read（按需注入）',
+    injectMode: '工具返回值（进模型上下文；不进 node 0、不破前缀缓存）',
+    breaksCache: 'no',
+    sourceFile: F.tools,
+    sourceConst: 'TPL_NOTICE_TEMPLATED',
+    hotReload: 'immediate',
+    editable: true,
+    checks: [
+      { kind: 'nonEmpty' },
+      {
+        kind: 'slots',
+        tokens: ['tplId', 'guidance'],
+        why: '模板 id 与拼好的写作指导都由程序填；删掉这一段就没有内容可给模型',
+      },
+    ],
+  },
+  {
+    key: 'tpl:notice-fallback',
+    zone: 'tools',
+    purpose: '原模板已被删/改名时那份通知的外壳（从文档自己记着的节名还原）',
+    owner: 'memj_read（按需注入）',
+    injectMode: '工具返回值（进模型上下文；不进 node 0、不破前缀缓存）',
+    breaksCache: 'no',
+    sourceFile: F.tools,
+    sourceConst: 'TPL_NOTICE_FALLBACK',
+    hotReload: 'immediate',
+    editable: true,
+    checks: [
+      { kind: 'nonEmpty' },
+      {
+        kind: 'slots',
+        tokens: ['count', 'secLines', 'missingNote', 'knowledgeTitle'],
+        why: '节数、节行、原模板缺失说明、以及钉死的「沉淀知识」节名都由程序填',
+      },
+    ],
+  },
+  {
+    key: 'tpl:notice-missing',
+    zone: 'tools',
+    purpose: '「原模板已不存在，上面这份是从文档自己记着的节名还原的」那句如实说明',
+    owner: 'memj_read（按需注入）',
+    injectMode: '工具返回值（进模型上下文；不进 node 0、不破前缀缓存）',
+    breaksCache: 'no',
+    sourceFile: F.tools,
+    sourceConst: 'TPL_NOTICE_MISSING',
+    hotReload: 'immediate',
+    editable: true,
+    checks: [
+      { kind: 'nonEmpty' },
+      { kind: 'slots', tokens: ['tplId'], why: '它是那个已不存在的模板 id，由程序填' },
+    ],
   },
 ]
 
@@ -656,6 +1263,22 @@ export function promptDefault(key: string): string | undefined {
   return defaults.get(key)
 }
 
+/**
+ * ⭐⭐ **已登记默认值的全部 key**（2026-10-12 新增）——供**对账**用。
+ *
+ * 🔴 **为什么需要它**：`PROMPT_SPECS`（页面账本）与 `registerPromptDefault`
+ *   （各模块实际登记）是**两条路各自维护同一个事实** ⇒ 会漂。
+ *   而要查出"**已登记但不在册**"这个方向（页面完全看不到它——
+ *   本次 `memj_template` 事故的形态），就必须能**枚举已登记的 key**。
+ *   ⚠️ 只有 `promptDefault(key)` 是查不出这个方向的：它要求你先知道 key。
+ *
+ * ⭐ 消费方：`scripts/diag-prompt-coverage.mjs`（双向对账，只读诊断）。
+ * @returns 已登记的 key（插入顺序）。
+ */
+export function registeredPromptKeys(): string[] {
+  return [...defaults.keys()]
+}
+
 /** 当前生效文本（展示用：覆盖优先，否则默认）。 */
 export function promptCurrent(key: string): string {
   return promptText(key, defaults.get(key) ?? '')
@@ -698,9 +1321,67 @@ export function validatePrompt(key: string, text: string): string[] {
     } else if (c.kind === 'fencesBalanced') {
       const n = (text.match(/^```/gm) ?? []).length
       if (n % 2 !== 0) out.push(`markdown 围栏不成对（检测到 ${n} 个 \`\`\`，必须是偶数）。`)
+    } else if (c.kind === 'slots') {
+      // ⭐⭐⭐ **双向校验**（2026-10-12）：缺一个不行，多一个也不行。
+      //    🔴 **两侧的失败都是静默的**，所以必须机械判：
+      //      · 少一个登记的插槽 ⇒ 那个值**再也进不去**（模型看到一句没有主语的残句）；
+      //      · 多一个没登记的插槽 ⇒ `fillSlots` 不认识它 ⇒ **原样发给模型**（`{{xxx}}`）。
+      const present = new Set(slotNames(text))
+      const missing = c.tokens.filter((t) => !present.has(t))
+      if (missing.length > 0) {
+        out.push(
+          `缺少必须保留的变量插槽：${missing.map((t) => `{{${t}}}`).join('、')}（${c.why}）。` +
+            '这些位置由程序填运行时值——删掉它们那些值就再也传不进提示词了（且不会报错）。',
+        )
+      }
+      const unknown = [...present].filter((t) => !c.tokens.includes(t))
+      if (unknown.length > 0) {
+        out.push(
+          `出现了未登记的变量插槽：${unknown.map((t) => `{{${t}}}`).join('、')}。` +
+            `它不会被替换、会**原样发给模型**。本条目可用的插槽只有：${c.tokens.map((t) => `{{${t}}}`).join('、')}。`,
+        )
+      }
     }
   }
   return out
+}
+
+/** 插槽名字符集（`{{名字}}`：字母、数字、下划线；**不含**空格与中文，避免误吞正文）。 */
+const SLOT_RE = /\{\{([A-Za-z0-9_]+)\}\}/g
+
+/**
+ * ⭐⭐⭐ **取出文本里出现的全部插槽名**（去重）。
+ *
+ * ⚠️ **字符集刻意收窄**（`[A-Za-z0-9_]`）：提示词正文里本来就有大量 `{` `}`
+ *    （如 JSON 示例 `{"picks":[]}`）⇒ 若允许空格/中文，`{ 编号 }` 这类**正常正文**
+ *    会被误认成插槽，导致保存被无故拒绝。
+ * @param text - 待扫描文本。
+ * @returns 插槽名（出现顺序、已去重）。
+ */
+export function slotNames(text: string): string[] {
+  const out: string[] = []
+  for (const m of text.matchAll(SLOT_RE)) {
+    const name = m[1] ?? ''
+    if (name !== '' && !out.includes(name)) out.push(name)
+  }
+  return out
+}
+
+/**
+ * ⭐⭐⭐ **把 `{{名字}}` 填成运行时值**（`slots` 校验的对侧）。
+ *
+ * 🔴 **两者必须成对**：`slots` 校验保证"插槽还在"，本函数保证"值真的填进去了"。
+ *    只做一侧就会出现本项目反复记过的那类静默失败。
+ *
+ * ⚠️ **未提供的插槽保持原样**（不填空串）：这样它**在输出里可见**
+ *    （模型会看到 `{{xxx}}`，人排查时也能一眼认出），比静默吞掉强。
+ *    正常路径上不该发生——`slots` 校验已经拦住了没登记的插槽。
+ * @param template - 带插槽的模板文本。
+ * @param vars - 插槽名 → 值。
+ * @returns 填好的文本。
+ */
+export function fillSlots(template: string, vars: Readonly<Record<string, string>>): string {
+  return template.replace(SLOT_RE, (whole, name: string) => vars[name] ?? whole)
 }
 
 // ══════════════════════════════════════════════════════════════════════

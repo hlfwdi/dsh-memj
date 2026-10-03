@@ -27,7 +27,39 @@
 import { mkdir, readdir, readFile, rm } from 'node:fs/promises'
 import { templatesDir, templatePath } from './paths.ts'
 import { writeTextAtomic } from './files.ts'
+import { fillSlots, promptText, registerPromptDefault } from './prompts.ts'
 import { KNOWLEDGE_TITLE, NARRATIVE_TITLES } from './sections.ts'
+
+// ══════════════════════════════════════════════════════════════════════════
+// ⭐⭐⭐ **「本文档的写作指导」的骨架**（2026-10-12 开放编辑；`{{…}}` 是插槽）
+//
+// 🔴 **它是什么**：读一个**用了自定义模板**的项目文档时，`memj_read` 会附上这份指导
+//    —— 告诉模型"这份文档有几节、每节要干嘛、哪节会被自动截断"。
+//    ⚠️ 默认六节的项目**一字不加**（既有行为零变化）。
+//
+// 🔴 **为什么它以前不可编辑**：正文里嵌着**运行时才知道的值**（节数、节名、每节用途、
+//    可截断标记）⇒ 是模板不是常量。
+// ⭐ **现在**：骨架走覆盖层、值由 `fillSlots` 填，`slots` 校验保证插槽不被删/写错。
+//
+// ⚠️ **`{{desc}}` 是用户自己在模板页写的"这一节要干嘛"**，不是本文件的内容 ——
+//    改行模板时别把 `{{desc}}` 当成示例文字删掉。
+// ══════════════════════════════════════════════════════════════════════════
+
+export const TPL_GUIDANCE_HEAD: string =
+  '本文档共 **{{count}} 节**（顺序固定，工具按此输出；缺的节补空标题）：'
+export const TPL_GUIDANCE_ROW: string = '- `## {{name}}` —— {{desc}}{{trunc}}'
+export const TPL_GUIDANCE_TRUNC_MARK: string = '　⭐ **本节的较早内容会被自动截断归档**'
+export const TPL_GUIDANCE_NO_TRUNC: string =
+  `⚠️ **本模板没有声明可截断的节** ⇒ 文档**不会自动瘦身**（超过阈值也不会截）。
+压缩需要你按上面的规范手动归并。`
+export const TPL_GUIDANCE_FOOT: string =
+  '🔴 **`## {{knowledgeTitle}}` 由工具生成**（放封面，不是你写的），**不在上面这几节里**。'
+
+registerPromptDefault('tpl:guidance-head', TPL_GUIDANCE_HEAD)
+registerPromptDefault('tpl:guidance-row', TPL_GUIDANCE_ROW)
+registerPromptDefault('tpl:guidance-trunc-mark', TPL_GUIDANCE_TRUNC_MARK)
+registerPromptDefault('tpl:guidance-no-trunc', TPL_GUIDANCE_NO_TRUNC)
+registerPromptDefault('tpl:guidance-foot', TPL_GUIDANCE_FOOT)
 
 /** 模板结构版本（变了就升 ⇒ 旧模板当不兼容，不猜）。 */
 export const TEMPLATE_VERSION = 1
@@ -247,22 +279,23 @@ export async function deleteTemplate(id: string): Promise<boolean> {
  * @returns markdown 片段（含节顺序、每节用途、截断提示）。
  */
 export function renderTemplateGuidance(t: Template): string {
-  const lines: string[] = [`本文档共 **${t.sections.length} 节**（顺序固定，工具按此输出；缺的节补空标题）：`, '']
+  const lines: string[] = [
+    fillSlots(promptText('tpl:guidance-head', TPL_GUIDANCE_HEAD), { count: String(t.sections.length) }),
+    '',
+  ]
   for (const s of t.sections) {
-    const trunc = s.truncate === true ? '　⭐ **本节的较早内容会被自动截断归档**' : ''
-    lines.push(`- \`## ${s.name}\` —— ${s.desc}${trunc}`)
+    const trunc = s.truncate === true ? promptText('tpl:guidance-trunc-mark', TPL_GUIDANCE_TRUNC_MARK) : ''
+    lines.push(
+      fillSlots(promptText('tpl:guidance-row', TPL_GUIDANCE_ROW), { name: s.name, desc: s.desc, trunc }),
+    )
   }
   const truncs = t.sections.filter((s) => s.truncate === true)
   if (truncs.length === 0) {
-    lines.push(
-      '',
-      '⚠️ **本模板没有声明可截断的节** ⇒ 文档**不会自动瘦身**（超过阈值也不会截）。',
-      '压缩需要你按上面的规范手动归并。',
-    )
+    lines.push('', promptText('tpl:guidance-no-trunc', TPL_GUIDANCE_NO_TRUNC))
   }
   lines.push(
     '',
-    `🔴 **\`## ${KNOWLEDGE_TITLE}\` 由工具生成**（放封面，不是你写的），**不在上面这几节里**。`,
+    fillSlots(promptText('tpl:guidance-foot', TPL_GUIDANCE_FOOT), { knowledgeTitle: KNOWLEDGE_TITLE }),
   )
   return lines.join('\n')
 }

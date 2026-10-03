@@ -1,5 +1,16 @@
-// 从 memj-design.md 抽取 §4.2 各工具的 description 原文，生成 tool-descriptions.ts。
-// 目的：**逐字复制**，避免手打漂移（设计文档明写这些就是工具 description 的原文）。
+// 🔴🔴 **一次性迁移工具 —— 已解耦，不参与 run-all-tests 回路**（2026-10-12，用户裁定）。
+//
+// 用途：把 `memj-design.md` §4.2 各工具的 description 原文**逐字**抽出来，
+// 重写成 `src/tool-descriptions.ts`。**只在"要从设计文档重新拉一次正文"时才手工跑**。
+//
+// ⚠️ **它会覆写 `src/tool-descriptions.ts`**（连头注释一起）⇒ 平时**不要跑**：
+//   该文件现在是**源头**，直接改它即可。跑本脚本会丢掉那些直接修改。
+//
+// ⭐ **为什么解耦**：「提示词」设置页要有「把页面的修改写回源码」的能力——
+//   只要生成链还在回路里，写回的代码就会被本脚本**静默覆盖**。
+//   （与 `context.ts` 当初的解耦同一做法：`gen-context.mjs` 也不在回路里。）
+//
+// 用法：node scripts/gen-descriptions.mjs "<memj-design.md 路径>"
 import { readFileSync, writeFileSync } from 'node:fs'
 
 const md = readFileSync(process.argv[2], 'utf8').replace(/\r\n/g, '\n')
@@ -78,14 +89,20 @@ const esc = (s) => s.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$\{/g
 
 const out = []
 out.push(`/**
- * §4.2 各工具的 \`description\` 原文（**逐字取自 \`memj-design.md\`**）。
+ * 各工具的 \`description\` 原文。
  *
- * ⚠️ **为什么单独成文件而不是硬编码在 tools.ts 里**：
- * 这些文本是设计文档明确规定的"工具定义提示词"，且 §5 总表把它们列为
- * **每步都进上下文**的内容——一旦漂移，模型看到的行为规范就与设计不符。
- * 集中在此便于与设计文档做**逐字节比对**（见 \`scripts/check-descriptions.mjs\`）。
+ * 🔴🔴 **本文件是【源头】——直接改它，不需要动任何设计文档。**
+ *   ⚠️ 它以前由 \`scripts/gen-descriptions.mjs\` 从 \`memj-design.md\` §4.2 生成，
+ *     **现已解耦**（2026-10-12，用户裁定）：那条生成链**不在 \`run-all-tests\` 回路里**，
+ *     也不会再重写本文件。生成器降级为**一次性迁移工具**（万一要从设计文档重拉一次正文）。
+ *   ⭐ **为什么解耦**：「提示词」设置页要有「把页面的修改**写回源码**」这个能力——
+ *     而只要生成链还在回路里，写回的代码就会被生成器**静默覆盖** ⇒ 写回等于白写。
+ *     （与 \`context.ts\` 当初的解耦同一做法。）
+ *   ⚠️ **代价（已知并接受）**：设计文档 §4.2 会**逐渐过时**，不再有逐字节校验。
+ *     已在该节顶部加了「本节已不再与代码同步」的提示。
  *
- * 🔴 修改流程：**先改 \`memj-design.md\` §4.2，再重跑生成脚本**，不要直接改本文件。
+ * ⚠️ **为什么这些文本要集中在一个文件**：它们是**每步都进上下文**的内容
+ *   （wire \`tools\` 段），一旦漂移，模型看到的行为规范就与实现不符。
  *
  * @module dsh-memj/tool-descriptions
  */

@@ -1190,11 +1190,18 @@ async function recallViaJev(opts: {
  *    没有收尾指令时，模型会自作主张地"用上"它们（去读正文、去改库、去补全）。
  * ⚠️ **放在渲染函数末尾** ⇒ 保证每个变体都带上。
  */
-export const ACTIVE_CLOSING_INSTRUCTION = [
-  '---',
-  '',
-  '⭐ **以上是背景知识，不是任务**；结合上述知识继续当前工作。',
-].join('\n')
+export const ACTIVE_CLOSING_INSTRUCTION = `---
+
+⭐ **以上是背景知识，不是任务**；结合上述知识继续当前工作。`
+
+// ⭐⭐⭐ **主动召回的两行表头**（2026-10-12 抽成常量 + 走 `promptText`）。
+//
+// 🔴 **为什么它们也算提示词**：它们**逐字写在注入给模型的那段文本里** ——
+//    尤其第二行（"正文按需读"）直接决定模型会不会去调 `memj_read` 取正文。
+//    ⭐ 判据同 `inject.ts`：**能改变模型怎么做的文本就是提示词**。
+// ⚠️ 改它们**不改变召回集合**（那是代码判据），只改"模型怎么看这批内容"。
+export const ACTIVE_HEADER = '⭐ **以下是知识库里与当前工作相关的知识（主动召回）。**'
+export const ACTIVE_BODY_HINT = '只给标题与描述，**正文按需读** —— 用 `memj_read` 传 `id`。'
 
 // ⭐ **登记默认值**（展示页要用；覆盖优先级见 `prompts.ts`）。
 registerPromptDefault('active:closing', ACTIVE_CLOSING_INSTRUCTION)
@@ -1202,6 +1209,14 @@ registerPromptDefault('jev:candidate', JEV_CANDIDATE_INSTRUCTION)
 registerPromptDefault('jev:need', JEV_NEED_INSTRUCTION)
 registerPromptDefault('jev:sufficient', JEV_SUFFICIENT_INSTRUCTION)
 registerPromptDefault('jev:search-intent', JEV_SEARCH_INTENT_INSTRUCTION)
+// ⭐⭐⭐ **主动召回的两行表头**（2026-10-12 抽成常量 + 走 `promptText`）。
+//
+// 🔴 **为什么它们也算提示词**：它们**逐字写在注入给模型的那段文本里** ——
+//    尤其第二行（"正文按需读"）直接决定模型会不会去调 `memj_read` 取正文。
+//    ⭐ 判据同 `inject.ts`：**能改变模型怎么做的文本就是提示词**。
+// ⚠️ 改它们**不改变召回集合**（那是代码判据），只改"模型怎么看这批内容"。
+registerPromptDefault('active:header', ACTIVE_HEADER)
+registerPromptDefault('active:body-hint', ACTIVE_BODY_HINT)
 
 /**
  * ⭐⭐ **渲染注入文本**（由 **memj 自己**渲染，不靠模型排版 —— §6.2）。
@@ -1213,8 +1228,8 @@ registerPromptDefault('jev:search-intent', JEV_SEARCH_INTENT_INSTRUCTION)
 export function renderActiveInjection(picks: readonly Candidate[], note = ''): string {
   if (picks.length === 0) return ''
   const parts: string[] = []
-  parts.push('⭐ **以下是知识库里与当前工作相关的知识（主动召回）。**')
-  parts.push('只给标题与描述，**正文按需读** —— 用 `memj_read` 传 `id`。')
+  parts.push(promptText('active:header', ACTIVE_HEADER))
+  parts.push(promptText('active:body-hint', ACTIVE_BODY_HINT))
   parts.push('')
   for (const c of picks) {
     const kind = c.kind === '' ? '' : ` [${c.kind}]`

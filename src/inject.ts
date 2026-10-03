@@ -23,7 +23,7 @@
 import { loadEntryDoc, loadProjectDoc, scanLibrary } from './store.ts'
 import { loadThemeFrontmatter } from './store.ts'
 import type { Cover } from './schema.ts'
-// ⭐⭐⭐ 提示词运行期覆盖（本次新增）：收尾指令走 `promptText` 取值。
+// ⭐⭐⭐ 提示词运行期覆盖（本次新增）：收尾指令 + 各段表头都走 `promptText` 取值。
 import { promptText, registerPromptDefault } from './prompts.ts'
 
 /** 交接档位（**从小到大**，2 是默认）。 */
@@ -90,22 +90,48 @@ export function parseLevel(note: string): HandoffLevel | undefined {
  *    三档（1/2/3）与主题交接**都会带上**，不依赖档位分支。
  * @returns 收尾指令 markdown（含前置分隔线）。
  */
-export const CLOSING_INSTRUCTION: string = [
-  '---',
-  '',
-  '⭐ **以上内容已注入完毕——这就够了。**',
-  '',
-  '🔴 **你不需要为了"用上"这些信息而做任何动作**：',
-  '不要写库、不要改交接文档、不要调工具去核对或补全。',
-  '（这些信息的作用是**让你知道上下文**，不是**让你产出**。）',
-  '',
-  '⭐ **唯一可以做的**：如果合适，**告诉用户接下来可以让你做什么**。',
-  '⚠️ **然后就停下**，等用户的下一条指令——**不要自行开始那件事**。',
-].join('\n')
+export const CLOSING_INSTRUCTION: string = `---
+
+⭐ **以上内容已注入完毕——这就够了。**
+
+🔴 **你不需要为了"用上"这些信息而做任何动作**：
+不要写库、不要改交接文档、不要调工具去核对或补全。
+（这些信息的作用是**让你知道上下文**，不是**让你产出**。）
+
+⭐ **唯一可以做的**：如果合适，**告诉用户接下来可以让你做什么**。
+⚠️ **然后就停下**，等用户的下一条指令——**不要自行开始那件事**。`
+
+// ⭐⭐⭐ **注入段表头的可编辑常量**（2026-10-12 抽成常量 + 走 `promptText`）。
+//
+// 🔴 **为什么这些"表头"也算提示词**：它们**逐字写在注入给模型的那段文本里** ——
+//    模型读到的就是它们，且它们直接决定"模型怎么看待这批内容"
+//    （例如"正文按需读"这句，模型据此决定要不要去 `memj_read`）。
+//    ⭐ 本项目判据：**能改变模型怎么做的文本就是提示词**，不管它看起来像不像"一句话说明"。
+//
+// ⚠️ **它们不决定"注入哪些条目"** —— 那是代码里的判据（`level` / `wanted()` 等）；
+//    改这里只影响措辞，不影响集合。所以标 `immediate`（渲染是调用点现读，无需重启）。
+export const TARGET_PROJECT_LINE: string =
+  `后续 handoff 若要归档本次工作到这个项目，可直接沿用，**不必再调 \`memj_info\` 判断归属**；⚠️ 但若**后续工作明显是另一件事**，仍应按新话题重新判断。`
+
+export const TARGET_THEME_LINE: string = '（用于了解这个主题下有哪些可复用知识）。'
+
+export const PROJECT_KNOWLEDGE_HINT: string =
+  `⭐ **以下只给标题与描述，正文按需读**——用 \`memj_read\` 传 \`id\` 取正文（长文档它会回节名清单，再用 \`section\` 取某一节）。`
+
+export const THEME_KNOWLEDGE_HINT: string =
+  '⭐ **同样只给标题与描述，正文按需读**（`memj_read`）。'
+
+export const THEME_COVERS_HINT: string =
+  `⭐ **只给标题与描述，正文按需读**——用 \`memj_read\` 传 \`id\` 取正文（长文档它会回节名清单，再用 \`section\` 取某一节）。`
 
 // ⭐⭐⭐ **登记默认值**（本次新增；展示页要用）。
 // ⚠️ **措辞原本是用户拍板的**（2026-09-19）—— 页面上允许改，属于用户自己的决定。
 registerPromptDefault('inject:closing', CLOSING_INSTRUCTION)
+registerPromptDefault('inject:target-project', TARGET_PROJECT_LINE)
+registerPromptDefault('inject:target-theme', TARGET_THEME_LINE)
+registerPromptDefault('inject:project-knowledge-hint', PROJECT_KNOWLEDGE_HINT)
+registerPromptDefault('inject:theme-knowledge-hint', THEME_KNOWLEDGE_HINT)
+registerPromptDefault('inject:theme-covers-hint', THEME_COVERS_HINT)
 
 /**
  * 渲染一条知识的**封面行**（不给正文）。
@@ -147,10 +173,10 @@ export async function renderProjectHandoff(
   parts.push(`## 项目交接：\`${projectId}\``)
   parts.push('')
   // ⭐ 只说"本次交接的目标"，**不说"本会话属于"**——避免模型把无关工作也归到这里。
+  // ⭐⭐⭐ 走 `promptText` 取覆盖值（2026-10-12）——改完下一次注入即生效。
   parts.push(
     `⭐ **本次交接的目标项目是 \`${projectId}\`**。` +
-      '后续 handoff 若要归档本次工作到这个项目，可直接沿用，**不必再调 `memj_info` 判断归属**；' +
-      '⚠️ 但若**后续工作明显是另一件事**，仍应按新话题重新判断。',
+      promptText('inject:target-project', TARGET_PROJECT_LINE),
   )
   parts.push('')
   if (doc.frontmatter.desc.trim() !== '') {
@@ -174,8 +200,7 @@ export async function renderProjectHandoff(
     parts.push(`### 本项目的知识（${own.length} 条）`)
     parts.push('')
     parts.push(
-      '⭐ **以下只给标题与描述，正文按需读**——' +
-        '用 `memj_read` 传 `id` 取正文（长文档它会回节名清单，再用 `section` 取某一节）。',
+      promptText('inject:project-knowledge-hint', PROJECT_KNOWLEDGE_HINT),
     )
     parts.push('')
     if (own.length === 0) parts.push('_（本项目暂无知识条目）_')
@@ -204,7 +229,7 @@ export async function renderProjectHandoff(
       if (extra.length === 0) {
         parts.push('_（这些主题下的知识都已在上面的「本项目知识」里列出，无新增条目）_')
       } else {
-        parts.push('⭐ **同样只给标题与描述，正文按需读**（`memj_read`）。')
+        parts.push(promptText('inject:theme-knowledge-hint', THEME_KNOWLEDGE_HINT))
         parts.push('')
         for (const { cover } of extra) parts.push(renderKnowledgeLine(cover))
       }
@@ -242,7 +267,8 @@ export async function renderThemeHandoff(
   parts.push(`## 主题：\`${themeId}\``)
   parts.push('')
   parts.push(
-    `⭐ **本次交接的目标主题是 \`${themeId}\`**（用于了解这个主题下有哪些可复用知识）。`,
+    `⭐ **本次交接的目标主题是 \`${themeId}\`**` +
+      promptText('inject:target-theme', TARGET_THEME_LINE),
   )
   parts.push('')
   parts.push(`> 主题描述：${fm?.desc !== undefined && fm.desc.trim() !== '' ? fm.desc : '（无描述）'}`)
@@ -260,8 +286,7 @@ export async function renderThemeHandoff(
   parts.push(`### 本主题的知识（${covers.length} 条）`)
   parts.push('')
   parts.push(
-    '⭐ **只给标题与描述，正文按需读**——' +
-      '用 `memj_read` 传 `id` 取正文（长文档它会回节名清单，再用 `section` 取某一节）。',
+    promptText('inject:theme-covers-hint', THEME_COVERS_HINT),
   )
   parts.push('')
   if (covers.length === 0) parts.push('_（该主题暂无知识条目）_')

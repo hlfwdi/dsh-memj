@@ -258,8 +258,14 @@ console.log('\n【10】工具描述是**生成物**（不许手改）')
   check('⭐⭐ 新工具 `memj_score_turn` 已注册', /name: 'memj_score_turn'/.test(toolsSrc))
   check('⭐⭐ 描述常量来自生成物（`MEMJ_SCORE_TURN_DESCRIPTION`）',
     /MEMJ_SCORE_TURN_DESCRIPTION/.test(toolsSrc) && /export const MEMJ_SCORE_TURN_DESCRIPTION/.test(descSrc))
-  check('⭐ 生成物头部有"别直接改本文件"的警告',
-    /先改 `memj-design.md` §4\.2，再重跑生成脚本/.test(descSrc))
+  // 🔴 **2026-10-12 改口径**：原来断言的是头部那句「先改 `memj-design.md` §4.2，
+  //    再重跑生成脚本，不要直接改本文件」——但**那条生成链已解耦**
+  //    （`gen-descriptions.mjs` 移出 `run-all-tests` 回路，与 `context.ts` 同样处置）。
+  //    ⇒ 现在该文件**就是源头**，旧断言会**必然假红**。
+  //    ⭐ 判据改成验**新的、如实的说明**：本文件是源头 + 生成链已不在回路里。
+  check('⭐ 头部说明「本文件是源头，直接改它」', /本文件是【源头】/.test(descSrc))
+  check('⭐ 头部说明「生成链已不在 run-all-tests 回路里」（不再误导"先改设计文档"）',
+    /不在 `run-all-tests` 回路里/.test(descSrc) || /不在 .*回路里/.test(descSrc))
   check('⭐⭐ 生成器已登记新工具（否则数量校验会罢工）',
     /'memj_score_turn'/.test(readFileSync(join(ROOT, 'scripts', 'gen-descriptions.mjs'), 'utf8')))
   // ⭐ 工具参数必须显式给 session/turn（子代理的 exec.agent 是它自己，不是被复盘的会话）。
@@ -477,9 +483,17 @@ console.log('\n【12】⭐⭐⭐ 每轮最多选几条（决策 180）')
     /hotScoreMaxPicks/.test(cfgSrc2) && /hotScoreTopN/.test(cfgSrc2)
     && cfgSrc2.indexOf('hotScoreMaxPicks') !== cfgSrc2.indexOf('hotScoreTopN'))
   // ⭐ 提示词里"排序 + 数字"这两半必须在**同一句**里（分开写会丢关联）。
-  const userSrc = readFileSync(join(SRC, 'score-chat.ts'), 'utf8')
+  //
+  // 🔴🔴 **判据已从"扫源码"改为"扫渲染结果"**（2026-10-12）：这两半现在住在
+  //    `score:user-task` 这个**插槽模板**里（`{{k}}` 由程序填），源码里已经没有
+  //    `${k}` 字面量了 ⇒ 旧的静态正则**测的是实现形态、不是行为**。
+  //    ⭐ 本项目判据：**验收要落在"真正发出去的那段文本"上** —— 而且渲染检查更强
+  //      （它能同时证明"数字真的被填进去了"）。
+  const renderedUser = mod.buildChatScoreUser('（本轮内容）', 10)
   check('⭐⭐ "最多 K 条"与"按能改变做法的程度排序"在同一条 user 消息里',
-    /最多 \$\{k\} 条[\s\S]{0,400}?排序/.test(userSrc))
+    /最多 10 条[\s\S]{0,400}?排序/.test(renderedUser))
+  check('⭐⭐ 渲染后**没有残留插槽**（`{{k}}` 必须已被填成数字）',
+    !/\{\{/.test(renderedUser), renderedUser.slice(0, 120))
   // ⚠️ 前端：新增旋钮存在且被提交。
   const htmlSrc2 = readFileSync(join(SRC, 'web', 'index.html'), 'utf8')
   const webSrc2 = readFileSync(join(SRC, 'web', 'app.js'), 'utf8')
