@@ -227,7 +227,19 @@ console.log('\n【6】元数据表完整性')
 const specs = P.PROMPT_SPECS
 check('6a 规格表非空', specs.length > 0, `实得 ${specs.length}`)
 check('6b key 唯一（无重复）', new Set(specs.map((s) => s.key)).size === specs.length)
-check('6c 每条都有 zone', specs.every((s) => ['resident', 'tools', 'internal'].includes(s.zone)))
+// ⭐⭐⭐ **2026-10-12 判据更新**：分区轴从"生效方式/影响面"（3 个）
+//    换成"**谁在什么时候看到这段文本**"（10 个，见 `prompt-catalog.ts` 的 `PROMPT_GROUPS`）。
+//    ⚠️ 旧断言写死了 `['resident','tools','internal']` ⇒ 换轴后必然报红。
+//    ⭐ **判据要跟着设计走，不是改代码迁就旧判据** —— 但**必须真的生效**：
+//       所以这里改成"**在受控词表里**"（而不是把词表再抄一遍 ⇒ 那又是多副本）。
+check('6c 每条的分组都在受控词表里（`PROMPT_GROUPS`）',
+  specs.every((s) => P.PROMPT_GROUPS[s.zone] !== undefined),
+  `受控词表：${Object.keys(P.PROMPT_GROUPS).join('/')}`)
+// ⭐⭐ **新不变量**（本次重构的核心）：每条 spec 都必须有目录条目。
+//    ⚠️ 这正是"人读文案搬去 prompt-catalog.ts"之后新增的漂移风险。
+check('6c2 每条都有目录条目（分组说明 / 用途 / 归属齐全）',
+  specs.every((s) => P.catalogOf(s.key) !== undefined),
+  specs.filter((s) => P.catalogOf(s.key) === undefined).map((s) => s.key).join('、'))
 check('6d 每条都有 purpose / owner / injectMode / sourceFile（展示六字段齐）',
   specs.every((s) => s.purpose !== '' && s.owner !== '' && s.injectMode !== '' && s.sourceFile !== ''))
 check('6e 每条都标了 breaksCache', specs.every((s) => ['yes', 'no', 'na'].includes(s.breaksCache)))
@@ -319,13 +331,22 @@ const metaToolCount = (() => {
 const toolsZone = specs.filter((s) => s.zone === 'tools').length
 // 工具类条目 = 每工具 3 条；其余是命令描述(4) + inject:closing + handoff:prompt。
 const expectedToolsMin = metaToolCount * 3
+// ⭐⭐⭐ **2026-10-12 判据更新**：分组轴换成"谁在什么时候看到"（10 组）之后，
+//    "工具 ≥33 / 内部 ≥13"这种按**旧轴**算的数字不再成立。新判据落在**不变的部分**上：
+//      · 常驻**正好 2 条**（协议 + 使用指导，这是硬事实）；
+//      · **工具说明书**每组 3 条（11 工具 × 3）—— 分组变了但这个结构没变；
+//      · **10 个分组每一个都至少有一条**（否则那一组是空壳，页面上不会显示 ⇒ 静默少内容）。
+const groupCounts = {}
+for (const s of specs) groupCounts[s.zone] = (groupCounts[s.zone] ?? 0) + 1
+const emptyGroups = Object.keys(P.PROMPT_GROUPS).filter((g) => (groupCounts[g] ?? 0) === 0)
 check(
-  `8b 规格表条数与分区合理（常驻 2 / 工具 ≥${expectedToolsMin}（${metaToolCount} 工具 × 3）/ 内部 ≥13）`,
+  `8b 分组结构合理（常驻 2 / 工具说明书 ≥${expectedToolsMin} / 10 组无空组）`,
   specs.filter((s) => s.zone === 'resident').length === 2 &&
     toolsZone >= expectedToolsMin &&
-    specs.filter((s) => s.zone === 'internal').length >= 13,
+    emptyGroups.length === 0,
   `实际：常驻 ${specs.filter((s) => s.zone === 'resident').length} / ` +
-    `工具 ${toolsZone} / 内部 ${specs.filter((s) => s.zone === 'internal').length}`,
+    `工具说明书 ${toolsZone} / 空组 ${emptyGroups.length === 0 ? '无' : emptyGroups.join('、')} / ` +
+    `共 ${Object.keys(groupCounts).length} 组有内容`,
 )
 check('8c ⭐ 知识评分 JEV 通路的提问也在表里（第一版漏过它）',
   specs.some((s) => s.key === 'score:jev-instruction' && s.checks.some((c) => c.kind === 'englishOnly')))

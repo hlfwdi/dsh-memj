@@ -530,6 +530,9 @@ export { PROTOCOL_TEXT, PROTOCOL_SECTION_ORDER, protocolText } from './protocol.
 //    测试（`scripts/test-prompt-override.mjs`）要直接验校验规则 / 覆盖优先级 /
 //    运行期生效 / 恢复默认 / 历史备份这些**纯逻辑**（不必起服务）。
 export * from './prompts.ts'
+// ⭐⭐ 提示词目录（2026-10-12）：人读文案（分组 / 用途 / 归属）的唯一出处。
+//    导出它是为了：① `api.ts` 回分组说明；② `check-prompt-specs.mjs` 做**双向覆盖校验**。
+export * from './prompt-catalog.ts'
 // ⭐⭐⭐ 写回源码（2026-10-12）——单独模块：它要 import `paths.ts` 的 `pluginRoot()`，
 //    而 `prompts.ts` 是**叶子模块**（不 import 任何提示词源模块，见其模块头注释）
 //    ⇒ 把写回逻辑塞进 `prompts.ts` 会破坏那条依赖纪律。

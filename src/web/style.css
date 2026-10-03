@@ -1779,6 +1779,42 @@ footer {
       不写死颜色 —— 暗色主题下要自动适配（本项目样式约定）。
    ====================================================================== */
 
+/* ⭐⭐ 分组说明（2026-10-12 新增）——"这组是给谁看的、什么时候看"。
+   🔴 为什么需要它：分组轴换成"谁看"之后，**光有组名仍不够**
+     （"每轮常驻"能猜，"主动召回"就得解释）。这句由服务端回（`prompt-catalog.ts`）。
+   ⚠️ 与 `.set-desc` 的区别：它紧跟组标题、说明**整组**，所以稍强调一点、并留底部间距。 */
+.prompt-group-about {
+  margin: 2px 0 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--fg-dim);
+}
+
+/* ⭐⭐ 合并卡的「附：参数表 / 返回格式」（2026-10-12 新增）。
+   🔴 为什么折叠：一个工具的这三部分合成一张卡后，展开全部会让列表变很长；
+     而参数表通常只有 2~3 行，**折叠着也不影响扫读**。 */
+.prompt-parts {
+  margin: 8px 0 6px;
+  border-top: 1px dashed var(--border);
+  padding-top: 6px;
+}
+.prompt-parts > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--fg-dim);
+  /* ⚠️ 不要用 list-style:none 把三角去掉 —— 那是"这里能展开"的唯一提示 */
+}
+.prompt-part-label {
+  margin: 8px 0 4px;
+  font-size: 12px;
+  color: var(--fg);
+}
+/* 随行正文比主正文更矮、更淡（它是契约文本，不是给人编辑的说明） */
+.prompt-part-pre {
+  font-size: 12px;
+  max-height: 220px;
+}
+
 /* 一条提示词的卡片 */
 .prompt-card {
   border: 1px solid var(--border);

@@ -54,6 +54,8 @@ import { decideTemplateTool } from './template-tool.ts'
 // ⭐ 模板写作指导的骨架（可编辑常量与插槽标记都在 templates.ts）。
 import { TPL_GUIDANCE_TRUNC_MARK } from './templates.ts'
 import { KNOWLEDGE_TITLE } from './sections.ts'
+// ⭐⭐ 把工具 schema 渲染成人读文本（**只为展示**，见 `safeRegister` 里的说明）。
+import { renderOutputText, renderParametersText } from './prompt-catalog.ts'
 import { bodySize, filterByContext, filterContextByTerms, normalizeQuery, scoreCover, sortHits } from './search.ts'
 import { resolveRef } from './paths.ts'
 // ⭐ `kind` 的受控词表判据（决策 114 的 `setFields.kind` 用）。
@@ -207,6 +209,17 @@ export function registerTools(deps: ToolDeps): void {
         configurable: true,
         get: () => promptText(`tool:${name}:description`, fallback),
       })
+      // ⭐⭐⭐ **登记参数 / 输出的「可读文本」**（2026-10-12 新增）——**只为展示**。
+      //
+      // 🔴 **解决什么问题**：这两个在源码里是 **JavaScript 对象**（不是字符串）
+      //   ⇒ 页面取不到文本 ⇒ 那 22 条**点进去是空的**（用户看到"列了却没内容"）。
+      // ⭐ **做法**：把对象**渲染成 markdown**、当"默认值"登记 ⇒ 页面能显示真内容。
+      // ⚠️ **只用于显示**：运行时用的仍是 `def.parameters` / `def.output` 那两份**对象**，
+      //   两者互不影响 ⇒ **不存在"显示的和实际用的不一致"**。
+      // ⚠️ 它们**不可编辑**（`editable: false`）⇒ 覆盖层不会有这两个键
+      //   ⇒ `promptText` 永远不会读它们，**纯展示**。
+      registerPromptDefault(`tool:${name}:parameters`, renderParametersText(def.parameters))
+      registerPromptDefault(`tool:${name}:output`, renderOutputText(def.output))
       ctx.tools.register(def)
     } catch (err) {
       ctx.logger?.error?.('dsh-memj: 工具 %s 注册失败（该工具将不可用）: %o', name, err)

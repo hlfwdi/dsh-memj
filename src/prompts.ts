@@ -31,6 +31,8 @@ import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { promptsDir, promptOverridesPath, promptHistoryDir, safeName } from './paths.ts'
 import { writeTextAtomic } from './files.ts'
+// ⭐ 人读文案（分区 / 用途 / 归属）的唯一出处——见那个模块的头注释。
+import { PROMPT_CATALOG, PROMPT_GROUPS, type PromptGroup } from './prompt-catalog.ts'
 
 /** 覆盖文件结构版本（结构变了就升它 ⇒ 旧文件当空表，不猜）。 */
 export const PROMPT_OVERRIDES_VERSION = 1
@@ -42,13 +44,19 @@ export interface PromptOverrides {
 }
 
 /**
- * **三个分区**（用户 2026-09-29 确认）。
+ * **分区**（⭐ 2026-10-12 从"三个"扩成"目录的十个分组"）。
  *
- * 🔴 **为什么按"生效方式/影响面"分，而不是按功能分**：
- *    A 区改了**全废前缀缓存**、B 区工具描述同样全废、C 区**下次调用即生效且与主会话无关**。
- *    混排会让"改完立刻生效"这个预期出错。
+ * 🔴 **分组的轴 = "谁在什么时候看到这段文本"**（用户提出的判据）。
+ *    ⚠️ 旧轴是"生效方式 / 影响面"（resident / tools / internal）——
+ *      它**对改代码的人有用，对看页面的人没用**（用户原话：
+ *      *"这样拆，每条都那么一两句话，完全不知道咋回事"*）。
+ *    ⇒ 现在按"谁看"分：模型每轮看 / 模型调工具时看 / **人**看 / 子代理看 / 判定模型看。
+ *      ⭐ 每组都有页面上的说明（见目录模块的 `PROMPT_GROUPS`）。
+ *
+ * ⚠️ **与目录的 `PromptGroup` 是同一个类型**（此处是别名，
+ *   保持既有 import 路径 `PromptZone` 可用 ⇒ 消费方零改动）。
  */
-export type PromptZone = 'resident' | 'tools' | 'internal'
+export type PromptZone = PromptGroup
 
 /**
  * **热生效判定**（探针实测后的三档）。
@@ -82,11 +90,22 @@ export type HotReload =
 export interface PromptSpec {
   /** 稳定键（`<域>:<归属>:<部位>`）——**不是序号**（序号会在增删工具时错位）。 */
   key: string
-  zone: PromptZone
-  /** 干什么（一句话）。 */
-  purpose: string
-  /** 属于哪个工具 / 功能（展示用）。 */
-  owner: string
+  /**
+   * ⭐⭐⭐ **分区 / 用途 / 归属已搬到 `prompt-catalog.ts`**（2026-10-12）。
+   *
+   * 🔴 **为什么搬**：它们是**给人看的文案**，而本文件是**程序语义**
+   *   （校验 / 热生效 / 源码常量）。混在一起会让"改一句话"必须读程序逻辑，
+   *   而且**没法机械校验"每条 spec 都有说明"**。
+   *
+   * ⚠️ 字段仍然**保留在类型里**（运行时由 `withCatalog()` 从目录注入），
+   *   所以**所有既有消费方一行都不用改**（`api.ts` / 前端 / 测试）。
+   *   ⇒ ⭐ 这是一次"零破坏"的重构：**数据搬家，接口不变**。
+   */
+  zone?: PromptZone
+  /** 干什么（一句话）。⚠️ 由目录注入，见上。 */
+  purpose?: string
+  /** 属于哪个工具 / 功能（展示用）。⚠️ 由目录注入，见上。 */
+  owner?: string
   /** 注入方式（落点）。 */
   injectMode: string
   /** 是否破前缀缓存。 */
@@ -261,13 +280,10 @@ const CMD_HINT_META: ReadonlyArray<{ name: string; constName: string; purpose: s
  * 🔴 **加新提示词时改这里** —— 它是【提示词】页的账本；
  * ⚠️ 装配侧也要同步接上取值（见各调用点的 `promptText(key, fallback)`）。
  */
-export const PROMPT_SPECS: readonly PromptSpec[] = [
+const PROMPT_SPECS_RAW: readonly PromptSpec[] = [
   // ── A 区：常驻文本 ──
   {
     key: 'section:memj:protocol',
-    zone: 'resident',
-    purpose: '记忆协议全文：何时查 / 何时写 / 推进归属 / 边界。每轮常驻。',
-    owner: '系统提示词通道（section）',
     injectMode: 'systemPrompt.section() —— system 角色，独占 node 0',
     breaksCache: 'yes',
     sourceFile: F.protocol,
@@ -278,9 +294,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   },
   {
     key: 'context:memj:usage-guidance',
-    zone: 'resident',
-    purpose: '使用指导：触发条件表、项目判定、挂靠判据、写作要求等（13 块）。每轮常驻。',
-    owner: '运行时上下文通道（context）',
     injectMode: 'systemPrompt.context() —— user 角色，尾部 append',
     breaksCache: 'no',
     sourceFile: F.context,
@@ -301,9 +314,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   ...TOOL_META.flatMap((t): PromptSpec[] => [
     {
       key: `tool:${t.name}:description`,
-      zone: 'tools',
-      purpose: t.purpose,
-      owner: t.name,
       injectMode: 'wire `tools` 段的工具 description',
       breaksCache: 'yes',
       sourceFile: F.descriptions,
@@ -317,9 +327,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
     },
     {
       key: `tool:${t.name}:parameters`,
-      zone: 'tools',
-      purpose: `${t.name} 的参数 schema（模型据此决定怎么调它）`,
-      owner: t.name,
       injectMode: 'wire `tools` 段的 parameters（JSON Schema）',
       breaksCache: 'yes',
       sourceFile: F.tools,
@@ -330,9 +337,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
     },
     {
       key: `tool:${t.name}:output`,
-      zone: 'tools',
-      purpose: `${t.name} 的返回值 schema（运行时强校验，additionalProperties: false）`,
-      owner: t.name,
       injectMode: '不进模型上下文（是运行时校验契约）',
       breaksCache: 'no',
       sourceFile: F.tools,
@@ -362,9 +366,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   ...CMD_META.map(
     (c): PromptSpec => ({
       key: `command:${c.name}:description`,
-      zone: 'tools',
-      purpose: c.purpose,
-      owner: `/${c.name}`,
       injectMode: '命令描述符（消费方是界面/协议，不进模型上下文）',
       breaksCache: 'no',
       sourceFile: F.commands,
@@ -384,9 +385,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   ...CMD_HINT_META.map(
     (c): PromptSpec => ({
       key: `command:${c.name}:hint`,
-      zone: 'tools',
-      purpose: c.purpose,
-      owner: `/${c.name}`,
       injectMode: '命令的 `input.hint`（选中后连同命令名落进输入框；不进模型上下文）',
       breaksCache: 'no',
       sourceFile: F.commands,
@@ -400,9 +398,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   // ── B 区：手写提示词（无生成器、无校验的那两类）──
   {
     key: 'inject:closing',
-    zone: 'tools',
-    purpose: '「取交接」注入文本的收尾指令：禁止写库/改文档，只允许告知下一步然后停下',
-    owner: '/memj-get-handoff-*（两个命令共用）',
     injectMode: '命令 followup 注入文本的末尾',
     breaksCache: 'no',
     sourceFile: F.inject,
@@ -416,9 +411,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   //    ⚠️ 它们**不决定注入哪些条目**（那是代码判据）⇒ 改它们只影响措辞。
   {
     key: 'inject:target-project',
-    zone: 'tools',
-    purpose: '取项目交接时那句「归档就沿用这个项目、不必再查库」的指路话',
-    owner: '/memj-get-handoff-project',
     injectMode: '命令 followup 注入文本（跟在本项目 id 之后）',
     breaksCache: 'no',
     sourceFile: F.inject,
@@ -429,9 +421,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   },
   {
     key: 'inject:target-theme',
-    zone: 'tools',
-    purpose: '取主题交接时那句「本次目标主题是…」的用途说明（跟在主题 id 之后）',
-    owner: '/memj-get-handoff-theme',
     injectMode: '命令 followup 注入文本（跟在本主题 id 之后）',
     breaksCache: 'no',
     sourceFile: F.inject,
@@ -442,9 +431,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   },
   {
     key: 'inject:project-knowledge-hint',
-    zone: 'tools',
-    purpose: '项目知识清单的表头：「只给标题与描述，正文按需 memj_read」',
-    owner: '/memj-get-handoff-project',
     injectMode: '命令 followup 注入文本的「本项目的知识」节',
     breaksCache: 'no',
     sourceFile: F.inject,
@@ -455,9 +441,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   },
   {
     key: 'inject:theme-knowledge-hint',
-    zone: 'tools',
-    purpose: '项目交接里「所属主题的知识」节的表头（措辞与上一节呼应，说"同样"）',
-    owner: '/memj-get-handoff-project',
     injectMode: '命令 followup 注入文本的「所属主题的知识」节',
     breaksCache: 'no',
     sourceFile: F.inject,
@@ -468,9 +451,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   },
   {
     key: 'inject:theme-covers-hint',
-    zone: 'tools',
-    purpose: '主题交接里「本主题的知识」节的表头：「只给标题与描述，正文按需读」',
-    owner: '/memj-get-handoff-theme',
     injectMode: '命令 followup 注入文本的「本主题的知识」节',
     breaksCache: 'no',
     sourceFile: F.inject,
@@ -491,9 +471,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   //      参数化本身不是拒绝开放的理由，"无法校验"才是。
   {
     key: 'handoff:prompt',
-    zone: 'tools',
-    purpose: 'handoff 命令的启动提示词（普通分支：四条要点）——只叫模型去做，落盘由工具完成',
-    owner: '/memj-handoff',
     injectMode: '命令 followup 注入（会唤醒模型）',
     breaksCache: 'no',
     sourceFile: F.commands,
@@ -504,9 +481,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   },
   {
     key: 'handoff:prompt-steps',
-    zone: 'tools',
-    purpose: 'handoff 命令的启动提示词（分步分支：用户用 /memj-handoff knowledge 之类指定了步骤）',
-    owner: '/memj-handoff',
     injectMode: '命令 followup 注入（会唤醒模型）',
     breaksCache: 'no',
     sourceFile: F.commands,
@@ -524,9 +498,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   },
   {
     key: 'handoff:prompt-note',
-    zone: 'tools',
-    purpose: 'handoff 命令里"用户随命令补充的话"那一块（仅当用户真补了话才追加）',
-    owner: '/memj-handoff',
     injectMode: '命令 followup 注入的末尾（条件追加）',
     breaksCache: 'no',
     sourceFile: F.commands,
@@ -546,9 +517,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   // ── C 区：插件内部调 LLM 的提示词 ──
   {
     key: 'jev:candidate',
-    zone: 'internal',
-    purpose: '逐条候选打 noul 分：判断它是否直接帮到当前这一步',
-    owner: '主动注入 · JEV 通路',
     injectMode: 'JEV 请求的 questions[].instructions（不进主会话）',
     breaksCache: 'na',
     sourceFile: F.recall,
@@ -559,9 +527,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   },
   {
     key: 'jev:need',
-    zone: 'internal',
-    purpose: '需求门：当前上下文是否需要外部知识',
-    owner: '主动注入 · JEV 通路',
     injectMode: 'JEV 请求的 questions.need.instructions',
     breaksCache: 'na',
     sourceFile: F.recall,
@@ -572,9 +537,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   },
   {
     key: 'jev:sufficient',
-    zone: 'internal',
-    purpose: '充足门：上下文里已有的知识是否已经够用',
-    owner: '主动注入 · JEV 通路',
     injectMode: 'JEV 请求的 questions.sufficient.instructions',
     breaksCache: 'na',
     sourceFile: F.recall,
@@ -585,9 +547,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   },
   {
     key: 'jev:search-intent',
-    zone: 'internal',
-    purpose: '意图门：模型是否明确打算调 memj_search / memj_info（命中则不注入）',
-    owner: '主动注入 · JEV 通路',
     injectMode: 'JEV 请求的 questions.search_intent.instructions',
     breaksCache: 'na',
     sourceFile: F.recall,
@@ -598,9 +557,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   },
   {
     key: 'active:closing',
-    zone: 'internal',
-    purpose: '主动注入文本的收尾指令',
-    owner: '主动注入',
     injectMode: '注入进主会话（pre-step 的 user 消息）',
     breaksCache: 'no',
     sourceFile: F.recall,
@@ -613,9 +569,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   //    🔴 尤其 `active:body-hint`：它直接决定模型会不会去 `memj_read` 取正文。
   {
     key: 'active:header',
-    zone: 'internal',
-    purpose: '主动召回注入文本的第一行：「以下是…相关的知识（主动召回）」',
-    owner: '主动注入',
     injectMode: '注入进主会话（pre-step 的 user 消息）',
     breaksCache: 'no',
     sourceFile: F.recall,
@@ -626,9 +579,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   },
   {
     key: 'active:body-hint',
-    zone: 'internal',
-    purpose: '主动召回注入文本的第二行：「正文按需读」——决定模型去不去 memj_read',
-    owner: '主动注入',
     injectMode: '注入进主会话（pre-step 的 user 消息）',
     breaksCache: 'no',
     sourceFile: F.recall,
@@ -639,9 +589,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   },
   {
     key: 'hot:closing',
-    zone: 'internal',
-    purpose: '热知识（meta 段）收尾：告知按需 memj_read 取正文、禁止客套',
-    owner: '热知识注入',
     injectMode: '注入进主会话（每轮的背景消息）',
     breaksCache: 'no',
     sourceFile: F.hotInject,
@@ -652,9 +599,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   },
   {
     key: 'hot:body-closing',
-    zone: 'internal',
-    purpose: '热知识（正文段）收尾：说清性质（不是任务）+ 唯一动作（继续当前工作）',
-    owner: '热知识注入',
     injectMode: '注入进主会话（补注时单独一条消息）',
     breaksCache: 'no',
     sourceFile: F.hotInject,
@@ -668,9 +612,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   //    🔴 `hot:direct-section` 与 `hot:meta-hint` 的语义**正好相反**（正文已在眼前 vs 需按需读）。
   {
     key: 'hot:head-first',
-    zone: 'internal',
-    purpose: '热知识首次全量注入的消息头',
-    owner: '热知识注入',
     injectMode: '注入进主会话（每轮的背景消息）',
     breaksCache: 'no',
     sourceFile: F.hotInject,
@@ -681,9 +622,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   },
   {
     key: 'hot:head-supplement',
-    zone: 'internal',
-    purpose: '热知识补注的消息头（说清"这是补充、不是新的一批"）',
-    owner: '热知识注入',
     injectMode: '注入进主会话（补注时）',
     breaksCache: 'no',
     sourceFile: F.hotInject,
@@ -694,9 +632,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   },
   {
     key: 'hot:direct-section',
-    zone: 'internal',
-    purpose: '热知识里「直接可用的内容」段的标题（正文形态：已在眼前，无需再读）',
-    owner: '热知识注入',
     injectMode: '注入进主会话（每轮的背景消息）',
     breaksCache: 'no',
     sourceFile: F.hotInject,
@@ -707,9 +642,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   },
   {
     key: 'hot:meta-hint',
-    zone: 'internal',
-    purpose: '热知识 meta 段的表头：「只给标题与描述，正文按需 memj_read」',
-    owner: '热知识注入',
     injectMode: '注入进主会话（每轮的背景消息）',
     breaksCache: 'no',
     sourceFile: F.hotInject,
@@ -720,9 +652,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   },
   {
     key: 'score:system',
-    zone: 'internal',
-    purpose: '轮末复盘的判断要求与输出格式（挑出能帮上忙的知识 + 原句引文硬要求）',
-    owner: '知识评分 · chat 通路',
     injectMode: '子代理请求的 system（含知识库清单，不进主会话）',
     breaksCache: 'na',
     sourceFile: F.scoreChat,
@@ -739,9 +668,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   //      随 K 变化、把知识库清单一起拖出前缀缓存（§6.4 的硬约束）。
   {
     key: 'score:quote-rule',
-    zone: 'internal',
-    purpose: '复盘入选理由的引文硬要求（逐字复制 + 会做逐字比对 + 只话题相关不算）',
-    owner: '知识评分 · chat 通路',
     injectMode: '子代理请求的 system（不进主会话）',
     breaksCache: 'na',
     sourceFile: F.scoreChat,
@@ -752,9 +678,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   },
   {
     key: 'score:user-task',
-    zone: 'internal',
-    purpose: '复盘 `user` 段的骨架：「最多几条 + 按能改变做法的程度排序取舍」（可配的 K 放这里，不放 system）',
-    owner: '知识评分 · chat 通路',
     injectMode: '子代理请求的 user（含本轮内容，不进主会话）',
     breaksCache: 'na',
     sourceFile: F.scoreChat,
@@ -772,9 +695,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   },
   {
     key: 'score:pick-principle',
-    zone: 'internal',
-    purpose: '复盘的取舍原则（宁少勿滥 / 不凑数 / 够格多于上限就只留最能改变做法的）',
-    owner: '知识评分 · chat 通路',
     injectMode: '子代理请求的 system（不进主会话）',
     breaksCache: 'na',
     sourceFile: F.scoreChat,
@@ -785,9 +705,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   },
   {
     key: 'score:index-range',
-    zone: 'internal',
-    purpose: '复盘的编号范围提示（「编号必须在 1 到 N 之间」，N = 候选条数）',
-    owner: '知识评分 · chat 通路',
     injectMode: '子代理请求的 system（不进主会话）',
     breaksCache: 'na',
     sourceFile: F.scoreChat,
@@ -805,9 +722,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   },
   {
     key: 'score:pool-header',
-    zone: 'internal',
-    purpose: '复盘里【知识库清单】那一节的表头（含候选条数）',
-    owner: '知识评分 · chat 通路',
     injectMode: '子代理请求的 system（不进主会话）',
     breaksCache: 'na',
     sourceFile: F.scoreChat,
@@ -825,9 +739,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   },
   {
     key: 'score:jev-instruction',
-    zone: 'internal',
-    purpose: '轮末复盘的提问（JEV 通路；⚠️ 与主动注入那四条 jev:* 不是一回事）',
-    owner: '知识评分 · JEV 通路',
     injectMode: 'JEV 请求的 questions[].instructions（不进主会话）',
     breaksCache: 'na',
     sourceFile: 'src/score-turn.ts',
@@ -839,9 +750,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   },
   {
     key: 'tag:system',
-    zone: 'internal',
-    purpose: '标签裁决的规则与输出格式（合并/新增/丢弃/retag，必须给理由）',
-    owner: '标签规范化',
     injectMode: '子代理请求的提示词（不进主会话）',
     breaksCache: 'na',
     sourceFile: F.tagNorm,
@@ -852,9 +760,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   },
   {
     key: 'translate:mt',
-    zone: 'internal',
-    purpose: '翻译第①级：编号 + 空行分隔（实测比强指令更有效）',
-    owner: '英文召回索引 · 翻译',
     injectMode: '翻译请求的提示词（不进主会话）',
     breaksCache: 'na',
     sourceFile: F.enIndex,
@@ -865,9 +770,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   },
   {
     key: 'translate:mt-strong',
-    zone: 'internal',
-    purpose: '翻译第②级：强指令（明确要求两行、不许合并）',
-    owner: '英文召回索引 · 翻译',
     injectMode: '翻译请求的提示词（不进主会话）',
     breaksCache: 'na',
     sourceFile: F.enIndex,
@@ -878,9 +780,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   },
   {
     key: 'translate:instruct',
-    zone: 'internal',
-    purpose: '翻译第③级 / instruct 模板：要 JSON（⚠️ 与解析器配对 —— 改提示词可以，改输出形态会让解析器失败）',
-    owner: '英文召回索引 · 翻译',
     injectMode: '翻译请求的提示词（不进主会话）',
     breaksCache: 'na',
     sourceFile: F.enIndex,
@@ -891,9 +790,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   },
   {
     key: 'tag:translate-system',
-    zone: 'internal',
-    purpose: '标签英文化（C 层）：把中文 tag 译成英文规范词，要 JSON',
-    owner: '标签规范化',
     injectMode: '子代理请求的提示词（不进主会话）',
     breaksCache: 'na',
     sourceFile: F.tagNorm,
@@ -907,9 +803,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   //      唯一判据来源 ⇒ 措辞一松就会拿无关知识去凑主题证据（本项目记过这个真实事故）。
   {
     key: 'reads:snapshot-closing',
-    zone: 'tools',
-    purpose: '读快照清单末尾的判据句：「读了不等于用上了，不相关的要排除」',
-    owner: 'memj_snapshots',
     injectMode: '工具返回值（进模型上下文；不进 node 0、不破前缀缓存）',
     breaksCache: 'no',
     sourceFile: F.reads,
@@ -924,9 +817,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   //    🔴 里面嵌着运行时才知道的值（节数、节名、每节用途、模板 id）⇒ 用插槽模板。
   {
     key: 'tpl:guidance-head',
-    zone: 'tools',
-    purpose: '写作指导的第一行：「本文档共 N 节（顺序固定，工具按此输出…）」',
-    owner: 'memj_read（按需注入）',
     injectMode: '工具返回值（进模型上下文；不进 node 0、不破前缀缓存）',
     breaksCache: 'no',
     sourceFile: F.templates,
@@ -940,9 +830,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   },
   {
     key: 'tpl:guidance-row',
-    zone: 'tools',
-    purpose: '写作指导的每一节那行：「`## 节名` —— 这一节要干嘛」',
-    owner: 'memj_read（按需注入）',
     injectMode: '工具返回值（进模型上下文；不进 node 0、不破前缀缓存）',
     breaksCache: 'no',
     sourceFile: F.templates,
@@ -960,9 +847,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   },
   {
     key: 'tpl:guidance-trunc-mark',
-    zone: 'tools',
-    purpose: '「本节会被自动截断归档」那个小标记（拼在节名行末尾）',
-    owner: 'memj_read（按需注入）',
     injectMode: '工具返回值（进模型上下文；不进 node 0、不破前缀缓存）',
     breaksCache: 'no',
     sourceFile: F.templates,
@@ -973,9 +857,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   },
   {
     key: 'tpl:guidance-no-trunc',
-    zone: 'tools',
-    purpose: '本模板没有可截断节时的如实说明（「文档不会自动瘦身」）',
-    owner: 'memj_read（按需注入）',
     injectMode: '工具返回值（进模型上下文；不进 node 0、不破前缀缓存）',
     breaksCache: 'no',
     sourceFile: F.templates,
@@ -986,9 +867,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   },
   {
     key: 'tpl:guidance-foot',
-    zone: 'tools',
-    purpose: '写作指导的收尾：「`## 沉淀知识` 由工具生成，不在上面这几节里」',
-    owner: 'memj_read（按需注入）',
     injectMode: '工具返回值（进模型上下文；不进 node 0、不破前缀缓存）',
     breaksCache: 'no',
     sourceFile: F.templates,
@@ -1006,9 +884,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   },
   {
     key: 'tpl:notice-templated',
-    zone: 'tools',
-    purpose: '找得到原模板时那份通知的外壳（含「按模板 X 生成」标题 + 正文）',
-    owner: 'memj_read（按需注入）',
     injectMode: '工具返回值（进模型上下文；不进 node 0、不破前缀缓存）',
     breaksCache: 'no',
     sourceFile: F.tools,
@@ -1026,9 +901,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   },
   {
     key: 'tpl:notice-fallback',
-    zone: 'tools',
-    purpose: '原模板已被删/改名时那份通知的外壳（从文档自己记着的节名还原）',
-    owner: 'memj_read（按需注入）',
     injectMode: '工具返回值（进模型上下文；不进 node 0、不破前缀缓存）',
     breaksCache: 'no',
     sourceFile: F.tools,
@@ -1046,9 +918,6 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
   },
   {
     key: 'tpl:notice-missing',
-    zone: 'tools',
-    purpose: '「原模板已不存在，上面这份是从文档自己记着的节名还原的」那句如实说明',
-    owner: 'memj_read（按需注入）',
     injectMode: '工具返回值（进模型上下文；不进 node 0、不破前缀缓存）',
     breaksCache: 'no',
     sourceFile: F.tools,
@@ -1061,6 +930,39 @@ export const PROMPT_SPECS: readonly PromptSpec[] = [
     ],
   },
 ]
+
+// ══════════════════════════════════════════════════════════════════════
+// ⭐⭐⭐ **把人读文案从目录注入**（2026-10-12）
+//
+// 🔴 **为什么用注入而不是让每条 spec 自己写**：`prompt-catalog.ts` 是**唯一出处**，
+//   而本模块是**程序语义**。分开之后：
+//     · 加一条 spec 却忘了写说明 ⇒ **检查脚本能报红**（以前做不到）；
+//     · 改文案不必碰程序逻辑。
+// ⚠️ **代价**：`PROMPT_SPECS` 由"纯字面量数组"变成"派生数组" ⇒ 静态扫源码看不出内容；
+//   本项目已有先例（`TOOL_META.flatMap` 派生的那些），照旧。
+// ══════════════════════════════════════════════════════════════════════
+
+/**
+ * 给每条 spec 从目录补上 `zone` / `purpose` / `owner`。
+ *
+ * ⚠️ **目录里没有的 key**：**不报错**（避免运行时炸），但会补一句显眼的占位说明，
+ *   并由 `scripts/check-prompt-specs.mjs` 的**检查 ④**在套件里报红。
+ * @param specs - 原始 spec 列表。
+ * @returns 补齐后的列表（顺序不变）。
+ */
+function withCatalog(specs: readonly PromptSpec[]): readonly PromptSpec[] {
+  return specs.map((s): PromptSpec => {
+    const c = PROMPT_CATALOG[s.key]
+    if (c === undefined) {
+      return { ...s, zone: 'tools', purpose: '（未登记说明）', owner: '（未登记）' }
+    }
+    return { ...s, zone: c.group, purpose: c.purpose, owner: c.owner }
+  })
+}
+
+/** ⭐ 【提示词】页的账本：**程序语义 + 目录文案**的合成结果。 */
+export const PROMPT_SPECS: readonly PromptSpec[] = withCatalog(PROMPT_SPECS_RAW)
+
 
 /** 按键取元数据。 */
 export function specOf(key: string): PromptSpec | undefined {

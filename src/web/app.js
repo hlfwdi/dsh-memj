@@ -28,19 +28,25 @@ const TABS = ['kb', 'projects', 'themes', 'hot', 'review', 'archive', 'settings'
 //    ⚠️ 2026-09-28：**「标签规范化」已从 index 页搬到 sink 页**（用户要求）——
 //       它是"沉淀之后的整理"，与"沉淀"同属**写入侧**；而英文索引服务于**召回**。
 //       ⭐ 所以 index 页的标签也从"索引与规范化"改成了"英文索引"。
-//    ⭐⭐⭐ 2026-09-29：**新增 `prompts`**（用户需求）——这一页的分区轴是
-//       **生效方式与影响面**（常驻/工具/内部），不是功能（见 `renderPromptsPage`）。
+//    ⭐⭐⭐ 2026-09-29：**新增 `prompts`**（用户需求）。
+//    ⭐⭐⭐ 2026-10-12：**该页的分组轴换成"谁在什么时候看到这段文本"**
+//       （旧轴"生效方式与影响面"对看页面的人没用 —— 用户原话：
+//        *"这样拆，每条都那么一两句话，完全不知道咋回事"*）。
+//       ⇒ **分组不再手写在前端**：由服务端 `GET /api/prompts` 的 `groups` 回，
+//         前端只负责画（本项目判据：能给人看的列表必须由服务端回结构化条目）。
 const SET_SUBTABS = ['sink', 'hot', 'active', 'index', 'prompts', 'templates']
 
 /**
- * ⭐⭐⭐ **【提示词】页的分区标题**（与 `prompts.ts` 的 `PromptZone` 一一对应）。
+ * ⭐⭐ **【提示词】页的分组排序兜底**（2026-10-12）。
  *
- * ⚠️ 顺序即展示顺序：常驻 → 工具 → 内部（**从"影响面最大"到"只影响插件内部"**）。
+ * 🔴 **分组本身由服务端回**（`state.promptGroups`，来自 `GET /api/prompts` 的 `groups`）——
+ *    这里**只留一份兜底顺序**，用于服务端没回（旧进程）时不至于乱序。
+ * ⚠️ **不在这里写组标题与说明**：那些是文案，唯一出处是 `src/prompt-catalog.ts`
+ *    （前端再抄一份必然漂开 —— 本项目已记过多次"多副本"的坑）。
  */
-const PROMPT_ZONES = [
-  { id: 'resident', listId: 'prompts-list-resident', label: '① 常驻文本' },
-  { id: 'tools', listId: 'prompts-list-tools', label: '② 工具与命令' },
-  { id: 'internal', listId: 'prompts-list-internal', label: '③ 内部提示词' },
+const PROMPT_GROUP_FALLBACK = [
+  'resident', 'tools', 'commands', 'actions', 'hot',
+  'recall', 'score', 'tags', 'translate', 'templates',
 ]
 
 /**
@@ -6313,8 +6319,27 @@ function renderHotPage() {
 /** 本页的内存态（列表 + 当前筛选 + 展开/编辑状态）。 */
 const promptState = {
   items: [],
+  /**
+   * ⭐⭐ **分组说明**（2026-10-12 新增）——由 `GET /api/prompts` 的 `groups` 回。
+   *
+   * 🔴 **为什么不让前端写死**：组标题与"这组是给谁看的"是**文案**，
+   *   唯一出处是 `src/prompt-catalog.ts`。前端再抄一份必然漂开
+   *   （本项目已记过多次"多副本"的坑）⇒ **服务端回结构化分组，前端只画**。
+   * ⚠️ 空数组 = 服务端没回（旧进程）⇒ 用 `PROMPT_GROUP_FALLBACK` 兜底。
+   * @type {Array<{ id: string, title: string, about: string, order: number }>}
+   */
+  groups: [],
   /** `all` | `overridden`（只看已改过的）。 */
   filter: 'all',
+  /**
+   * ⭐⭐ **哪些合并卡的「附：参数表 / 返回格式」是展开的**（2026-10-12 新增）。
+   *
+   * 🔴 **为什么必须记在状态里**：列表**每次操作都重画**（保存 / 筛选 / 懒加载回填），
+   *   而 `<details>` 的展开态是 **DOM 属性** ⇒ 重画后会**丢掉**。
+   *   ⚠️ 不记的话用户会看到"我展开看参数，它自己又合上了"。
+   *   ⭐ 这与本项目记过的"跨标签滚动记忆"同族：**重画才是状态丢失的原因**。
+   */
+  partsOpen: new Set(),
   /** 正在编辑的 key（空 = 没有）。 */
   editing: '',
   /** 各条当前生效文本（懒加载；`key → text`）。 */
@@ -6385,6 +6410,8 @@ async function openPromptsPage({ keepMessage = false } = {}) {
     const r = await getJson('/prompts')
     if (!r.ok) throw new Error(r.error ?? '读取失败')
     promptState.items = r.items ?? []
+    // ⭐⭐ **分组说明**（2026-10-12）：服务端回，前端只画（见 `promptState.groups` 的说明）。
+    promptState.groups = (r.groups ?? []).slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
     // ⭐⭐ **默认选中第一条**（用户要求"默认第一条"）。
     //    ⚠️ 只在"当前没选中、或选中的那条已不存在"时才改 ——
     //       否则每次刷新页面都会把你正在看的那条踢回第一条。
@@ -6415,48 +6442,121 @@ function renderPromptsPage() {
   renderPromptsDetailOrInline()
 }
 
-/** 画**左栏三个分区**的条目块（每块含完整六字段）。 */
+/**
+ * ⭐⭐⭐ **取当前该显示的条目**（筛选后）——并且**按需把工具的三部分合成一张卡**。
+ *
+ * 🔴 **为什么要合成**（2026-10-12，用户要求"该合并的合并"）：
+ *    一个工具原本在页面上占**三条**（说明书 / 参数表 / 返回格式），
+ *    而参数表与返回格式**只有两三行**（"本工具不需要参数"）⇒ 列表里全是碎片，
+ *    **看不出这是一个工具**。
+ * ⭐ **合成规则**：同一 `owner` 下的 `description` + `parameters` + `output`
+ *    合成**一个条目**，以 `description` 那条为代表（`key` = description 的 key）。
+ *    另两条挂在它的 `_parts` 上（前端**不显示为独立列表项**）。
+ *
+ * ⚠️ **只对 `tools` 分组生效**，且**只对有 `part` 字段的条目生效** ——
+ *    其余分组（命令、注入文本……）的条目**互不相干，不能合**。
+ * ⚠️ **筛选时按"整卡"判**：三条里任意一条被改过 ⇒ 整卡算"已改过"
+ *    （否则筛选到"已改过"时会看到一张缺了参数的卡）。
+ * @returns 列表项数组；每个元素形如 `{ rep, parts }`。
+ */
+function promptRows() {
+  const items = promptState.items
+  const overriddenOnly = promptState.filter === 'overridden'
+
+  // ── 先按 key 分组：把 tool:* 的三部分收进同一格 ──
+  const byOwner = new Map()
+  const order = []
+  for (const it of items) {
+    // ⭐ 只有"工具"这种带 `part` 的才合并；其余每条独立。
+    const groupKey = it.part !== '' && it.part !== undefined
+      ? `tool:${it.owner}`
+      : `solo:${it.key}`
+    if (!byOwner.has(groupKey)) { byOwner.set(groupKey, []); order.push(groupKey) }
+    byOwner.get(groupKey).push(it)
+  }
+
+  const rows = []
+  for (const gk of order) {
+    const group = byOwner.get(gk)
+    // 代表 = description（没有就取第一条）
+    const rep = group.find((x) => x.part === 'description') ?? group[0]
+    const parts = group.filter((x) => x.key !== rep.key)
+    const anyOverridden = group.some((x) => x.overridden)
+    if (overriddenOnly && !anyOverridden) continue
+    rows.push({ rep, parts, anyOverridden })
+  }
+  return rows
+}
+
+/**
+ * 画**左栏分组的条目块**（2026-10-12 改版）。
+ *
+ * 🔴 **分组由服务端回**（`promptState.groups`）⇒ 这里**动态建 DOM**
+ *    （旧版是三个手写死的 `<section>`）。⭐ 这样增删分组**不用改前端**。
+ * ⚠️ **兜底**：服务端没回 `groups`（例如页面连到旧进程）时用 `PROMPT_GROUP_FALLBACK`
+ *    的顺序，标题退化成 group id（**难看但能读**，且不会空白）。
+ */
 function renderPromptsList() {
-  for (const z of PROMPT_ZONES) {
-    const box = document.getElementById(z.listId)
-    if (!box) continue
-    const zoneItems = promptState.items.filter(
-      (it) => it.zone === z.id && (promptState.filter !== 'overridden' || it.overridden),
-    )
-    box.replaceChildren()
-    if (zoneItems.length === 0) {
-      box.append(h('p', { class: 'set-desc', text: promptState.filter === 'overridden' ? '这个分区里没有改过的条目。' : '（无）' }))
-      continue
-    }
-    for (const it of zoneItems) box.append(promptCard(it))
+  const host = document.getElementById('prompts-groups')
+  if (!host) return
+  const rows = promptRows()
+
+  // 分组清单：服务端优先，兜底用本地顺序
+  const groups = promptState.groups.length > 0
+    ? promptState.groups
+    : PROMPT_GROUP_FALLBACK.map((id) => ({ id, title: id, about: '', order: 0 }))
+
+  host.replaceChildren()
+  let rendered = 0
+  for (const g of groups) {
+    const gRows = rows.filter((r) => r.rep.zone === g.id)
+    if (gRows.length === 0) continue
+    rendered += gRows.length
+
+    const sec = h('section', { class: 'set-section' })
+    sec.dataset.promptGroup = g.id
+    sec.append(h('h3', { class: 'set-section-title', text: g.title }))
+    // ⭐⭐ **组说明**——用户要的"这组是给谁看的、什么时候看"（服务端回，前端不编）。
+    if (g.about) sec.append(h('p', { class: 'prompt-group-about', text: g.about }))
+    const box = h('div', { class: 'prompt-list' })
+    for (const r of gRows) box.append(promptCard(r))
+    sec.append(box)
+    host.append(sec)
+  }
+  if (rendered === 0) {
+    host.append(h('p', { class: 'set-desc', text: promptState.filter === 'overridden' ? '没有改过的条目。' : '（无）' }))
   }
   const cnt = document.getElementById('prompts-count')
-  if (cnt) cnt.textContent = String(promptState.items.filter((it) => promptState.filter !== 'overridden' || it.overridden).length)
+  if (cnt) cnt.textContent = String(rendered)
 }
 
 /**
  * ⭐ **画「跳到」下拉**（用户要求：把条目按标题列出来，选一条就跳，免得划很久）。
  *
  * ⚠️ **每次重画都重建选项**（列表/筛选会变，缓存会漂）；
- *    并用 `optgroup` 按分区归类，长列表里好找。
+ *    并用 `optgroup` 按**分组**归类，长列表里好找。
+ * ⚠️ **下拉里只列"代表条目"** —— 与左栏列表**同一份数据源**（`promptRows()`），
+ *    否则会出现"下拉里能选、列表里没有"的不一致。
  */
 function renderPromptsJump() {
   const sel = document.getElementById('prompts-jump')
   if (!sel) return
   sel.replaceChildren()
-  for (const z of PROMPT_ZONES) {
-    const items = promptState.items.filter(
-      (it) => it.zone === z.id && (promptState.filter !== 'overridden' || it.overridden),
-    )
-    if (items.length === 0) continue
+  const rows = promptRows()
+  const groups = promptState.groups.length > 0
+    ? promptState.groups
+    : PROMPT_GROUP_FALLBACK.map((id) => ({ id, title: id, about: '', order: 0 }))
+  for (const g of groups) {
+    const gRows = rows.filter((r) => r.rep.zone === g.id)
+    if (gRows.length === 0) continue
     const grp = document.createElement('optgroup')
-    grp.label = z.label
-    for (const it of items) {
+    grp.label = g.title
+    for (const r of gRows) {
       const o = document.createElement('option')
-      o.value = it.key
+      o.value = r.rep.key
       // ⚠️ 只给标题（`owner`）——用户要的是"把对应提示词标题列出来"。
-      o.textContent = it.overridden ? `${it.owner}（已改过）` : it.owner
-      if (it.key === promptState.selected) o.selected = true
+      o.textContent = r.anyOverridden ? `${r.rep.owner}（已改过）` : r.rep.owner
+      if (r.rep.key === promptState.selected) o.selected = true
       grp.append(o)
     }
     sel.append(grp)
@@ -6471,6 +6571,7 @@ function renderPromptsJump() {
   // 一个都没有（筛选后为空）⇒ 清掉选中，右栏显示空态。
   if (first === null) promptState.selected = ''
 }
+
 
 /**
  * ⭐⭐⭐ **右栏（宽屏）/ 卡片就地展开（窄屏）** —— 同一份逻辑按宽度分流。
@@ -6498,13 +6599,22 @@ function selectedPrompt() {
 }
 
 /**
- * **画一条提示词的卡片**（含六个说明字段 + 展开查看/编辑）。
+ * **画一条提示词的卡片**（含说明字段 + 展开查看/编辑）。
+ *
+ * ⭐⭐ **2026-10-12 改版：一个工具 = 一张卡**（用户要求"该合并的合并"）。
+ *    旧版一个工具占**三条**（说明书 / 参数表 / 返回格式），而后者往往只有两三行
+ *    ⇒ 列表里全是碎片、**看不出这是一个工具**。
+ *    ⇒ 现在由 `promptRows()` 把它们合成一行，本函数接受 `{ rep, parts, anyOverridden }`：
+ *      `rep` 是代表条目（description），`parts` 是随行的参数表 / 返回格式。
  *
  * ⭐ 六个字段**逐条显示**（用户要求）：干什么 / 属于谁 / 注入方式 / 破缓存 / 源文件 / 热生效。
- * @param it - 服务端回的条目。
+ * @param row - `promptRows()` 产出的一行：`{ rep, parts, anyOverridden }`。
  * @returns 卡片元素。
  */
-function promptCard(it) {
+function promptCard(row) {
+  const it = row.rep
+  const parts = row.parts ?? []
+  const anyOverridden = row.anyOverridden === true
   const card = h('div', { class: 'prompt-card' })
   // ⭐⭐ **给卡片一个稳定标识**（`data-prompt-key`）。
   //    🔴 **为什么必须有**：CDP 探针原先按**下标**取卡片（`cards[idx]`），而卡片会被
@@ -6513,25 +6623,62 @@ function promptCard(it) {
   //    ⭐ 有了这个属性，探针可以直接 `querySelector('[data-prompt-key="…"]')` ——
   //    既稳，也让"测的是哪一条"在 DOM 里可读。
   card.dataset.promptKey = it.key
+  // ⭐ 合并卡：把随行的 key 也写进 DOM，探针/测试能据此断言"这三条确实在一张卡里"。
+  if (parts.length > 0) card.dataset.promptParts = parts.map((p) => p.key).join(',')
 
   // ── 标题行：工具/功能名 + 标记 ──
   const head = h('div', { class: 'prompt-head' })
   head.append(h('strong', { text: it.owner }))
   // ⭐ "已改过"标记：让用户一眼看出哪些不是原版。
-  if (it.overridden) head.append(h('span', { class: 'prompt-tag prompt-tag-changed', text: '已改过' }))
+  //    ⚠️ 合并卡按**整卡**判（三条里任意一条被改过就算）—— 否则筛选到"已改过"时
+  //       会看到一张缺了参数的卡（`promptRows()` 里已按整卡筛）。
+  if (anyOverridden) head.append(h('span', { class: 'prompt-tag prompt-tag-changed', text: '已改过' }))
   // ⭐⭐ 写回三态标签（2026-10-12 新增）。
   //    🔴 **为什么必须显示**：写回**保留覆盖项**（用户裁定）⇒ 覆盖值会一直挡着源码。
   //      不显示状态的话，用户**看不出写回做过没有**，也看不出"改了源码怎么没生效"。
-  if (it.writeBackState === 'written') {
-    head.append(h('span', { class: 'prompt-tag prompt-tag-written', text: '✅ 已写回源码' }))
-  } else if (it.writeBackState === 'edited') {
+  const wbStates = [it, ...parts].map((x) => x.writeBackState).filter((s) => s !== '')
+  if (wbStates.includes('edited')) {
     head.append(h('span', { class: 'prompt-tag prompt-tag-edited', text: '⚠️ 已改未写回' }))
+  } else if (wbStates.includes('written')) {
+    head.append(h('span', { class: 'prompt-tag prompt-tag-written', text: '✅ 已写回源码' }))
   }
   if (!it.editable) head.append(h('span', { class: 'prompt-tag', text: '只读' }))
   card.append(head)
 
   // ── 干什么 ──
   card.append(h('p', { class: 'prompt-purpose', text: it.purpose }))
+
+  // ── ⭐⭐ **随行的参数表 / 返回格式**（合并卡才有）──
+  //
+  // 🔴 **为什么要显示**：旧版它们是**两个独立列表项**，而正文（渲染后的 schema 文本）
+  //    在旧构建里是**空的** ⇒ 用户看到"列了却没内容"。
+  //    ⇒ 现在①合并进本卡 ②正文有真内容（`tools.ts` 注册时渲染后登记）。
+  // ⚠️ **默认折叠**（`<details>`）：它们通常很短，展开会撑长列表。
+  if (parts.length > 0) {
+    const det = document.createElement('details')
+    det.className = 'prompt-parts'
+    // ⭐ 记住展开状态：列表重画（保存/筛选/加载）时不该把用户展开的卡收回去。
+    //    ⚠️ 否则会出现"我展开看参数，它自己又合上了"（与本项目记过的"重画冲掉状态"同族）。
+    if (promptState.partsOpen.has(it.key)) det.open = true
+    det.addEventListener('toggle', () => {
+      if (det.open) promptState.partsOpen.add(it.key)
+      else promptState.partsOpen.delete(it.key)
+    })
+    const sum = document.createElement('summary')
+    const names = { parameters: '参数表', output: '返回格式' }
+    sum.textContent = `附：${parts.map((p) => names[p.part] ?? p.part).join(' / ')}（只读）`
+    det.append(sum)
+    for (const p of parts) {
+      // 🔴 **缺正文就自己拉**（与 `promptDetailPane` 同一手法）——
+      //    ⚠️ 只靠 `loadPromptText` 那条路不够：卡片**渲染时**就该发起加载，
+      //      否则用户展开会一直停在"读取中…"（**假加载态**，本批实测踩到）。
+      const txt = promptState.text[p.key]
+      if (txt === undefined) void loadPromptText(p.key)
+      det.append(h('p', { class: 'prompt-part-label', text: `▸ ${names[p.part] ?? p.part} —— ${p.purpose}` }))
+      det.append(h('pre', { class: 'prompt-pre prompt-part-pre', text: txt ?? '读取中…' }))
+    }
+    card.append(det)
+  }
 
   // ── 说明表（六件事里的后四件；前两件在标题与 purpose 里）──
   const rows = h('div', { class: 'prompt-meta' })
@@ -6565,10 +6712,13 @@ function promptCard(it) {
     else if (c.kind === 'englishOnly') checkNotes.push('必须全英文（中文会让该功能静默失效）')
     else if (c.kind === 'fencesBalanced') checkNotes.push('markdown 围栏必须成对')
     else if (c.kind === 'nonEmpty') checkNotes.push('不能为空')
+    // ⭐ 插槽校验要把"必须保留哪些"说清（否则用户改错名字只知道被拒，不知道正确的名字）。
+    else if (c.kind === 'slots') checkNotes.push(`必须保留插槽：${(c.tokens ?? []).map((t) => `{{${t}}}`).join('、')}`)
   }
   if (checkNotes.length > 0) {
     card.append(h('p', { class: 'set-desc', text: `保存时会校验：${checkNotes.join('；')}。` }))
   }
+
 
   // ── 点整块 = 选中（宽屏）/ 展开（窄屏）──
   //

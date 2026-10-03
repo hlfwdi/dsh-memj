@@ -119,6 +119,42 @@ try {
       : '🔴 这些条的**默认模板自己不满足自己的 slots 规则** ⇒ 「恢复默认」会存不进去：\n     ' +
         bad.join('\n     '),
   )
+
+  // ── 检查 ④：**目录覆盖双向一致**（2026-10-12 新增）──
+  //
+  // 🔴🔴 **为什么必须有**：2026-10-12 的重构把「人读文案」（分区/用途/归属）
+  //   从 `prompts.ts` 搬到了 `prompt-catalog.ts`。搬完之后就出现了**新的漂移风险**：
+  //     · 加了一条 spec 却忘了写目录条目 ⇒ 页面显示「（未登记说明）」；
+  //     · 目录里留了一条已经不存在的 spec ⇒ 页面少一条、**而没有任何机制会报**。
+  //   ⭐ 判据同本项目一贯：**同一事实被两条路各自维护 ⇒ 必须各配一条能报红的检查**。
+  //   （这正是本批之前踩过三次的形态：TOOL_META / sourceConst / registerPromptDefault。）
+  console.log('\n=== ④ 目录覆盖是否双向一致 ===')
+  const specKeys = new Set(specs.map((s) => s.key))
+  const noCatalog = specs.filter((s) => mod.catalogOf(s.key) === undefined).map((s) => s.key)
+  const orphan = Object.keys(mod.PROMPT_CATALOG).filter((k) => !specKeys.has(k))
+  check(
+    noCatalog.length === 0,
+    noCatalog.length === 0
+      ? `每条 spec 都有目录条目（共 ${specKeys.size} 条）`
+      : '🔴 这些 spec **没有目录条目** ⇒ 页面上会显示「（未登记说明）」：\n     ' +
+        noCatalog.join('、') +
+        '\n     ⇒ 修法：在 `src/prompt-catalog.ts` 的 `PROMPT_CATALOG` 补一条。',
+  )
+  check(
+    orphan.length === 0,
+    orphan.length === 0
+      ? '目录里没有多余的 key（没有指向已删除的 spec）'
+      : '🔴 这些**目录条目指向不存在的 spec**（多半是删 spec 时忘删说明）：\n     ' +
+        orphan.join('、'),
+  )
+  // 顺带：分组 id 必须是受控的十个之一（防止手写错组名导致前端分组消失）
+  const badGroup = specs.filter((s) => mod.PROMPT_GROUPS[s.zone] === undefined).map((s) => `${s.key}（zone=${String(s.zone)}）`)
+  check(
+    badGroup.length === 0,
+    badGroup.length === 0
+      ? '每条的分组 id 都在受控词表里'
+      : '🔴 这些条目的分组 id 不在 `PROMPT_GROUPS` 里 ⇒ 前端会漏渲染：\n     ' + badGroup.join('、'),
+  )
 } catch (err) {
   check(false, '能加载 lib/index.js 取 PROMPT_SPECS', err instanceof Error ? err.message : String(err))
 } finally {

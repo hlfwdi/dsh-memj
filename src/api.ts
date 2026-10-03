@@ -27,6 +27,8 @@ import {
   savePromptOverride,
   specOf,
 } from './prompts.ts'
+// ⭐⭐ 分组说明（页面用）——人读文案的唯一出处，见那个模块的头注释。
+import { PROMPT_GROUPS, catalogOf } from './prompt-catalog.ts'
 // ⭐⭐⭐ 写回源码（2026-10-12 新增）——注意它在**单独模块**里，不在 `prompts.ts`
 //    （那个模块要 import `paths.ts` 的 `pluginRoot()`，而 `prompts.ts` 是叶子模块、
 //      不 import 任何提示词源模块 ⇒ 放进去会破坏那条依赖纪律）。
@@ -1355,6 +1357,8 @@ export async function handleApi(
           kind: c.kind,
           max: c.kind === 'maxChars' ? c.max : 0,
           why: c.kind === 'maxChars' ? c.why : '',
+          // ⭐ 插槽校验要把它要求的插槽名回给前端（页面据此显示"必须保留哪些"）。
+          tokens: c.kind === 'slots' ? [...c.tokens] : [],
         })),
         overridden: hasOverride(s.key),
         textLen: promptCurrent(s.key).length,
@@ -1364,10 +1368,19 @@ export async function handleApi(
         canWriteBack: s.editable === true && (s.sourceConst ?? '') !== '',
         writeBackState: s.editable === true ? writeBackState(s.key) : '',
         sourceConst: s.sourceConst ?? '',
+        // ⭐⭐⭐ **工具条目的"部位"**（2026-10-12 新增）——前端据此把同一工具的 3 条
+        //   **折成一张卡**（用户要求"该合并的合并"）。
+        //   ⚠️ 非工具条目回空串。
+        part: catalogOf(s.key)?.part ?? '',
       }))
+      // ⭐⭐ **分组说明也回给前端**（不只是 id）——本项目判据：
+      //    **能给人看的列表必须由服务端回结构化条目**，不让前端自己维护一份说明。
+      const groups = Object.entries(PROMPT_GROUPS)
+        .map(([id, g]) => ({ id, title: g.title, about: g.about, order: g.order }))
+        .sort((a, b) => a.order - b.order)
       return {
         status: 200,
-        body: { ok: true, items, overridesPath: promptOverridesPath() },
+        body: { ok: true, items, groups, overridesPath: promptOverridesPath() },
       }
     }
 

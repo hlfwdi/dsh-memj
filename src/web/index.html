@@ -1009,7 +1009,7 @@
             <label class="set-label" for="prompts-jump"><strong>选择要修改的提示词</strong></label>
             <select id="prompts-jump"></select>
           </div>
-          <p class="set-desc">共 <span id="prompts-count">0</span> 条。按分区与归属列出，选中即切换到那一条。</p>
+          <p class="set-desc">共 <span id="prompts-count">0</span> 条。按「<strong>谁在什么时候看到它</strong>」分成若干组，选中即切换到那一条。</p>
         </div>
         <div class="set-item">
           <div class="set-choices">
@@ -1021,23 +1021,12 @@
         <p class="set-desc" id="prompts-overrides-path"></p>
       </div>
 
-      <div class="prompt-side-scroll">
-        <!-- 三个分区（组头保留 —— 分区轴本身是重要信息：生效方式不同）。
-             ⚠️ 列表由 JS 渲染（`renderPromptsPage()`）——分块不适合手写死。 -->
-        <section class="set-section" id="prompts-zone-resident">
-          <h3 class="set-section-title">① 常驻文本<span class="dim"> —— 每轮都进上下文</span></h3>
-          <div class="prompt-list" id="prompts-list-resident"></div>
-        </section>
-
-        <section class="set-section" id="prompts-zone-tools">
-          <h3 class="set-section-title">② 工具与命令<span class="dim"> —— 模型据此决定怎么调</span></h3>
-          <div class="prompt-list" id="prompts-list-tools"></div>
-        </section>
-
-        <section class="set-section" id="prompts-zone-internal">
-          <h3 class="set-section-title">③ 内部提示词<span class="dim"> —— 插件自己调 LLM 用</span></h3>
-          <div class="prompt-list" id="prompts-list-internal"></div>
-        </section>
+      <div class="prompt-side-scroll" id="prompts-groups">
+        <!-- ⭐⭐⭐ **分组由服务端回、前端动态渲染**（2026-10-12 改版）。
+             🔴 **为什么不再手写死三个分区**：分组轴改成了"**谁在什么时候看到这段文本**"
+               （用户提出的判据）⇒ 从 3 组变成 10 组；且每组都带一句"这组是给谁看的"。
+             ⭐ 服务端回结构化分组（本项目判据：能给人看的列表必须由服务端回结构化条目），
+               前端只负责画 —— 这样加/改组**不用改前端**。 -->
       </div>
     </div>
 
