@@ -119,7 +119,8 @@ console.log('\n【5】端到端：用模板建项目 ⇒ 文档里每节都有�
   check('⭐ 规范块里是该模板的 desc', d?.narrative.includes('这家公司要回答什么问题') === true)
   check('⭐⭐ 文档里**没有**末尾的「本档写作规范」节', !d?.narrative.includes('## 本档写作规范'))
   check('⭐ frontmatter 的 truncateSections 从规范块反解', (d?.frontmatter.truncateSections ?? []).join(',') === '证据')
-  check('frontmatter 的 sections 是正文镜像', (d?.frontmatter.sections ?? []).join(',') === '研究目标,证据')
+  // ⭐ 2026-10-05：`sections` 字段已删 ⇒ 直接看正文（权威）。
+  check('⭐ 正文里的节名正确', mod.sectionsFromNarrative(d?.narrative ?? '').join(',') === '研究目标,证据')
 
   await mod.appendDocRead('s-e2e', { project: 'e2e-proj', turn: 2, readAt: new Date().toISOString(), full: true, sections: [] })
   const r2 = await mod.runHandoff(
@@ -130,7 +131,7 @@ console.log('\n【5】端到端：用模板建项目 ⇒ 文档里每节都有�
   const d2 = await mod.loadProjectDoc('e2e-proj')
   check('⭐⭐ 规范块**没被模型回传的正文冲掉**', d2?.narrative.includes('这家公司要回答什么问题') === true)
   check('⭐ 正文确实更新了', d2?.narrative.includes('甲改过了。') === true)
-  check('⭐ 节名仍按文档自己', (d2?.frontmatter.sections ?? []).join(',') === '研究目标,证据')
+  check('⭐ 节名仍按文档自己', mod.sectionsFromNarrative(d2?.narrative ?? '').join(',') === '研究目标,证据')
 }
 
 console.log('\n【6】红线：存量老文档**不该**被合成规范（决策 207 的裁定仍在）')

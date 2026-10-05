@@ -411,23 +411,16 @@ export function cutKnowledgeSection(text: string): string {
 }
 
 /**
- * ⭐⭐⭐ **取"这份文档自己的节名清单"**（决策 204）——所有机制的**统一入口**。
+ * 🔴 **`sectionsOf()` 已删除**（2026-10-05）。
  *
- * 🔴🔴 **为什么必须有它**：交接文档的节名从"全局硬编码六节"变成了
- *   "**每份文档自己记一份**"（`ProjectFrontmatter.sections`，支持用户自定义模板）。
- *   任何要按节工作的机制（合并 / 截断 / 回执 / 骨架重建）**都必须经由本函数**取节名，
- *   而不是直接用 `NARRATIVE_TITLES` —— 否则它会**按错误的节名工作**
- *   （表现为：自定义模板的文档里，那些机制静默失效或错位）。
+ * 它原先的职责是"取文档记着的节名；**没记就回落默认六节**"——
+ * 而"记在哪"这个前提已经消失（封面的 `sections` 字段删掉了，模板也走 md 了）。
  *
- * ⭐ **回落规则**：文档没记节名（老文档 / 未指定）⇒ **默认六节**。
- *   ⇒ 这就是**零行为变化**的保证：改造前建的所有文档行为一字不变。
- * @param sections - 文档 frontmatter 里的节名清单（可能为空）。
- * @returns 该文档的节名（顺序即文档顺序）。
+ * ⭐ **删掉它带来的语义变化（用户裁定）**：
+ *   旧：文档没声明节名 ⇒ **回落默认六节**（于是"没声明"会被当成"默认六节"）；
+ *   新：**正文里没有节 ⇒ 就是没有** —— 由调用方决定怎么办（要骨架就去问模板）。
+ *   ⇒ ⭐ 判据：**"没写"与"写了但为空"必须是两个状态**，不能靠回落把前者伪装成后者。
  */
-export function sectionsOf(sections: readonly string[] | undefined): readonly string[] {
-  const cleaned = (sections ?? []).map((s) => s.trim()).filter((s) => s !== '')
-  return cleaned.length > 0 ? cleaned : NARRATIVE_TITLES
-}
 
 /**
  * ⭐⭐⭐ **从文档正文的 `## ` 标题推导节名清单**（2026-10-12，本函数的诞生是一次真 bug 的根治）。
@@ -477,24 +470,21 @@ export function sectionsFromNarrative(narrative: string): string[] {
  * ⭐⭐⭐ **取"这份文档自己的节名清单"的唯一入口**（2026-10-12 起）——**正文优先**。
  *
  * 🔴🔴 **两处权威、优先级固定，别调换**：
- *   ① ⭐ **正文的 `##` 标题**（`sectionsFromNarrative`）——**权威**，因为它是
- *      `rebuildDerivedLayers()` 唯一不碰的地方（见该函数注释里的实测证据）；
- *   ② **frontmatter 的 `sections`** —— **兼容读**：正文里一个叙事节都没有时
- *      （老文档、或刚建的骨架还没落正文）才用它。
- *   ③ 两者都空 ⇒ **默认六节**（改造前的行为，零变化保证）。
+ *   ① ⭐ **正文的 `##` 标题**（`sectionsFromNarrative`）——**唯一权威**。
+ *      理由（实测）：它是 `rebuildDerivedLayers()` 唯一不碰的地方；
+ *   ② 正文里**一个叙事节都没有**（空骨架 / 刚建还没落正文）⇒ 空数组，
+ *      由调用方决定去要模板骨架 —— ⚠️ **不再回落"默认六节"**（见下）。
  *
- * ⚠️ **为什么不把 frontmatter 一并"合并"进来**：两份清单不一致时合并会**造出第三节清单**
- *   （既不是文档现状、也不是建档契约）⇒ 后续"结构不一致检出"就无从判断了。
- *   这里刻意**只用正文**，把 frontmatter 当**候选证据**交给回执去报（见 `handoff` 的检出段）。
- *
+ * 🔴🔴 **2026-10-05（本次）：`frontmatter.sections` 已删除、`sectionsOf()` 的回落也删了。**
+ *   起因：模板完全走 md 文档之后，封面那行 `sections:` 成了**节名的最后一份副本**，
+ *   而"空 ⇒ 默认六节"这条回落**有副作用**：它让"**没声明**"与"**声明了但为空**"
+ *   无法区分（`defaultTruncateTitle` 的判据分两步就是被它逼出来的，见 `schema.ts`）。
+ *   ⇒ 现在的语义**更简单也更直白**：**节名只看正文；正文没写就没有**。
  * @param narrative - 纯叙事文本（可传 `''`）。
- * @param declared - 文档 frontmatter 里的节名清单（兼容读用）。
- * @returns 该文档的节名（顺序即文档顺序）。
+ * @returns 该文档的节名（顺序即文档顺序）；正文没有叙事节 ⇒ 空数组。
  */
-export function docSectionsOf(narrative: string, declared: readonly string[] | undefined): readonly string[] {
-  const fromBody = sectionsFromNarrative(narrative)
-  if (fromBody.length > 0) return fromBody
-  return sectionsOf(declared)
+export function docSectionsOf(narrative: string): readonly string[] {
+  return sectionsFromNarrative(narrative)
 }
 
 /**

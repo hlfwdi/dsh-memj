@@ -63,7 +63,6 @@ import {
   extractSpecBlockLines,
   extractSpecSection,
   sectionsFromNarrative,
-  sectionsOf,
   SPEC_BLOCK_FENCE,
   specBlockRange,
   stripAllSpecBlocks,
@@ -800,7 +799,7 @@ export function applySectionOp(
  * 把叙事**规范成固定的节结构**（§3.1「顺序固定」）。
  *
  * ⚠️ **"固定"指的是"按该文档自己的节名清单固定"**，不是"固定六节" ——
- *    节名来自 `titles` 参数（`sectionsOf(fm.sections)`），自定义模板完全不同。
+ *    节名来自 `titles` 参数（= **正文里的 `##` 标题**），自定义模板完全不同。
  *
  * 🔴 **为什么必须规范化**：LLM 可能只写了其中几节（"这次没有踩坑"很常见）。
  * 若不补齐，文档结构就会随每次调用漂移——而设计明确要求**顺序固定**，
@@ -813,7 +812,7 @@ export function applySectionOp(
  * 4. 同名节出现多次 ⇒ 内容合并到该节。
  * @param text - 原始叙事文本。
  * @param titles - ⭐ **该文档的节名清单**（决策 204）。省略 ⇒ 默认六节。
- *   🔴 **必须用 `sectionsOf(fm.sections)` 的结果传入**（自定义模板的文档靠它）。
+ *   🔴 **必须用该文档【正文】里的节名传入**（自定义模板的文档靠它）。
  * @returns 规范化后的叙事。
  */
 export function normalizeNarrative(text: string, titles: readonly string[] = NARRATIVE_TITLES): string {
@@ -885,7 +884,7 @@ export function normalizeNarrative(text: string, titles: readonly string[] = NAR
  * @param incoming - 本次 `doc`（可能只含部分节）。
  * @param existing - 旧叙事（可能为 `undefined` = 新项目）。
  * @param titles - ⭐ **该文档的节名清单**（决策 204）。省略 ⇒ 默认六节。
- *   🔴 **必须用 `sectionsOf(existingFm.sections)` 的结果传入** ——
+ *   🔴 **必须用该文档【正文】里的节名传入** ——
  *   否则自定义模板的文档会被"按默认六节合并"，表现为**节错位 / 旧节永远留着**。
  * @returns 合并后的完整叙事。
  */
@@ -1108,19 +1107,24 @@ function narrativeTopSections(narrative: string): string[] {
  * 🔴🔴 **2026-10-12 起：正文优先**（与节名同一取向，见 `docSectionsOf`）。
  *   原先只读 `frontmatter.truncateSections`，而那个字段会被
  *   `rebuildDerivedLayers()` 的旁路重写**抹掉**（实测复现）⇒ "哪节能截"丢失。
- *   现在：**规范节里写着的那份**（正文，权威）→ frontmatter → 默认六节的目标。
+ *   现在：**规范块里写着的那份**（正文，权威）→ frontmatter。
  *
  * ⚠️ **判据顺序有意义（别调换）**：
- *   ① 正文规范节里解析出「有截断标记」的节 ⇒ 用它（**哪怕结果为空数组**：那是"真的不截"）；
- *   ② 正文没有规范节（老文档）⇒ 看 frontmatter：`sections` 空 ⇒ 默认六节目标；
- *      `sections` 非空 ⇒ 以 `truncateSections` 为准（空 = 不截，**不猜**）。
- * @param sections - 文档 frontmatter 里的节名清单。
+ *   ① 正文规范块里解析出「有截断标记」的节 ⇒ 用它；
+ *   ② 旧形态规范节（存量）⇒ 从它反解；
+ *   ③ **都没有 ⇒ 以 `truncateSections` 为准**（空 = **真的不截**）。
+ *
+ * 🔴🔴 **2026-10-05 改（用户裁定）**：**③ 不再有"回落默认六节"那一支** ——
+ *   `sections` 字段整个删掉了（模板走 md 之后，它只是节名的最后一份副本）。
+ *   新语义一句话：**正文规范里没写 `truncate` ⇒ 就是不截**。
+ *   ⭐ 判据：**"没声明"与"声明了但为空"必须是两个状态**；
+ *      用"空 ⇒ 回落默认值"把前者伪装成后者，正是本项目反复踩的那类坑
+ *      （老文档被静默补上默认六节的目标 ⇒ 截断开关悄悄被打开 / 关掉）。
  * @param truncateSections - 文档 frontmatter 里的截断目标节（**可多个**，决策 206）。
- * @param narrative - 纯叙事文本（含规范节；**权威来源**）。
+ * @param narrative - 纯叙事文本（含规范块；**权威来源**）。
  * @returns 要截断的节名数组；空数组 = 不截。
  */
 function defaultTruncateTitle(
-  sections: readonly string[] | undefined,
   truncateSections: readonly string[] | undefined,
   narrative?: string,
 ): string[] {
@@ -1134,9 +1138,8 @@ function defaultTruncateTitle(
   //    （存量、或用户手写的），仍从它反解 —— 否则那些文档会**静默变成"不截"**。
   const legacy = extractSpecSection(narrative ?? '')
   if (legacy.trim() !== '') return truncateTitlesFromSpec(legacy)
-  // ② 回落 frontmatter（老文档 / 还没生成规范块）。
-  const mine = (sections ?? []).map((s) => s.trim()).filter((s) => s !== '')
-  if (mine.length === 0) return [PROGRESS_TITLE]
+  // ③ **以 frontmatter 的 `truncateSections` 为准**（空 = 真的不截）。
+  //    🔴 这里**不再有"回落默认六节"那一支**（2026-10-05 用户裁定，见函数注释）。
   return (truncateSections ?? []).map((s) => s.trim()).filter((s) => s !== '')
 }
 
@@ -1788,7 +1791,7 @@ export async function runHandoff(
   // ⚠️ **`templateId` 是纯记录**（哪份文档按哪套结构建的）；真正生效的是节名。
   // ══════════════════════════════════════════════════════════════════════
   const isNewProjForTpl = existing === undefined
-  let newSections: string[] = existing?.frontmatter.sections ?? []
+  let newSections: string[] = []
   let templateId = existing?.frontmatter.template ?? ''
   let newTruncateSection: string[] = existing?.frontmatter.truncateSections ?? []
   /** ⭐ 本次真正用的那份模板（**只用于回执现报节数**，见下方赋值处）。 */
@@ -1800,25 +1803,28 @@ export async function runHandoff(
    *   起因是一次实测复现的损坏：`rebuildDerivedLayers()` 汇总 `themes:` 时
    *   **手工重写 frontmatter**，而它那张字段表里**没有 `sections`**
    *   ⇒ 一旦触发重写就把 `sections` / `truncateSections` / `template` 整行抹掉
-   *   ⇒ `sectionsOf(空)` 回落默认六节 ⇒ **自定义模板的文档被按默认六节理解**
+   *   ⇒ 那时"节名"只能回落默认六节 ⇒ **自定义模板的文档被按默认六节理解**
    *   ⇒ 下次 handoff 只更新一节时，**六个默认空壳节被插到最前面**
    *   （实测 6 → 12 节；生产 `metax-688802` 的镜像里留过一次 6 → 43 节的真现场）。
    *   ⭐ 正文是 `rebuildDerivedLayers()` **唯一逐字保留**的东西（实测 sha256 相同）
    *   ⇒ 把权威放在正文，这**整类**失败模式从结构上消失。
    */
-  let docSections: readonly string[] = docSectionsOf(
-    existing?.narrative ?? '',
-    existing?.frontmatter.sections,
-  )
+  let docSections: readonly string[] = docSectionsOf(existing?.narrative ?? '')
   /** 该文档要截断的**那些**节（决策 206：可多节；空数组 = 不截）。 */
   let docTruncateTitle: string[] = defaultTruncateTitle(
-    existing?.frontmatter.sections,
     existing?.frontmatter.truncateSections,
     existing?.narrative,
   )
 
   if (isNewProjForTpl) {
     const wantTpl = (req.template ?? '').trim()
+    // ⭐⭐ **不给 `template` ⇒ 用"当前生效的默认模板"**（决策 208：它也落盘、用户可能改过）。
+    //
+    // 🔴🔴 **2026-10-05 必须显式做这一步**（本次删 `sections` 带出来的连带改动）：
+    //    以前"没给模板"时，骨架靠 `sectionsOf(空)` 的**回落默认六节**兜住；
+    //    而那个回落已随 `sections` 一起删掉 ⇒ 不显式取模板的话 `newSections` 会是**空数组**
+    //    ⇒ **建出来的文档一个节都没有**（实测：test-handoff "含默认六节" 当场报红）。
+    //    ⭐ 判据：**删掉一个"回落"时，必须找出所有【依赖那个回落】的调用点并显式补上**。
     if (wantTpl !== '') {
       // ⭐⭐ 决策 208：`default` **也落盘了**，用户可能改过它
       //    ⇒ 必须走 `loadDefaultTemplate()`（磁盘优先、回落内置），
@@ -1834,6 +1840,14 @@ export async function runHandoff(
       newSections = templateSectionNames(t)
       newTruncateSection = templateTruncateTitle(t)
       templateId = wantTpl === 'default' ? '' : wantTpl
+      docSections = newSections
+      docTruncateTitle = newTruncateSection
+      appliedTemplate = t
+    } else {
+      // ⭐ 没指定 ⇒ 默认模板（**只有"新建"这一条路径**需要它）。
+      const t = await loadDefaultTemplate()
+      newSections = templateSectionNames(t)
+      newTruncateSection = templateTruncateTitle(t)
       docSections = newSections
       docTruncateTitle = newTruncateSection
       appliedTemplate = t
@@ -2486,21 +2500,12 @@ export async function runHandoff(
       //    （正常路径下归档项目会在更早处被拒，这里是**纵深防御**：
       //      万一哪条路径绕过了那道闸门，也绝不静默改掉人的设置。）
       archivedAt: existing?.frontmatter.archivedAt ?? '',
-      // ⭐⭐ 节名清单：**正文的镜像**（见上面 `mirrorSections` 的说明）。
-      //
-      // 🔴🔴 **老文档保持"空就不写"**（`test-template.mjs` 的【6】盯着这条，它抓到了一个真陷阱）：
-      //    `store.ts` 的渲染规则是"**空就不写这一行**"⇒ 语义上"没有这一行" == "空数组"
-      //    == "回落默认六节 + 「当前进度」可截断"。
-      //    ⚠️ 但**一旦给它写上非空值，判据就翻转**：
-      //      `defaultTruncateTitle()` 的第二步是"`sections` 非空 ⇒ 以 `truncateSections` 为准"
-      //      ⇒ 老文档若只被写进 `sections`、而 `truncateSections` 仍为空
-      //      ⇒ **它从此再也不自动截断**（`a113fcb` 那个真事故的同族）。
-      //    ⇒ ⭐ 判据：**只把"已经有值"的文档镜像化**；老文档（原来就是空）**保持空**
-      //      —— 反正它与正文**本来就一致**（空 = 回落 = 正文那六节）。
-      sections: mirrorSections.length > 0 && (existing?.frontmatter.sections ?? []).length > 0
-        ? mirrorSections
-        : (existing !== undefined ? existing.frontmatter.sections : newSections),
-      // ⭐ 建文档用的模板 id（决策 204）：同样**必须沿用已有的**（纯记录，但别擦）。
+      // 🔴 **`sections` 字段已于 2026-10-05 删除**（用户裁定：模板走 md 之后，
+      //    它只是节名的最后一份副本，而权威早已在正文）。
+      //    ⚠️ 原先那段"只把已经有值的文档镜像化、老文档保持空"的纪律随之作废 ——
+      //       那条纪律存在的**唯一理由**就是绕开"`sections` 非空会让截断判据翻转"，
+      //       而那个翻转**源头已经删了**。
+      // ⭐ 建文档用的模板 id（决策 204）：**必须沿用已有的**（纯记录，但别擦）。
       template: existing !== undefined ? (existing.frontmatter.template ?? '') : templateId,
       // ⭐⭐ 自动截断目标节：**正文规范块的镜像**（决策 209）。
       //    ⚠️ 与 `sections` 同一纪律：老文档（两个字段都空）**保持空**，

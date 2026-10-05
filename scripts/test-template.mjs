@@ -203,7 +203,8 @@ console.log('\n【5】⭐⭐ 模板不回溯已有文档（用户裁定核心）
   )
   check('用模板建项目成功', r1.ok, r1.message.slice(0, 160))
   const d1 = await loadProjectDoc('nb-proj')
-  check('文档记了节名', (d1?.frontmatter.sections ?? []).join(',') === '目标,进展')
+  // ⭐ 2026-10-05：封面的 `sections` 字段已删除 ⇒ 观察点换成**正文**（它本来就是权威）。
+  check('文档的节名正确', mod.sectionsFromNarrative(d1?.narrative ?? '').join(',') === '目标,进展')
   check('文档记了截断节（数组，决策 206）', (d1?.frontmatter.truncateSections ?? []).join(',') === '进展')
   check('文档记了模板 id', d1?.frontmatter.template === 'nb-tpl')
 
@@ -215,13 +216,13 @@ console.log('\n【5】⭐⭐ 模板不回溯已有文档（用户裁定核心）
   )
   check('已存在项目传别的模板 ⇒ 成功但忽略', r2.ok, r2.message.slice(0, 160))
   const d2 = await loadProjectDoc('nb-proj')
-  check('⭐ 节名没被换成默认六节', (d2?.frontmatter.sections ?? []).join(',') === '目标,进展')
+  check('⭐ 节名没被换成默认六节', mod.sectionsFromNarrative(d2?.narrative ?? '').join(',') === '目标,进展')
   check('  文档里没有「当前进度」', !readFileSync(join(lib, 'projects', 'HANDOFF-nb-proj.md'), 'utf8').includes('## 当前进度'))
 
   // ⭐ 删掉模板 —— 已有文档**不受影响**
   await delTpl('nb-tpl')
   const d3 = await loadProjectDoc('nb-proj')
-  check('⭐ 模板被删后，文档仍记着自己的节名', (d3?.frontmatter.sections ?? []).join(',') === '目标,进展')
+  check('⭐ 模板被删后，文档的节名不受影响', mod.sectionsFromNarrative(d3?.narrative ?? '').join(',') === '目标,进展')
   check('  截断节也还在', (d3?.frontmatter.truncateSections ?? []).join(',') === '进展')
   // 而且还能正常 handoff
   await appendDocRead('s-nb', { project: 'nb-proj', turn: 3, readAt: new Date().toISOString(), full: true, sections: [] })

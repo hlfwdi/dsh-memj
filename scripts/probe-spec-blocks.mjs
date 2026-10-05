@@ -38,14 +38,19 @@ console.log(`文档: ${files.length} 份\n`)
 
 const stat = { block: 0, legacy: 0, none: 0 }
 const drift = []
-const closed = []
+/** ⚠️ 封面里还残留已废弃的 `sections:` 行。 */
+const legacyField = []
+/** ⭐ 「不截」的文档（= 正文规范里没写 `truncate`）—— 那是**设计**，不是异常。 */
+const noCut = []
 
 for (const f of files) {
   const raw = readFileSync(join(dir, f), 'utf8')
   const { data, body } = mod.splitFrontmatter(raw)
   const fm = data ?? {}
   const id = f.replace(/^HANDOFF-/, '').replace(/\.md$/, '')
-  const secs = mod.toStringArray(fm['sections'])
+  /** @deprecated 该字段已于 2026-10-05 删除 —— 这里只用来查"存量有没有清干净"。 */
+  const fmSecs = mod.toStringArray(fm['sections'])
+  const secs = mod.sectionsFromNarrative(body ?? '')
   const trunc = mod.toStringArray(fm['truncateSections'])
   const narrative = body ?? ''
 
@@ -60,23 +65,27 @@ for (const f of files) {
   stat[kind] += 1
 
   const flags = []
-  if (secs.length > 0 && trunc.length === 0) {
-    closed.push(id)
-    flags.push('🔴 sections 非空但 truncateSections 空 ⇒ **已不再自动截断**')
+  // 🔴🔴 **判据已重写**（2026-10-05，封面 `sections` 字段删除之后）：
+  //    老判据是"`sections` 非空 + `truncateSections` 空 ⇒ 截断被关" ——
+  //    而 `sections` **整个没了**，那条判据无从谈起。
+  //    ⭐ 现在的语义（用户裁定 ③-B）：**正文规范里没写 `truncate` ⇒ 就是不截**
+  //      —— 那是**设计**，不是异常 ⇒ 不再报红，只如实标出来。
+  //    ⚠️ **但仍要报一种情况**：老文档残留了 `sections:` 行（该字段已废弃）。
+  if (fmSecs.length > 0) {
+    legacyField.push(id)
+    flags.push('⚠️ 封面里还残留已废弃的 `sections:` 行（跑 `drop-cover-sections-field.mjs` 清掉）')
   }
-  // ⚠️ **判据修正**（实测踩到）：`sections` 与 `truncateSections` **两边都空**时
-  //    frontmatter 的"空"与正文反解出的值**不算漂移** ——
-  //    那正是"老文档不写这两个字段"的纪律（`handoff.ts` 的镜像规则），
-  //    而生效值以**正文**为准（`truncateTitlesFromBlocks`）。
-  //    ⇒ 只有**frontmatter 明确写了值、且与正文不同**才是真漂移。
-  const fmDeclared = secs.length > 0 || trunc.length > 0
-  if (fmDeclared && (hasBlock || legacySpec !== '') && JSON.stringify(fromBody) !== JSON.stringify(trunc)) {
+  // ⚠️ **漂移**：frontmatter 明确写了 `truncateSections`、且与正文反解不同。
+  if (trunc.length > 0 && (hasBlock || legacySpec !== '') && JSON.stringify(fromBody) !== JSON.stringify(trunc)) {
     drift.push(id)
     flags.push(`⚠️ 正文反解 ${JSON.stringify(fromBody)} ≠ frontmatter ${JSON.stringify(trunc)}`)
   }
+  if (secs.length > 0 && trunc.length === 0) noCut.push(id)
 
   const label = { block: '🆕 新形态', legacy: '📜 旧形态', none: '➖ 无规范' }[kind]
-  console.log(`${label}  ${id}（${secs.length} 节${trunc.length > 0 ? `，可截断 ${trunc.join('/')}` : ''}）`)
+  console.log(
+    `${label}  ${id}（${secs.length} 节｜${trunc.length > 0 ? `截断 ${trunc.join('/')}` : '不截'}）`,
+  )
   for (const x of flags) console.log(`      ${x}`)
 }
 
@@ -84,11 +93,14 @@ console.log('\n═══ 汇总 ═══')
 console.log(`新形态（节内规范块）：${stat.block}`)
 console.log(`旧形态（末尾一节）  ：${stat.legacy}`)
 console.log(`无规范（老文档）    ：${stat.none}`)
-console.log(`\n🔴 自动截断已关闭    ：${closed.length}${closed.length > 0 ? '  —— ' + closed.join('、') : ''}`)
+console.log(`\n⭐ 不截（规范没写 truncate）：${noCut.length}${noCut.length > 0 ? '  —— ' + noCut.join('、') : ''}`)
 console.log(`⚠️ 截断声明漂移      ：${drift.length}${drift.length > 0 ? '  —— ' + drift.join('、') : ''}`)
 console.log(
-  '\n⚠️ 这两项都**不影响本次 handoff 成功**，也不会报错 —— 它们只是**静默地少干活**。' +
-    '\n   截断关闭的修法：在文档里给它想要自动瘦身的那一节补一个 `memj:spec truncate` 围栏块' +
-    '（或把 `truncateSections` 写进 frontmatter）。',
+  `⚠️ 残留废弃的 \`sections:\` 行：${legacyField.length}${legacyField.length > 0 ? '  —— ' + legacyField.join('、') : ''}`,
+)
+console.log(
+  '\n⭐ **"不截"是设计**（2026-10-05 用户裁定）：**正文规范里没写 `truncate` ⇒ 就是不截** ——' +
+    '\n   要让某一节自动瘦身，就在它的规范块起始行加上 `truncate`（如 ```` ```memj:spec truncate ````）。' +
+    '\n⚠️ 漂移与残留字段**都不影响 handoff 成功**，也不会报错 —— 它们只是"静默地少干活"或"留了死数据"。',
 )
 process.exit(0)

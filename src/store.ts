@@ -85,7 +85,6 @@ import {
   buildSkeleton,
   isKnowledgeHeading,
   cutKnowledgeSection,
-  sectionsOf,
   cutSpecSection,
   extractSpecSection,
   docSectionsOf,
@@ -112,7 +111,6 @@ export {
   buildSkeleton,
   isKnowledgeHeading,
   cutKnowledgeSection,
-  sectionsOf,
   cutSpecSection,
   extractSpecSection,
   docSectionsOf,
@@ -175,8 +173,9 @@ function normalizeProjectFrontmatter(
     return {
       project: fallbackId, title: '', desc: '', themes: [],
       createdAt: '', updatedAt: '', archivedAt: '',
-      // ⭐ 决策 204：老文档没这几行 ⇒ 读出空（由 `sectionsOf` 回落默认六节）。
-      sections: [], template: '', truncateSections: [],
+      // ⭐ 决策 204：老文档没这几行 ⇒ 读出空
+      //    （⚠️ `sections` 字段已于 2026-10-05 删除 —— 节名只认正文）。
+      template: '', truncateSections: [],
     }
   }
   const project = typeof data['project'] === 'string' && data['project'].trim() !== ''
@@ -193,9 +192,9 @@ function normalizeProjectFrontmatter(
     updatedAt: typeof data['updatedAt'] === 'string' ? data['updatedAt'] : '',
     // ⭐ 归档时间（决策 133）：老数据没这行 ⇒ 空串 = 活跃。
     archivedAt: typeof data['archivedAt'] === 'string' ? data['archivedAt'] : '',
-    // ⭐⭐ 节名清单（决策 204）：老数据没这行 ⇒ 空数组 ⇒ `sectionsOf` 回落默认六节。
-    sections: toStringArray(data['sections']),
     // ⭐ 建文档时用的模板 id（决策 204）：纯记录，空串 = 默认模板。
+    //    ⚠️ 封面的 `sections` 字段已于 2026-10-05 删除（节名只认正文）；
+    //       老文档里若还留着那一行，**读侧不再认它**（存量已用脚本清掉）。
     template: typeof data['template'] === 'string' ? data['template'] : '',
     // ⭐⭐ 自动截断目标节（决策 204 / 206）：**数组**；空 = 不截
     //    （老文档由调用方按默认六节兜底）。
@@ -606,15 +605,10 @@ export async function writeProjectDoc(
     ...((frontmatter.archivedAt ?? '') !== ''
       ? ([['archivedAt', yamlScalar(frontmatter.archivedAt)]] as Array<readonly [string, string]>)
       : []),
-    // ⭐⭐ 节名清单（决策 204）：**空就不写行** —— 与 `title`/`archivedAt` 同一套规矩。
-    //    🔴 **为什么必须"空就不写"**：老文档（或未指定模板的）读出来是空数组
-    //    ⇒ 写回时若渲染成 `sections: []`，会让**每一份老文档都被改一次**
-    //    （凭空产生一次全库 diff），而语义上它并没有变化。
-    //    ⚠️ `?? []` 是**容错**：调用方（尤其旧测试夹具/脚本）可能没给这个字段，
-    //       直接读 `.length` 会**崩在 `undefined.length`**（实测踩到 —— 同 `title` 的 `?? ''`）。
-    ...((frontmatter.sections ?? []).length > 0
-      ? ([['sections', renderYamlArray(frontmatter.sections ?? [])]] as Array<readonly [string, string]>)
-      : []),
+    // 🔴 **`sections` 行已于 2026-10-05 删除**（用户裁定：模板走 md 之后，
+    //    封面那行成了"节名的最后一份副本"，而权威早已在正文）。
+    //    ⚠️ 只从本函数删**不够** —— `rebuildDerivedLayers()` 的字段表里
+    //       也有一段同样的渲染（两处必须同步，否则 rebuild 会把老行留着）。
     // ⭐ 建文档时用的模板 id（决策 204）：空就不写行。
     //    ⚠️ **必须从 frontmatter 透传**（同 `archivedAt` 的理由）——
     //    否则任何一次重写（改描述 / rename / rebuild）都会**把这个记录擦掉**。
@@ -1240,7 +1234,7 @@ export async function rebuildDerivedLayers(): Promise<{
     //    决策 204 之后新增的 `sections` / `truncateSections` / `template` /
     //    `archivedAt` **都不在这张表里** ⇒ 一旦某项目的 `themes:` 需要更新，
     //    重写就把它们**整行抹掉**：
-    //      · `sections` 被抹 ⇒ `sectionsOf(空)` **回落默认六节** ⇒ 自定义模板的文档
+    //      · 那时"节名"只能回落默认六节 ⇒ 自定义模板的文档
     //        被按默认六节理解 ⇒ 下次 handoff **插进六个默认空壳节**（实测 6 → 12 节）；
     //      · `archivedAt` 被抹 ⇒ **归档过的项目自己冒出来**（正是下面注释警告的那件事）。
     //    ⭐ 根治有两层（**都已落地，缺一不可**）：
@@ -1268,10 +1262,9 @@ export async function rebuildDerivedLayers(): Promise<{
       ...((p.frontmatter.archivedAt ?? '') !== ''
         ? ([['archivedAt', yamlScalar(p.frontmatter.archivedAt)]] as Array<readonly [string, string]>)
         : []),
-      // ⭐⭐ 节名清单（决策 204）：**空就不写行**（老文档零 diff）。
-      ...((p.frontmatter.sections ?? []).length > 0
-        ? ([['sections', renderYamlArray(p.frontmatter.sections ?? [])]] as Array<readonly [string, string]>)
-        : []),
+      // 🔴 **`sections` 行已于 2026-10-05 删除**（见 `renderProjectFrontmatter` 的说明）。
+      //    ⚠️ 它与那一处**必须同步**：字段表是"字段全集"的唯一落地处，
+      //       而本项目已因"两处不同步"踩过一次真事故（决策 207 / 风险 42）。
       // ⭐ 建文档时用的模板 id（决策 204）：**空就不写行**。
       ...((p.frontmatter.template ?? '') !== ''
         ? ([['template', yamlScalar(p.frontmatter.template)]] as Array<readonly [string, string]>)
