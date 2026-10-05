@@ -274,36 +274,18 @@ export async function deleteTemplate(id: string): Promise<boolean> {
 }
 
 /**
- * ⭐⭐ **按模板拼"每一节要干嘛"的写作指导片段**（按需注入用，决策 204 / 问题 C①）。
+ * 🔴🔴 **`renderTemplateGuidance()` 已删除**（2026-10-12，决策 207）。
  *
- * 🔴 **为什么不放常驻 `context()`**：`context()` 是**单条快照、按整条文本比较**
- *    （库内知识 `74a18e19`）⇒ 按项目动态改它会**每轮 append 一条新消息**
- *    （旧的不删、直到 compaction）。而模板说明**只在交接那一刻有用**
- *    ⇒ 放在**交接时按需注入**，不占常驻预算、也不破缓存。
- * @param t - 模板。
- * @returns markdown 片段（含节顺序、每节用途、截断提示）。
+ * 它的职责是"按模板拼一段写作指导、由 `memj_read` **按需附在返回值末尾**"。
+ * 那条通路**已退役**：规范现在**就写在文档正文里**（`## 本档写作规范` 一节，
+ * 由 `renderSpecSection()` 渲染、建项目时从模板复制）
+ * ⇒ `memj_read` 返回的 `content` **本来就带着它**。
+ *
+ * ⚠️ 留着它等于**同一事实两份实现**：本项目的判据是
+ *   "一段代码里已经有了一种实现，就问其他几条路径为什么还需要"，
+ *   而两条路都会输出去给模型看 ⇒ **迟早漂开、且两个副本会同时出现**。
+ * @see renderSpecSection 它的替代者（落点是**文档正文**，不是工具返回值）。
  */
-export function renderTemplateGuidance(t: Template): string {
-  const lines: string[] = [
-    fillSlots(promptText('tpl:guidance-head', TPL_GUIDANCE_HEAD), { count: String(t.sections.length) }),
-    '',
-  ]
-  for (const s of t.sections) {
-    const trunc = s.truncate === true ? promptText('tpl:guidance-trunc-mark', TPL_GUIDANCE_TRUNC_MARK) : ''
-    lines.push(
-      fillSlots(promptText('tpl:guidance-row', TPL_GUIDANCE_ROW), { name: s.name, desc: s.desc, trunc }),
-    )
-  }
-  const truncs = t.sections.filter((s) => s.truncate === true)
-  if (truncs.length === 0) {
-    lines.push('', promptText('tpl:guidance-no-trunc', TPL_GUIDANCE_NO_TRUNC))
-  }
-  lines.push(
-    '',
-    fillSlots(promptText('tpl:guidance-foot', TPL_GUIDANCE_FOOT), { knowledgeTitle: KNOWLEDGE_TITLE }),
-  )
-  return lines.join('\n')
-}
 
 /** 供内部使用：默认六节的节名（= 无模板时的回落）。 */
 export const DEFAULT_SECTION_NAMES: readonly string[] = NARRATIVE_TITLES
@@ -390,12 +372,4 @@ export function truncateTitlesFromSpec(specSection: string): string[] {
     if (marks.some((mk) => mk !== '' && line.includes(mk)) && !out.includes(name)) out.push(name)
   }
   return out
-}
-
-/**
- * ⭐ 取「本档写作规范」的**节名**（供回执/前端显示，避免各处硬编码）。
- * @returns 节名（无 `## ` 前缀）。
- */
-export function specTitle(): string {
-  return SPEC_TITLE
 }
