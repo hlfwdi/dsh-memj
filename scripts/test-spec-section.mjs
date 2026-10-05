@@ -1,174 +1,174 @@
 /**
- * 「本档写作规范」节：模板与提示词解耦（2026-10-12）。
+ * 「本档写作规范」相关机制的验收（**决策 209 之后重写**）。
  *
- * ── 它测什么 ──────────────────────────────────────────────────────────────
- *  1. **规范节落进文档正文**（`## 本档写作规范`，排在叙事末尾）；
- *  2. **建项目 = 从模板复制**：新建时规范节内容来自该模板的 desc；
- *  3. ⭐ **已有文档按自己那份走**（改模板**不影响**它）——这是"解耦"的核心；
- *  4. **节名正文优先**：`docSectionsOf` 在 frontmatter 为空时靠正文拿到正确结构；
- *  5. **可截断节也从规范节反解**（`truncateTitlesFromSpec`）；
- *  6. ⭐⭐ **反证（本次真 bug 的根因）**：模拟 `rebuildDerivedLayers` 把 frontmatter
- *     字段抹掉后，节名**仍然正确** —— 证明权威真的落在正文上（而不是"恰好没被抹"）。
+ * ── 本套件测什么 ──────────────────────────────────────────────────────────
+ * 决策 207 时规范住在**文档末尾单列一节**（`renderSpecSection` / `extractSpecSection` /
+ * `cutSpecSection` / `truncateTitlesFromSpec`）。决策 209 把它改成**长在各节自己身上**
+ * （`## 节名` 下的 ```memj:spec 围栏）⇒ 本套件按新形态重写，
+ * **同时保留旧形态的兼容读验收**（那几个函数仍在服役，服务存量文档）。
  *
  * ⚠️ 必须在 `node scripts/build.mjs` 之后跑（import `lib/` 产物）。
  * 用法：node scripts/test-spec-section.mjs
  */
-import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-const lib = mkdtempSync(join(tmpdir(), 'memj-spec-'))
+const lib = mkdtempSync(join(tmpdir(), 'memj-spec-sec-'))
+mkdirSync(join(lib, 'projects'), { recursive: true })
+mkdirSync(join(lib, 'prompts'), { recursive: true })
 process.env['MEMJ_DATA_DIR'] = lib
 
-const LIBDIR = join(process.cwd(), 'lib')
-const mod = await import(pathToFileURL(join(LIBDIR, 'index.js')).href)
+const mod = await import(pathToFileURL(join(process.cwd(), 'lib', 'index.js')).href)
 
 let pass = 0
 let fail = 0
-function check(name, ok, extra = '') {
-  if (ok) { pass += 1; console.log(`  ✅ ${name}`) }
-  else { fail += 1; console.log(`  ❌ ${name}${extra !== '' ? `　← ${extra}` : ''}`) }
+const check = (name, ok, extra = '') => {
+  if (ok) { pass += 1; console.log(`  ✅ ${name}`) } else { fail += 1; console.log(`  🔴 ${name}${extra ? '  ← ' + extra : ''}`) }
 }
 
-const CFG = mod.DEFAULT_CONFIG
-const runHandoff = mod.runHandoff
-const loadProjectDoc = mod.loadProjectDoc
-const appendDocRead = mod.appendDocRead
-const saveTpl = mod.saveTemplate
-const rebuild = mod.rebuildDerivedLayers
+const F = '```'
+const FENCE = `${F}memj:spec`
 
-console.log('\n【1】纯函数：规范节的渲染 / 提取 / 砍掉 / 反解')
+console.log('\n【1】新形态：抓取 / 切除 / 反解（决策 209）')
 {
-  const t = {
-    version: 1, id: 'demo', title: 'D',
-    sections: [
-      { name: '目标', desc: '要做什么' },
-      { name: '进展', desc: '做到哪了', truncate: true },
-    ],
-  }
-  const spec = mod.renderSpecSection(t)
-  check('渲染出 `## 本档写作规范` 标题', spec.startsWith('## 本档写作规范'))
-  check('含节数插槽被填（共 2 节）', spec.includes('2'))
-  check('含每节的 desc（要做什么）', spec.includes('要做什么'))
-  check('⭐ 带截断标记', spec.includes(mod.TPL_GUIDANCE_TRUNC_MARK))
-  check('含「沉淀知识」由工具生成那句', spec.includes(mod.KNOWLEDGE_TITLE))
-  check('声明本节由工具维护', spec.includes('由工具维护'))
-
-  const doc = `## 目标\n\n正文 A\n\n${spec}\n\n## 沉淀知识\n\n（封面）\n`
-  const got = mod.extractSpecSection(doc)
-  check('extractSpecSection 取得完整一节', got.startsWith('## 本档写作规范') && got.includes(mod.TPL_GUIDANCE_TRUNC_MARK))
-  const cut = mod.cutSpecSection(doc)
-  check('cutSpecSection 砍掉规范节', !cut.includes('本档写作规范'))
-  check('⭐ 保住它后面的「沉淀知识」', cut.includes('沉淀知识'))
-  check('保住它前面的正文', cut.includes('正文 A'))
-
-  check('反解可截断节 ⇒ 进展', mod.truncateTitlesFromSpec(spec).join(',') === '进展')
-  const t2 = { version: 1, id: 'd2', title: 'D2', sections: [{ name: '目标', desc: 'x' }] }
-  check('没有节声明 truncate ⇒ 反解为空', mod.truncateTitlesFromSpec(mod.renderSpecSection(t2)).length === 0)
-
-  // 幂等：渲染两次必须逐字相同（否则每次落盘都会改文档）
-  check('⭐ renderSpecSection 幂等', mod.renderSpecSection(t) === spec)
+  const sec = ['## 目标', '', FENCE, '这个项目要做什么', F, '', '正文一行。']
+  check('specBlockRange 找得到', mod.specBlockRange(sec)?.truncate === false)
+  check('extractSpecBlock 取到规范文字', mod.extractSpecBlock(sec) === '这个项目要做什么')
+  check('extractSpecBlockLines 取到原文行（含围栏）',
+    JSON.stringify(mod.extractSpecBlockLines(sec)) === JSON.stringify([FENCE, '这个项目要做什么', F]))
+  const stripped = mod.stripSpecBlock(sec).join('\n')
+  check('stripSpecBlock 保住正文', stripped.includes('正文一行。'))
+  check('stripSpecBlock 去掉围栏', !stripped.includes('memj:spec'))
+  check('没有规范块 ⇒ 原样返回', mod.stripSpecBlock(['## 甲', '', 'x']).join('\n') === '## 甲\n\nx')
+}
+{
+  const doc = ['## 目标', '', FENCE, 'g', F, '', '## 当前进度', '', `${FENCE} truncate`, 'p', F, '', '## 下一步', '', FENCE, 'n', F, ''].join('\n')
+  check('truncateTitlesFromBlocks 反解出可截断节', JSON.stringify(mod.truncateTitlesFromBlocks(doc)) === '["当前进度"]')
+  check('围栏里的伪标题不算节', JSON.stringify(mod.sectionsFromNarrative(doc)) === '["目标","当前进度","下一步"]')
+  const broken = ['## 甲', '', FENCE, '规范没关围栏', ''].join('\n')
+  check('⭐ 围栏不闭合 ⇒ 当作没有规范块（不半取）', mod.specBlockRange(broken.split('\n')) === undefined)
+  check('  ⇒ 反解也为空', mod.truncateTitlesFromBlocks(broken).length === 0)
+}
+{
+  const sec = ['## 甲', '', FENCE, '第一行', '第二行', '第三行', F]
+  check('多行规范块能取全', mod.extractSpecBlock(sec) === '第一行\n第二行\n第三行')
+  const t = ['## 甲', '', `${FENCE} truncate`, '第一行', '第二行', F].join('\n')
+  check('⭐⭐ 多行 + 可截断 ⇒ 声明不丢（旧形态会丢）', JSON.stringify(mod.truncateTitlesFromBlocks(t)) === '["甲"]')
 }
 
-console.log('\n【2】节名正文优先（docSectionsOf）')
+console.log('\n【2】旧形态兼容读（决策 207 的存量文档）')
 {
-  const body = '## 研究目标\n\nA\n\n## 公司画像\n\nB\n\n## 沉淀知识\n\n'
-  check('正文优先：从正文拿到节名',
-    mod.docSectionsOf(body, ['目标', '进展']).join(',') === '研究目标,公司画像')
-  check('⭐ 排除「沉淀知识」', !mod.docSectionsOf(body, []).includes('沉淀知识'))
-  check('正文为空 ⇒ 回落 frontmatter', mod.docSectionsOf('', ['A', 'B']).join(',') === 'A,B')
-  check('两者都空 ⇒ 默认六节', mod.docSectionsOf('', []).join(',') === mod.NARRATIVE_TITLES.join(','))
-  const specBody = `## 目标\n\nx\n\n## 本档写作规范\n\n- \`## 目标\` —— y\n`
-  check('⭐ 排除「本档写作规范」', !mod.docSectionsOf(specBody, []).includes('本档写作规范'))
+  const legacy = ['## 目标', '', '正文', '', '## 本档写作规范', '', '本文档共 **2 节**：', '',
+    '- `## 目标` —— g', `- \`## 进展\` —— p${mod.TPL_GUIDANCE_TRUNC_MARK}`, '',
+    '## 沉淀知识', '', '<!-- memj:entry', '...', '-->', '<!-- /memj:entry -->'].join('\n')
+  const spec = mod.extractSpecSection(legacy)
+  check('extractSpecSection 取得旧形态那一节', spec.startsWith('## 本档写作规范'))
+  check('⭐ truncateTitlesFromSpec 反解出「进展」', JSON.stringify(mod.truncateTitlesFromSpec(spec)) === '["进展"]')
+  const cut = mod.cutSpecSection(legacy)
+  check('cutSpecSection 砍掉它', !cut.includes('本档写作规范'))
+  check('  且保住「沉淀知识」', cut.includes('沉淀知识'))
+  check('  且保住前面的正文', cut.includes('正文'))
+  check('⭐ 它与「沉淀知识」都从叙事节里排除',
+    !mod.sectionsFromNarrative(legacy).includes('本档写作规范') && !mod.sectionsFromNarrative(legacy).includes('沉淀知识'))
 }
 
-console.log('\n【3】建项目 = 从模板复制规范（自定义模板）')
+console.log('\n【3】模板 md：desc 住在规范块里')
 {
-  await saveTpl({
-    version: 1, id: 'spec-tpl', title: 'SP',
-    sections: [
-      { name: '研究目标', desc: '这家公司要回答什么问题' },
-      { name: '证据', desc: '支撑结论的一手材料', truncate: true },
-    ],
-  })
-  const r = await runHandoff(
-    { project: 'spec-proj', projectDesc: 'sp；当 x 时读它。', doc: '## 研究目标\n\nQ\n\n## 证据\n\nE\n', template: 'spec-tpl', confirmCreate: true },
-    { sessionId: 's-spec', config: CFG, turn: 1 },
+  const t = { version: 1, id: 't1', title: 'T', sections: [
+    { name: '目标', desc: '这个项目要做什么' },
+    { name: '进展', desc: '做到哪了', truncate: true },
+  ] }
+  const md = mod.renderTemplateDoc(t)
+  check('渲染出规范块', md.includes(FENCE))
+  check('渲染出 truncate 标记', md.includes(`${FENCE} truncate`))
+  const back = mod.parseTemplateDoc(md, 't1')
+  check('解析回来 desc 一致', back?.sections.map((s) => s.desc).join('|') === '这个项目要做什么|做到哪了')
+  check('解析回来 truncate 一致', back?.sections[1]?.truncate === true && back?.sections[0]?.truncate !== true)
+  check('⭐⭐ 幂等（再渲染逐字相同）', mod.renderTemplateDoc(back) === md)
+}
+
+console.log('\n【4】建项目：骨架连规范块一起长出来')
+{
+  const t = { version: 1, id: 't1', title: 'T', sections: [
+    { name: '目标', desc: 'g' },
+    { name: '进展', desc: 'p', truncate: true },
+  ] }
+  const sk = mod.renderSpecBlocksSkeleton(t)
+  check('骨架含规范块', sk.includes(FENCE))
+  check('骨架的节名正确', JSON.stringify(mod.sectionsFromNarrative(sk)) === '["目标","进展"]')
+  check('骨架的截断声明正确', JSON.stringify(mod.truncateTitlesFromBlocks(sk)) === '["进展"]')
+}
+
+console.log('\n【5】端到端：用模板建项目 ⇒ 文档里每节都有规范块')
+{
+  const CFG = { progressCharsWarn: 20000, progressCharsKeep: 12000 }
+  await mod.saveTemplate({ version: 1, id: 'e2e-tpl', title: 'E2E', sections: [
+    { name: '研究目标', desc: '这家公司要回答什么问题' },
+    { name: '证据', desc: '一手材料', truncate: true },
+  ] })
+  await mod.appendDocRead('s-e2e', { project: 'e2e-proj', turn: 1, readAt: new Date().toISOString(), full: true, sections: [] })
+  const r = await mod.runHandoff(
+    { project: 'e2e-proj', projectDesc: 'e2e；当 x 时读它。', doc: '## 研究目标\n\n甲\n## 证据\n\n乙\n', template: 'e2e-tpl', confirmCreate: true },
+    { sessionId: 's-e2e', config: CFG, turn: 1 },
   )
   check('用模板建项目成功', r.ok, r.message.slice(0, 200))
-  const text = readFileSync(join(lib, 'projects', 'HANDOFF-spec-proj.md'), 'utf8')
-  check('⭐ 文档正文里有 `## 本档写作规范`', text.includes('## 本档写作规范'))
-  const spec = mod.extractSpecSection(text)
-  check('⭐ 规范里有该模板的 desc（这家公司要回答什么问题）', spec.includes('这家公司要回答什么问题'))
-  check('⭐ 规范里有截断标记（证据那节）', spec.includes(mod.TPL_GUIDANCE_TRUNC_MARK))
-  const d = await loadProjectDoc('spec-proj')
-  check('frontmatter 的 sections 是正文镜像',
-    (d?.frontmatter.sections ?? []).join(',') === '研究目标,证据')
-  check('frontmatter 的 truncateSections 由规范反解',
-    (d?.frontmatter.truncateSections ?? []).join(',') === '证据')
+  const d = await mod.loadProjectDoc('e2e-proj')
+  check('⭐ 文档正文里每节都有规范块', d?.narrative.includes(FENCE) === true)
+  check('⭐ 规范块里是该模板的 desc', d?.narrative.includes('这家公司要回答什么问题') === true)
+  check('⭐⭐ 文档里**没有**末尾的「本档写作规范」节', !d?.narrative.includes('## 本档写作规范'))
+  check('⭐ frontmatter 的 truncateSections 从规范块反解', (d?.frontmatter.truncateSections ?? []).join(',') === '证据')
+  check('frontmatter 的 sections 是正文镜像', (d?.frontmatter.sections ?? []).join(',') === '研究目标,证据')
+
+  await mod.appendDocRead('s-e2e', { project: 'e2e-proj', turn: 2, readAt: new Date().toISOString(), full: true, sections: [] })
+  const r2 = await mod.runHandoff(
+    { project: 'e2e-proj', doc: '## 研究目标\n\n甲改过了。\n' },
+    { sessionId: 's-e2e', config: CFG, turn: 2 },
+  )
+  check('更新成功', r2.ok, r2.message.slice(0, 200))
+  const d2 = await mod.loadProjectDoc('e2e-proj')
+  check('⭐⭐ 规范块**没被模型回传的正文冲掉**', d2?.narrative.includes('这家公司要回答什么问题') === true)
+  check('⭐ 正文确实更新了', d2?.narrative.includes('甲改过了。') === true)
+  check('⭐ 节名仍按文档自己', (d2?.frontmatter.sections ?? []).join(',') === '研究目标,证据')
 }
 
-console.log('\n【4】⭐⭐ 已有文档按自己那份走（改模板不影响它）')
+console.log('\n【6】红线：存量老文档**不该**被合成规范（决策 207 的裁定仍在）')
 {
-  // 改掉模板内容（desc 大改 + 取消截断）
-  await saveTpl({
-    version: 1, id: 'spec-tpl', title: 'SP2',
-    sections: [{ name: '研究目标', desc: '【改过了】全新的说明' }],
-  })
-  await appendDocRead('s-spec', { project: 'spec-proj', turn: 2, readAt: new Date().toISOString(), full: true, sections: [] })
-  const r = await runHandoff(
-    { project: 'spec-proj', doc: '## 证据\n\nE2\n' },
-    { sessionId: 's-spec', config: CFG, turn: 2 },
+  const CFG = { progressCharsWarn: 20000, progressCharsKeep: 12000 }
+  const p = join(lib, 'projects', 'HANDOFF-old-proj.md')
+  writeFileSync(p, ['---', 'project: old-proj', 'desc: old；当 x 时读它。', 'themes: []', '---', '',
+    '# HANDOFF — old-proj', '', '## 目标', '', '旧内容。', '', '## 沉淀知识', ''].join('\n'), 'utf8')
+  await mod.appendDocRead('s-old', { project: 'old-proj', turn: 1, readAt: new Date().toISOString(), full: true, sections: [] })
+  const r = await mod.runHandoff(
+    { project: 'old-proj', doc: '## 目标\n\n新内容。\n' },
+    { sessionId: 's-old', config: CFG, turn: 1 },
+  )
+  check('老文档更新成功', r.ok, r.message.slice(0, 200))
+  const after = readFileSync(p, 'utf8')
+  check('⭐⭐⭐ 没有替它合成规范块（不知道它该有哪几节）', !after.includes('memj:spec'))
+  check('⭐⭐ 没有插进默认六节', !after.includes('## 当前进度'))
+  check('原有节都在', after.includes('## 目标') && after.includes('新内容。'))
+}
+
+console.log('\n【7】老文档的旧形态规范节**原样保住**（不按新模板重建）')
+{
+  const CFG = { progressCharsWarn: 20000, progressCharsKeep: 12000 }
+  const p = join(lib, 'projects', 'HANDOFF-legacy-spec.md')
+  writeFileSync(p, ['---', 'project: legacy-spec', 'desc: ls；当 x 时读它。', 'themes: []', '---', '',
+    '# HANDOFF — legacy-spec', '', '## 目标', '', '旧内容。', '',
+    '## 本档写作规范', '', '本文档共 **2 节**：', '', '- `## 目标` —— g', '', '## 沉淀知识', ''].join('\n'), 'utf8')
+  await mod.appendDocRead('s-ls', { project: 'legacy-spec', turn: 1, readAt: new Date().toISOString(), full: true, sections: [] })
+  const r = await mod.runHandoff(
+    { project: 'legacy-spec', doc: '## 目标\n\n改过了。\n' },
+    { sessionId: 's-ls', config: CFG, turn: 1 },
   )
   check('更新成功', r.ok, r.message.slice(0, 200))
-  const d = await loadProjectDoc('spec-proj')
-  const spec = mod.extractSpecSection(d?.narrative ?? '')
-  check('⭐⭐ 文档**仍保留**自己的旧规范（不被模板覆盖）', spec.includes('这家公司要回答什么问题'))
-  check('⭐⭐ 且**没有**混进模板的新说明', !spec.includes('【改过了】'))
-  check('⭐⭐ 节名仍按文档自己（研究目标,证据）',
-    (d?.frontmatter.sections ?? []).join(',') === '研究目标,证据')
-}
-
-console.log('\n【5】⭐⭐⭐ 反证：rebuild 抹掉 frontmatter 后，节名仍然正确')
-{
-  // 模拟 `rebuildDerivedLayers()` 的旁路重写：只留它那张字段表（抹掉 sections/template/truncateSections）
-  const p = join(lib, 'projects', 'HANDOFF-spec-proj.md')
-  const raw = readFileSync(p, 'utf8')
-  const rest = raw.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '')
-  writeFileSync(p, [
-    '---',
-    'project: spec-proj',
-    'desc: sp；当 x 时读它。',
-    'themes: []',
-    '---',
-    '',
-    rest,
-  ].join('\n'), 'utf8')
-
-  const d2 = await loadProjectDoc('spec-proj')
-  check('前提：frontmatter 的 sections 确实被抹空了', (d2?.frontmatter.sections ?? []).length === 0)
-  check('前提：frontmatter 的 truncateSections 也被抹空', (d2?.frontmatter.truncateSections ?? []).length === 0)
-  check('⭐⭐⭐ 但节名**仍然正确**（从正文拿到）',
-    mod.docSectionsOf(d2?.narrative ?? '', d2?.frontmatter.sections).join(',') === '研究目标,证据')
-  check('⭐⭐⭐ 可截断节也仍然正确（从规范节反解）',
-    mod.truncateTitlesFromSpec(mod.extractSpecSection(d2?.narrative ?? '')).join(',') === '证据')
-
-  // 再跑一次 handoff：正文里还有规范 ⇒ 必须保住，且不得插进默认六节
-  await appendDocRead('s-spec', { project: 'spec-proj', turn: 3, readAt: new Date().toISOString(), full: true, sections: [] })
-  const r = await runHandoff(
-    { project: 'spec-proj', doc: '## 证据\n\nE3\n' },
-    { sessionId: 's-spec', config: CFG, turn: 3 },
-  )
-  check('被抹字段后 handoff 仍成功', r.ok, r.message.slice(0, 200))
   const after = readFileSync(p, 'utf8')
-  const tops = mod.sectionsFromNarrative(mod.narrativeFromProjectText(after))
-  check('⭐⭐⭐ 没有插进任何默认六节', !tops.some((t) => ['目标', '当前进度', '有效做法', '失败/踩坑', '关键上下文', '下一步'].includes(t)),
-    `实际节：${tops.join(',')}`)
-  check('⭐⭐⭐ 原有两节都在', tops.join(',') === '研究目标,证据')
-  check('⭐ 规范节被保住（没被砍掉）', after.includes('## 本档写作规范'))
+  check('⭐⭐ 旧形态规范节被原样保住', after.includes('## 本档写作规范'))
+  check('⭐⭐ 且没被替成新形态的规范块', !after.includes('memj:spec'))
+  check('  正文更新了', after.includes('改过了。'))
 }
 
-rmSync(lib, { recursive: true, force: true })
-console.log(`\n═══ 本档写作规范：${pass} 通过 / ${fail} 失败 ═══`)
+console.log(`\n═══ 本档写作规范（决策 209 新形态）：${pass} 通过 / ${fail} 失败 ═══`)
 process.exit(fail === 0 ? 0 : 1)

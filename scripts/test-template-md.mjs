@@ -39,8 +39,17 @@ console.log('\n【1】渲染成 md')
   check('含 frontmatter id', /^---[\s\S]*id: md-tpl/.test(md))
   check('含 `## 研究目标`', md.includes('## 研究目标'))
   check('含 desc 正文', md.includes('要回答什么问题'))
-  check('⭐ 可截断节带 `<!-- truncate -->`', md.includes('## 证据 <!-- truncate -->'))
-  check('不可截断节不带标记', !md.includes('## 研究目标 <!-- truncate -->'))
+  // ⭐⭐ 决策 209 改：可截断标记从"标题行末的 HTML 注释"挪到**规范块的围栏起始行**；
+  //    desc 也从"标题下裸正文"搬进了 **```memj:spec 围栏**（与项目文档同形）。
+  check('⭐ 可截断节的规范块带 `truncate`', md.includes('```memj:spec truncate'))
+  check('⭐ desc 写在规范块里', /```memj:spec[^\n]*\n要回答什么问题/.test(md))
+  check('不可截断节的规范块不带 `truncate`', md.includes('```memj:spec\n'))
+  // ⚠️ **兼容读**：旧形态（标题行末 `<!-- truncate -->` + 裸正文 desc）仍要能解析（存量模板）。
+  check('⭐⭐ 旧形态模板仍能解析（存量兼容）', (() => {
+    const legacy = ['---', 'version: 1', 'id: lt', 'title: L', '---', '', '## A <!-- truncate -->', '', '甲的说明', ''].join('\n')
+    const t = mod.parseTemplateDoc(legacy, 'lt')
+    return t?.sections[0]?.truncate === true && t?.sections[0]?.desc === '甲的说明'
+  })())
 
   console.log('\n【2】md → 模板 逐字段往返')
   const back = mod.parseTemplateDoc(md, 'x')
@@ -64,8 +73,16 @@ console.log('\n【3】人手改过的 md 也要能读（选 md 格式的理由�
   ].join('\n')
   const h = mod.parseTemplateDoc(hand, 'x')
   check('节名正确（`# ` 不算节）', h?.sections.map((s) => s.name).join(',') === '甲节,乙节')
-  check('⭐ 宽容的 truncate 标记也认（`<!--truncate-->`）', h?.sections[1]?.truncate === true)
+  check('⭐ 宽容的 truncate 标记也认（`<!--truncate-->`，存量兼容）', h?.sections[1]?.truncate === true)
   check('title 取 frontmatter', h?.title === '手改的')
+  // ⭐ 决策 209 新形态：人手写的规范块（缩进、多余空格、`TRUNCATE` 大小写）也要认。
+  const hand2 = [
+    '## 甲节', '', '  ```memj:spec  ', '  甲要干嘛  ', '  ```', '',
+    '## 乙节', '', '```MEMJ:SPEC TRUNCATE', '乙要干嘛', '```', '',
+  ].join('\n')
+  const h2 = mod.parseTemplateDoc(hand2, 'y')
+  check('⭐ 人手写的规范块能读（缩进/空格）', h2?.sections[0]?.desc.trim() === '甲要干嘛')
+  check('⭐ 大小写不敏感的 `TRUNCATE` 也认', h2?.sections[1]?.truncate === true)
 }
 
 console.log('\n【4】没有 frontmatter ⇒ 用文件名兜底')

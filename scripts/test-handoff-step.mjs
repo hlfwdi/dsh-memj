@@ -140,8 +140,11 @@ console.log('\n【4】⭐ 单步执行：只做该做的事')
   }, { sessionId: 's', config: CFG })
   check('step:knowledge 成功', r.ok === true, r.message.slice(0, 160))
   const after = read('projects/HANDOFF-p-all.md')
+  // ⭐⭐ 决策 209 改：新形态下**节标题与正文之间夹着规范块**，
+  //    所以不能再拿 `## 目标\n\n缺省 all`（"标题紧挨正文"）去断言；
+  //    判据换成"正文那段话还在 + 规范块也在"。
   check('⭐⭐ 叙事**逐字未变**（只加了封面）',
-    after.includes('## 目标\n\n缺省 all'), '叙事被改动了')
+    after.includes('缺省 all') && after.includes('memj:spec'), '叙事被改动了')
   check('⭐ 新知识已落盘', after.includes('只加知识的条目'))
   check('⭐ 回执说明"本次范围之外"哪些步', r.message.includes('本次范围之外'), r.message.slice(-320))
   check('  且其中含 narrative / theme',

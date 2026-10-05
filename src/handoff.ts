@@ -60,9 +60,17 @@ import {
   cutKnowledgeSection,
   cutSpecSection,
   docSectionsOf,
+  extractSpecBlockLines,
   extractSpecSection,
   sectionsFromNarrative,
   sectionsOf,
+  SPEC_BLOCK_FENCE,
+  specBlockRange,
+  stripAllSpecBlocks,
+  stripSpecBlock,
+  truncateTitlesFromBlocks,
+} from './sections.ts'
+import {
   loadEntryDoc,
   loadProjectDoc,
   readNominations,
@@ -84,9 +92,10 @@ import {
   listTemplates,
   loadDefaultTemplate,
   loadTemplate,
-  renderSpecSection,
-  templateSectionNames,
+  renderSpecBlocksSkeleton,
+  TPL_GUIDANCE_NO_TRUNC,
   truncateTitlesFromSpec,
+  templateSectionNames,
   validateTemplate,
 } from './templates.ts'
 // ⭐⭐⭐ 决策 167：落知识时**由插件自己记一笔**（供轮次结束的自动规范化判断）。
@@ -102,6 +111,19 @@ import {
   truncateProgress,
 } from './history.ts'
 import { readNarrativeMirror, writeNarrativeMirror } from './narrative.ts'
+// ⭐ 决策 209：建项目回执里要报"本模板没有可截断的节"（那句文案走提示词页、可编辑）。
+import { promptText } from './prompts.ts'
+import type { Template } from './templates.ts'
+
+/**
+ * 规范块的**围栏那一行**（` ```memj:spec `）。
+ *
+ * ⚠️ 语言标记取自 `sections.ts` 的 `SPEC_BLOCK_FENCE`（**唯一源头**）——
+ *   解析侧（`specBlockRange`）与这里必须同源，否则"写的"与"读的"会漂。
+ */
+const FENCE_SPEC = `${String.fromCharCode(96, 96, 96)}${SPEC_BLOCK_FENCE}`
+/** 规范块的**结束围栏**（裸那一串反引号）。⚠️ 与 `FENCE_SPEC` **不是同一个**。 */
+const FENCE_BARE = String.fromCharCode(96, 96, 96)
 import { commitAll, ensureRepo, noteGitFailure, noteGitSuccess, probeGit, readRepoState } from './git.ts'
 import type { Cover, CoverIssue } from './schema.ts'
 import { ENTRY_KINDS, isEntryKind } from './schema.ts'
@@ -434,6 +456,21 @@ export interface HandoffResult {
  * @param text - 叙事文本。
  * @returns 节数组（**不含**工具维护的节）。
  */
+/**
+ * ⭐ **算"一节有多重"——剔除规范块**（决策 209）。
+ *
+ * 🔴 **为什么必须剔**：截断判据（`beforeChars > warnChars`）与回执体量行都用它，
+ *   而规范块是**工具维护的固定开销**（几百字符）⇒ 算进去会让
+ *   ① 阈值被规范吃掉；② 文档刚建就"接近超阈值"；③ 回执报的体量**虚高**。
+ * ⭐ **两处必须同源**（同一个函数）—— 否则"该不该截"与"回执报多少"会给出两个数
+ *   （本项目最忌"同一事实两个数"）。
+ * @param lines - 该节的行（含标题行）。
+ * @returns 字符数（已剔除规范块与首尾空白）。
+ */
+function sectionCharCount(lines: readonly string[]): number {
+  return stripSpecBlock(lines).join('\n').trimEnd().length
+}
+
 function splitH2(text: string): Array<{ title: string; lines: string[] }> {
   const out: Array<{ title: string; lines: string[] }> = []
   let cur: { title: string; lines: string[] } | undefined
@@ -591,7 +628,10 @@ export function findEmptySections(text: string): string[] {
   for (const s of splitAny(text)) {
     // 只报顶层节（子节空着往往是有意的占位；顶层空壳才是文档结构问题）。
     if (s.level !== 2) continue
-    const body = lines.slice(s.startLine + 1, s.endLine).join('\n').trim()
+    // ⭐⭐ **决策 209：判空壳前先剥规范块** ——
+    //    否则"只有规范、还没写正文"的节**永远不被判为空壳**
+    //    ⇒ 用户再也看不到"这一节还没写"的提醒（那是这条检查的全部用处）。
+    const body = stripSpecBlock(lines.slice(s.startLine + 1, s.endLine)).join('\n').trim()
     if (body === '') out.push(s.title)
   }
   return out
@@ -700,31 +740,41 @@ export function applySectionOp(
   //    后续的 `### 第十九批` 于是"挂"到了它下面）。
   //    ⭐ 判据：**凡是"把解析出来的结构再写回"的地方，级别/缩进这类属性必须原样带上**。
   const titleLine = `${'#'.repeat(section.level)} ${section.title}`
-  const beforeChars = lines.slice(section.startLine, section.endLine).join('\n').trimEnd().length
+  const beforeChars = sectionCharCount(lines.slice(section.startLine, section.endLine))
 
-  // 该节正文（不含标题行、去掉首尾空行）。
-  const bodyOfSection = lines.slice(section.startLine + 1, section.endLine).join('\n').trim()
-  const newBody = body.trim()
+  // ⭐⭐ **决策 209：规范块是"受保护块"** ——
+  //   · `append`/`prepend` 只动**正文**，规范块位置不动（新内容插在它**之后**）；
+  //   · `replace` **保住盘上的规范块**（"故意删 vs 没抄"工具分不出 ⇒ 不猜）。
+  const whole = lines.slice(section.startLine, section.endLine)
+  const blk = extractSpecBlockLines(whole)
+  const bodyOfSection = stripSpecBlock(whole).slice(1).join('\n').trim()
+  const newBody = stripAllSpecBlocks(body.trim())
 
   let replaced: string[]
   if (op === 'drop') {
     replaced = []
   } else if (op === 'replace') {
     // ⚠️ `replace` 时调用方给的是**整节**（含标题）⇒ 直接用；没给标题就补上。
+    // 🔴 原文是 `if (/^#{2,3}\s+/.test(given[0])) replaced = given` ——
+    //    **决策 209 补**：规范块必须保住 ⇒ 无论哪一支，标题之后都要插回规范块。
     const given = newBody === '' ? [] : newBody.split(/\r?\n/)
-    if (given.length > 0 && /^#{2,3}\s+/.test(given[0] ?? '')) {
-      replaced = given
-    } else {
-      // 容错：没给标题时把原标题补回，避免"把标题弄丢"。
-      replaced = newBody === '' ? [titleLine] : [titleLine, '', ...given]
-    }
+    // 给了标题 ⇒ 去掉它（我们自己按实际级别重写）；没给 ⇒ 保底补上。
+    const content = given.length > 0 && /^#{2,3}\s+/.test(given[0] ?? '') ? given.slice(1) : given
+    replaced = newBody === ''
+      ? [titleLine]
+      : [titleLine, '', ...(blk.length > 0 ? [...blk, ''] : []), ...content]
   } else {
     // append / prepend：只动正文，标题与结构都保留。
     if (newBody === '') return { error: `\`docOp: '${op}'\` 时 \`doc\` 不能为空。` }
     const merged = op === 'append'
       ? `${bodyOfSection}\n\n${newBody}`.trim()
       : `${newBody}\n\n${bodyOfSection}`.trim()
-    replaced = [titleLine, '', ...merged.split(/\r?\n/)]
+    replaced = [
+      titleLine,
+      '',
+      ...(blk.length > 0 ? [...blk, ''] : []),
+      ...merged.split(/\r?\n/),
+    ]
   }
 
   // 拼回：该节之前 + 新节 + 该节之后。
@@ -771,10 +821,14 @@ export function normalizeNarrative(text: string, titles: readonly string[] = NAR
   const standard = new Set(titles)
   /** 标准节 → 合并后的内容行。 */
   const merged = new Map<string, string[]>()
+  /** ⭐ 决策 209：节名 → 规范块原文行（**逐字保留**；同一个节名只留第一个）。 */
+  const blocks = new Map<string, string[]>()
   /** 非标准节（保序、去重）。 */
   const extra: Array<{ title: string; lines: string[] }> = []
 
   for (const s of sections) {
+    const blk = extractSpecBlockLines([`## ${s.title}`, ...s.lines])
+    if (blk.length > 0 && !blocks.has(s.title)) blocks.set(s.title, blk)
     if (standard.has(s.title)) {
       const prev = merged.get(s.title)
       if (prev === undefined) merged.set(s.title, [...s.lines])
@@ -787,11 +841,16 @@ export function normalizeNarrative(text: string, titles: readonly string[] = NAR
   const out: string[] = []
   for (const title of titles) {
     out.push(`## ${title}`, '')
+    // ⭐ 规范块插在正文之前（**逐字保留**，不重新渲染 —— 用户可能手改过措辞）。
+    const blk = blocks.get(title)
+    if (blk !== undefined && blk.length > 0) out.push(...blk, '')
     const body = (merged.get(title) ?? []).join('\n').trim()
     if (body !== '') out.push(body, '')
   }
   for (const e of extra) {
     out.push(`## ${e.title}`, '')
+    const blk = blocks.get(e.title)
+    if (blk !== undefined && blk.length > 0) out.push(...blk, '')
     const body = e.lines.join('\n').trim()
     if (body !== '') out.push(body, '')
   }
@@ -838,9 +897,30 @@ export function mergeNarrative(
   // 新项目（无旧叙事）⇒ 等价于原来那个"规范成固定六节"的行为。
   if (existing === undefined || existing.trim() === '') return normalizeNarrative(incoming, titles)
 
-  const ins = splitH2(incoming)
+  // ⭐⭐⭐ **决策 209：规范块是"受保护块"** ——
+  //  🔴 `doc` 里**不可能带规范**（模型不会一字不差抄一遍）⇒ 不剥+回填就是**静默抹掉**
+  //     （实测：合并后 `## 目标` 下的规范块消失）。
+  //  ⭐ **裁定**：规范块**一律以盘上旧文档为准**，模型在 `doc` 里写什么都不改它
+  //     （"故意删规范"与"没抄规范"工具**分不出** —— 与 `findEmptySections` 的
+  //      "故意删空 vs 误删"同族，所以不猜）。
+  const ins = splitH2(stripAllSpecBlocks(incoming))
   const old = splitH2(existing)
   const standard = new Set(titles)
+
+  /** 盘上旧文档里，某节的规范块原文行（**逐字保留**，不重新渲染）。 */
+  const oldBlocks = new Map<string, string[]>()
+  for (const s of old) {
+    const b = extractSpecBlockLines([`## ${s.title}`, ...s.lines])
+    if (b.length > 0) oldBlocks.set(s.title, b)
+  }
+  /** 本次 `doc` 里，某节**自己带了**规范块 ⇒ 用它（用户/模型显式改规范的唯一通道）。 */
+  const newBlocks = new Map<string, string[]>()
+  for (const s of splitH2(incoming)) {
+    const b = extractSpecBlockLines([`## ${s.title}`, ...s.lines])
+    if (b.length > 0) newBlocks.set(s.title, b)
+  }
+  /** 取该节最终要用的规范块：本次显式给的 > 盘上的 > 没有。 */
+  const blockFor = (title: string): string[] => newBlocks.get(title) ?? oldBlocks.get(title) ?? []
 
   /** 本次写了的节（同名多次 ⇒ 合并）。 */
   const touched = new Map<string, string[]>()
@@ -855,11 +935,16 @@ export function mergeNarrative(
   for (const title of titles) {
     if (touched.has(title)) {
       out.push(`## ${title}`, '')
+      // ⭐ 规范块插在**正文之前**（不是"最前面"就够——`## 标题` 必须在它之前）。
+      const blk = blockFor(title)
+      if (blk.length > 0) out.push(...blk, '')
       const body = (touched.get(title) ?? []).join('\n').trim()
       if (body !== '') out.push(body, '') // ⚠️ 空内容 ⇒ 只留标题 ⇒ **这一节被清空**
     } else {
       const prior = old.filter((s) => s.title === title)
       out.push(`## ${title}`, '')
+      const blk = blockFor(title)
+      if (blk.length > 0) out.push(...blk, '')
       const body = prior.map((s) => s.lines.join('\n')).join('\n').trim()
       if (body !== '') out.push(body, '')
     }
@@ -871,6 +956,8 @@ export function mergeNarrative(
     if (standard.has(s.title) || extraSeen.has(s.title)) continue
     extraSeen.add(s.title)
     out.push(`## ${s.title}`, '')
+    const blk = blockFor(s.title)
+    if (blk.length > 0) out.push(...blk, '')
     const body = s.lines.join('\n').trim()
     if (body !== '') out.push(body, '')
   }
@@ -878,11 +965,66 @@ export function mergeNarrative(
     if (standard.has(s.title) || extraSeen.has(s.title)) continue
     extraSeen.add(s.title)
     out.push(`## ${s.title}`, '')
+    // ⭐ 决策 209：这一支同样要回填规范块（旧的没被碰过的自定义节）。
+    const blk = blockFor(s.title)
+    if (blk.length > 0) out.push(...blk, '')
     const body = s.lines.join('\n').trim()
     if (body !== '') out.push(body, '')
   }
 
   return out.join('\n').trimEnd()
+}
+
+/**
+ * ⭐⭐⭐ **把模板的规范块"插进"已有叙事**（决策 209，建项目专用）。
+ *
+ * ── 它与 `mergeNarrative` 的区别（**别混用**）──────────────────────────────
+ *   · `mergeNarrative(patch, old, titles)` = 「patch 写了哪几节就换掉哪几节」；
+ *   · `insertSpecBlocks(text, tpl)`       = 「**正文一个字不动**，只在每个节标题后
+ *      补上该节的规范块」。
+ *   🔴 我第一版拿前者干后者的活 ⇒ 骨架里的节**没有正文**，
+ *      于是被当成"本次没写"⇒ **正文全部清空**（实测 6 节只剩规范块）。
+ *   ⭐ 判据：**"插入"与"合并"是两种操作**，不要借同一个函数（借了就会踩这个坑）。
+ *
+ * ⚠️ **已经带规范块的节不动它**（幂等：重复调用结果相同）。
+ * ⚠️ **模板里没有的节**：不补（宁可没有规范，也不贴错的）。
+ * @param text - 已有叙事（含正文）。
+ * @param tpl - 模板（提供每节的 desc / truncate）。
+ * @returns 插好规范块的叙事。
+ */
+function insertSpecBlocks(text: string, tpl: Template): string {
+  const descOf = new Map(tpl.sections.map((s) => [s.name, s]))
+  const lines = text.split(/\r?\n/)
+  const out: string[] = []
+  let i = 0
+  while (i < lines.length) {
+    const line = lines[i] ?? ''
+    const m = /^##\s+(.+?)\s*$/.exec(line)
+    if (m === null) {
+      out.push(line)
+      i += 1
+      continue
+    }
+    const title = (m[1] ?? '').trim()
+    // 这一节的行区间（到下一个顶层 `##` 之前）。
+    let j = i + 1
+    while (j < lines.length && !/^##\s+/.test(lines[j] ?? '')) j += 1
+    const seg = lines.slice(i, j)
+    out.push(line)
+    const s = descOf.get(title)
+    // ⚠️ 已有规范块 ⇒ 原样保留（幂等）；模板里没这一节 ⇒ 不补。
+    if (s !== undefined && specBlockRange(seg) === undefined) {
+      out.push('', `${FENCE_SPEC}${s.truncate === true ? ' truncate' : ''}`)
+      if (s.desc.trim() !== '') out.push(s.desc.trim())
+      // 🔴 **闭合行是裸围栏**（不是 `FENCE_SPEC`）——我第一版两处都用了 `FENCE_SPEC`
+      //    ⇒ 渲染出 ` ```memj:spec ` 当收尾 ⇒ `specBlockRange` **认不出闭合**
+      //    ⇒ 规范块"不闭合" ⇒ 反解为空、`truncateSections` 不写（实测抓到）。
+      out.push(FENCE_BARE, '')
+    }
+    out.push(...seg.slice(1))
+    i = j
+  }
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd()
 }
 
 /**
@@ -982,10 +1124,17 @@ function defaultTruncateTitle(
   truncateSections: readonly string[] | undefined,
   narrative?: string,
 ): string[] {
-  // ① **正文优先**：规范节存在就认它（含"存在但没有任何截断标记"= 不截）。
-  const spec = extractSpecSection(narrative ?? '')
-  if (spec.trim() !== '') return truncateTitlesFromSpec(spec)
-  // ② 回落 frontmatter（老文档 / 还没生成规范节）。
+  // ① ⭐⭐ **正文优先**（决策 209 改：从**各节自己的规范块**读）。
+  //    🔴 与决策 207 的区别：那时规范在**末尾一节**里、用行内列表反解；
+  //       现在规范**长在各节自己身上**（围栏起始行的 `truncate`）。
+  //    ⚠️ 语义不变：**"解析出来是空数组"= 真的不截**（不是"没找到"）。
+  const fromBlocks = truncateTitlesFromBlocks(narrative ?? '')
+  if (fromBlocks.length > 0) return fromBlocks
+  // ⚠️ **兼容决策 207 的旧形态**：文档里若还留着末尾的 `## 本档写作规范` 节
+  //    （存量、或用户手写的），仍从它反解 —— 否则那些文档会**静默变成"不截"**。
+  const legacy = extractSpecSection(narrative ?? '')
+  if (legacy.trim() !== '') return truncateTitlesFromSpec(legacy)
+  // ② 回落 frontmatter（老文档 / 还没生成规范块）。
   const mine = (sections ?? []).map((s) => s.trim()).filter((s) => s !== '')
   if (mine.length === 0) return [PROGRESS_TITLE]
   return (truncateSections ?? []).map((s) => s.trim()).filter((s) => s !== '')
@@ -2147,6 +2296,35 @@ export async function runHandoff(
         mergeNarrative(narrativeFromDocBare(req.doc), existing?.narrative, docSections)
       : (existing?.narrative ?? narrativeFromDoc(undefined, docSections))
 
+  // ⭐⭐⭐ **决策 209：新建项目时，骨架要连"每节的规范块"一起长出来。**
+  //
+  // 🔴 **为什么必须在这里补**（而不是靠 `narrativeFromDoc`）：
+  //    那个函数只产**节标题骨架**（`## X\n\n## Y`），它**不知道模板的 desc**
+  //    （`docSections` 只是节名数组）⇒ 规范块必须由**模板**渲染。
+  // ⚠️ **只在"正文里一个规范块都没有"时才补**：
+  //    ① 新建 ⇒ 补（这是"建项目 = 复制模板"的落地点）；
+  //    ② 更新但文档还没规范块 ⇒ **不补**（决策 207 的裁定：
+  //       "已有文档没有规范就绝不替它合成" —— 我们不知道它该有哪几节规范，
+  //       硬贴一份六节默认规范到一份结构不同的文档上是**主动误导**）；
+  //    ③ 更新且已有规范块 ⇒ 早就保住了（`mergeNarrative` 负责）。
+  let withBlocks = narrative
+  if (existing === undefined && specBlockRange(narrative.split(/\r?\n/)) === undefined) {
+    // ⭐ 决策 208：`default` 也落盘且可被用户编辑 ⇒ 走读盘优先的那一个。
+    const tplForSkeleton = templateId === '' ? await loadDefaultTemplate() : await loadTemplate(templateId)
+    const tpl = tplForSkeleton ?? (await loadDefaultTemplate())
+    // ⚠️ 只在**节名对得上**时才用它的 desc（模板被换过 ⇒ 宁可不写规范，也不贴错）。
+    const names = new Set(docSections)
+    if (tpl.sections.length > 0 && tpl.sections.every((s) => names.has(s.name))) {
+      // 🔴🔴 **不能用 `mergeNarrative`**（我第一版就是这么错的，实测把正文**全吃掉**）：
+      //    那个函数的语义是「**第一个参数是补丁、第二个是旧的**」——
+      //    写成 `mergeNarrative(骨架, narrative, …)` 等于说"骨架是新的、narrative 是旧的"
+      //    ⇒ 骨架里那些节**没有正文**，于是"本次没写正文"⇒ **整节被清空**
+      //    （实测：6 节正文全没了，只剩规范块）。
+      //    ⭐ 判据：**"把 A 插进 B" 与 "用 A 合并 B" 是两件事，别借同一个函数**。
+      withBlocks = insertSpecBlocks(narrative, tpl)
+    }
+  }
+
   // ⭐ `drop` 之后**必须检查有没有产生空壳节**（决策 134 §3.1 / 用户裁定：
   //    "允许删到只剩标题，但回执必须报警"）——工具分不清"故意删空"与"误删"。
   if (sectionOp?.narrative !== undefined && docOp === 'drop') {
@@ -2185,7 +2363,7 @@ export async function runHandoff(
   // ⚠️ **只在 `narrative` 步做**（没动叙事就不该截）。
   // ⚠️ **任何失败都不影响 handoff**：best-effort，问题只进回执。
   // ══════════════════════════════════════════════════════════════════════
-  let finalNarrative = narrative
+  let finalNarrative = withBlocks
   const historyLines: string[] = []
   /** ⭐ 本次是否**真的归档了历史**（截断发生了）——孤本判据检测据此**跳过本轮**。 */
   let historyArchived = false
@@ -2201,7 +2379,12 @@ export async function runHandoff(
   try {
     const trunc = await runHistoryArchive({
       projectId,
-      narrative,
+      // 🔴🔴 **决策 209 修**：这里原先传的是 `narrative` —— 而新建项目时
+      //    `withBlocks`（含规范块）是在它**之后**才算出来的 ⇒ 截断拿旧文本跑，
+      //    再把结果赋回 `finalNarrative` ⇒ **规范块被整个丢掉**（实测：文档里没有规范块、
+      //    `truncateSections` 也落空）。⭐ 判据：**"后面还会加工这份文本"时，
+      //    下游必须拿加工后的那一份**，否则前面的加工白做。
+      narrative: withBlocks,
       existingNarrative: existing?.narrative,
       config: env.config,
       narrateNow,
@@ -2247,30 +2430,23 @@ export async function runHandoff(
   //    （`narrativeFromDocBare` 已砍一次，但按节路径 `applySectionOp` 与
   //     `existing.narrative` 那条路都可能把它带过来）⇒ 这里统一"先砍后拼"。
   // ══════════════════════════════════════════════════════════════════════
-  // 🔴🔴 **必须先看"旧文档里的规范节"**（实测踩到的真 bug，第一版就错在这里）：
-  //    `mergeNarrative()` 会**按该文档的节名重建叙事**，而规范节**不是叙事节**
-  //    （`splitH2` 已把它排除）⇒ **重建后它就没了**。
-  //    ⚠️ 所以 `finalNarrative` 里**根本取不到**它：
-  //      · 更新路径 ⇒ 取 `existing.narrative`（旧文档里那份，**权威**）；
-  //      · 按节路径 ⇒ 同理（`applySectionOp` 也只动叙事节，规范节会原样留着，
-  //        但要给它一个**统一的取法**，别依赖"碰巧还在"）。
-  //    ⭐ 判据：**工具维护的节，权威永远在"盘上那份旧文档"里** ——
-  //      模型写的 `doc` 里即使带了它也不算数（那一份是它回传的副本）。
+  // ⭐⭐⭐ **决策 209：规范块已经"随各节一起"被保住了** —— 这一段不再拼末尾那节。
+  //
+  // 🔴 **为什么可以删掉这一整段**：决策 207 时规范住在**末尾独立一节**里，
+  //    而 `mergeNarrative()` 按该文档的节名重建叙事（规范节不是叙事节）
+  //    ⇒ 必须在外面**另取再拼回**。
+  //    现在规范**长在各节自己身上**（标题下的 `memj:spec` 围栏）
+  //    ⇒ `mergeNarrative` / `normalizeNarrative` / `applySectionOp` 三处
+  //      **各自负责回填它自己那一节的规范块**（见那三个函数的实现）
+  //    ⇒ 这里**不需要**再做一次，否则就是**同一件事的第二份实现**。
+  //
+  // ⚠️ **但存量文档里那个末尾节还在**（决策 207 建的）⇒ 仍然要**原样保住它**，
+  //    否则那些文档的规范会**静默消失**。判据：工具维护的内容，
+  //    只有"我还知道它在哪"时才敢重建；不知道就**原样端过去**。
   // ══════════════════════════════════════════════════════════════════════
-  let specText = extractSpecSection(existing?.narrative ?? '')
-  if (specText === '' && existing !== undefined) {
-    // 兜底：旧文档没有（少见）⇒ 再在本次结果里找一次。
-    specText = extractSpecSection(finalNarrative)
-  }
-  if (specText === '' && existing === undefined) {
-    // ⭐ 只在**新建**时从模板复制（默认模板永远可用；自定义模板被删则不猜）。
-    // ⭐ 决策 208：`default` 也落盘且可被用户编辑 ⇒ 走读盘优先的那一个。
-    //    ⚠️ 新建（`existing === undefined`）时 `templateId` 为空 ⇒ 取当前生效的默认模板。
-    const tplForSpec = templateId === '' ? await loadDefaultTemplate() : await loadTemplate(templateId)
-    if (tplForSpec !== undefined) specText = renderSpecSection(tplForSpec)
-  }
+  const legacySpec = extractSpecSection(existing?.narrative ?? finalNarrative)
   const narrativeBody = cutSpecSection(finalNarrative)
-  const finalWithSpec = specText === '' ? narrativeBody : `${narrativeBody.trimEnd()}\n\n${specText}\n`
+  const finalWithSpec = legacySpec === '' ? narrativeBody : `${narrativeBody.trimEnd()}\n\n${legacySpec}\n`
 
   // ⭐⭐⭐ **frontmatter 的 `sections` / `truncateSections` 改成"正文的镜像"**（2026-10-12）。
   //
@@ -2284,7 +2460,11 @@ export async function runHandoff(
   // ⚠️ **顺序很重要**：必须在 `finalWithSpec` 算完之后取（规范节已被排除，
   //   `sectionsFromNarrative` 不会把「本档写作规范」算成一个叙事节）。
   const mirrorSections = sectionsFromNarrative(narrativeBody)
-  const mirrorTruncate = truncateTitlesFromSpec(specText)
+  // ⭐⭐ 决策 209：截断声明**从各节自己的规范块反解**（`truncateTitlesFromBlocks`）；
+  //    存量文档的末尾规范节由 `defaultTruncateTitle` 那条兼容分支兜住。
+  const mirrorTruncate = truncateTitlesFromBlocks(narrativeBody)
+  /** 正文里**有没有规范块**（决定 `truncateSections` 用镜像值还是沿用旧值）。 */
+  const hasSpecBlock = specBlockRange(narrativeBody.split(/\r?\n/)) !== undefined || legacySpec !== ''
 
   await writeProjectDoc(
     projectId,
@@ -2322,11 +2502,14 @@ export async function runHandoff(
         : (existing !== undefined ? existing.frontmatter.sections : newSections),
       // ⭐ 建文档用的模板 id（决策 204）：同样**必须沿用已有的**（纯记录，但别擦）。
       template: existing !== undefined ? (existing.frontmatter.template ?? '') : templateId,
-      // ⭐⭐ 自动截断目标节：**正文规范节的镜像**（同上）。
+      // ⭐⭐ 自动截断目标节：**正文规范块的镜像**（决策 209）。
       //    ⚠️ 与 `sections` 同一纪律：老文档（两个字段都空）**保持空**，
       //       否则会把它推进"以 `truncateSections` 为准"的分支 ⇒ 静默不截。
-      truncateSections: specText !== '' || (existing?.frontmatter.truncateSections ?? []).length > 0
-        ? (specText === '' ? newTruncateSection : mirrorTruncate)
+      //    ⭐ 判据：**"正文里有规范块"与"正文里一个块都没有"要分开** ——
+      //       前者才用镜像值（哪怕是空数组：那是"真的不截"）；
+      //       后者（老文档 / 还没迁移）**沿用旧值**。
+      truncateSections: hasSpecBlock || (existing?.frontmatter.truncateSections ?? []).length > 0
+        ? (hasSpecBlock ? mirrorTruncate : newTruncateSection)
         : (existing?.frontmatter.truncateSections ?? []),
     },
     finalWithSpec,
@@ -2449,6 +2632,14 @@ export async function runHandoff(
         appliedTemplate.sections.map((s) => `\`${s.name}\``).join(' / ')
     lines.push(
       `⭐ **已新建项目 \`${projectId}\`**（骨架已按模板建立${tplLabel}）。`,
+      // ⭐⭐ **决策 209：这两句原先写在文档正文里，现在改由回执报** ——
+      //    · "沉淀知识由工具生成" ⇒ 它是给模型看的纪律，而模型每轮都看得到协议；
+      //    · "没有可截断节 ⇒ 文档不会瘦身" ⇒ 那是**模板级**的事实，不是这份文档的正文。
+      //    ⚠️ 判据：**能由回执说清的事，不要塞进文档正文**（正文是给人读的项目记录）。
+      `🔴 **末节 \`## 沉淀知识\` 由工具维护**（放封面）—— 它不是叙事节，不要写它。`,
+      ...(appliedTemplate !== undefined && appliedTemplate.sections.every((s) => (s as { truncate?: boolean }).truncate !== true)
+        ? [promptText('tpl:guidance-no-trunc', TPL_GUIDANCE_NO_TRUNC)]
+        : []),
       `库里现有项目：${[...existingProjects, projectId].map((p) => `\`${p}\``).join('、')}`,
     )
   } else {

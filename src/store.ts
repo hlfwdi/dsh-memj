@@ -92,6 +92,15 @@ import {
   sectionsFromNarrative,
   SPEC_TITLE,
   SPEC_SECTION,
+  // ⭐⭐ 决策 209：各节自己的规范块（`## 节名` 下的 ```memj:spec 围栏）。
+  SPEC_BLOCK_FENCE,
+  specBlockFenceInfo,
+  specBlockRange,
+  extractSpecBlock,
+  extractSpecBlockLines,
+  stripSpecBlock,
+  stripAllSpecBlocks,
+  truncateTitlesFromBlocks,
 } from './sections.ts'
 
 export {
@@ -110,6 +119,14 @@ export {
   sectionsFromNarrative,
   SPEC_TITLE,
   SPEC_SECTION,
+  SPEC_BLOCK_FENCE,
+  specBlockFenceInfo,
+  specBlockRange,
+  extractSpecBlock,
+  extractSpecBlockLines,
+  stripSpecBlock,
+  stripAllSpecBlocks,
+  truncateTitlesFromBlocks,
 }
 
 /** 一个项目在库里的全貌。 */

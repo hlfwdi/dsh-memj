@@ -39,8 +39,10 @@ import { renderFrontmatter, splitFrontmatter, yamlScalar } from './parse.ts'
 import {
   KNOWLEDGE_TITLE,
   NARRATIVE_TITLES,
+  SPEC_BLOCK_FENCE,
   SPEC_SECTION,
   SPEC_TITLE,
+  specBlockRange,
 } from './sections.ts'
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -62,13 +64,44 @@ import {
 //    改行模板时别把 `{{desc}}` 当成示例文字删掉。
 // ══════════════════════════════════════════════════════════════════════════
 
+// ══════════════════════════════════════════════════════════════════════════
+// ⚠️⚠️ **决策 209：`tpl:guidance-*` 五条已退役三条**（2026-10-05）
+//
+// 它们原先用于渲染「本档写作规范」那一节（决策 207 的"末尾单列一节"）。
+// 现在规范**长在各节自己身上**（标题下的 ` ```memj:spec ` 围栏，见 `sections.ts`），
+// 围栏形态**由代码生成**（`renderSpecBlocksSkeleton`）⇒ **不再走提示词**
+//   ⇒ ⭐ 顺带消灭了当年的一个坑：**用户把外壳改坏 ⇒ 反解静默失效**（现在改不了）。
+//
+// | key | 现在还有用吗 |
+// |---|---|
+// | `tpl:guidance-head` | ❌ **退役**（"本文档共 N 节"不再需要） |
+// | `tpl:guidance-row` | ❌ **退役**（围栏形态由代码定） |
+// | `tpl:guidance-foot` | ❌ **退役**（"沉淀知识由工具生成"改由回执报） |
+// | `tpl:guidance-trunc-mark` | ✅ **保留** —— **旧形态的兼容读要用它** |
+// | `tpl:guidance-no-trunc` | ✅ **保留** —— 回执里要报"本模板没有可截断的节" |
+//
+// 🔴 **退役 ≠ 可以删 key**：用户可能在设置页改过它们。删了 key 会让那份覆盖
+//    变成**孤儿**（页面上再也看不到、也删不掉）。⇒ 保留登记、标注退役。
+// ══════════════════════════════════════════════════════════════════════════
+
+/** @deprecated 决策 209 退役（不再有消费者）。保留常量是为了**不删台账里的 key**。 */
 export const TPL_GUIDANCE_HEAD: string =
   '本文档共 **{{count}} 节**（顺序固定，工具按此输出；缺的节补空标题）：'
+/** @deprecated 决策 209 退役（规范块的形态由 `renderSpecBlocksSkeleton` 生成）。 */
 export const TPL_GUIDANCE_ROW: string = '- `## {{name}}` —— {{desc}}{{trunc}}'
+/**
+ * ✅ **仍在使用**（唯一还活着的 `tpl:guidance-*`）——**旧形态的兼容读**。
+ *
+ * 🔴 用途没变，但**消费者换了**：`truncateTitlesFromSpec()` 现在只服务
+ *   **存量文档**（决策 207 建的、规范还在末尾那一节里）。
+ *   ⇒ 删掉它，那些文档会**静默变成"不截"**（`a113fcb` 事故同族）。
+ */
 export const TPL_GUIDANCE_TRUNC_MARK: string = '　⭐ **本节的较早内容会被自动截断归档**'
+/** ✅ **仍在使用**：建项目回执里报"本模板没有声明可截断的节 ⇒ 文档不会自动瘦身"。 */
 export const TPL_GUIDANCE_NO_TRUNC: string =
   `⚠️ **本模板没有声明可截断的节** ⇒ 文档**不会自动瘦身**（超过阈值也不会截）。
 压缩需要你按上面的规范手动归并。`
+/** @deprecated 决策 209 退役（那句话改由回执报，不再写进文档）。 */
 export const TPL_GUIDANCE_FOOT: string =
   '🔴 **`## {{knowledgeTitle}}` 由工具生成**（放封面，不是你写的），**不在上面这几节里**。'
 
@@ -80,6 +113,14 @@ registerPromptDefault('tpl:guidance-foot', TPL_GUIDANCE_FOOT)
 
 /** 模板结构版本（变了就升 ⇒ 旧模板当不兼容，不猜）。 */
 export const TEMPLATE_VERSION = 1
+
+/**
+ * 代码围栏那一串反引号（避免在模板串里直接写它——本项目的老坑）。
+ *
+ * ⚠️ **它是"围栏那行"的唯一来源**：`renderTemplateDoc` / `renderSpecBlocksSkeleton`
+ *   都从它拼 ⇒ 不会出现"一处写 3 个、另一处写 4 个"。
+ */
+const FENCE = String.fromCharCode(96, 96, 96)
 
 /** 模板 id 的允许形态（与 slug 同规，因为它同时是文件名）。 */
 export const TEMPLATE_ID_RE = /^[a-z0-9][a-z0-9-]{0,46}[a-z0-9]$/
@@ -203,6 +244,22 @@ export function validateTemplate(t: Template): string[] {
     if (name === KNOWLEDGE_TITLE) {
       errs.push(`${at}：节名不能是「${KNOWLEDGE_TITLE}」——**那一节由工具维护**（封面存在那里），不开放给模板。`)
     }
+    // 🔴🔴 **决策 209 补的缺口**（实测：原先放行 ⇒ 文档里会出现**两个同名顶层节**）：
+    //    模板里若有一节叫「本档写作规范」，工具落盘时**还会再加一个**规范节
+    //    ⇒ `specRange()` 只认第一个、`cutSpecSection` 只砍第一个 ⇒ **第二个残留**，
+    //    且 `sectionsFromNarrative` 把两个都排除 ⇒ 那一节成了"既不是叙事节、
+    //    也不受工具管"的**孤儿**。
+    if (name === SPEC_TITLE) {
+      errs.push(`${at}：节名不能是「${SPEC_TITLE}」——**那一节由工具维护**（写作规范），不开放给模板。`)
+    }
+    // 🔴🔴 **决策 209 补的第二个缺口**（实测：节名含反引号 ⇒ 规范节渲染后被**截断反解**）：
+    //    节名会被渲染进 `- \`## <节名>\` —— …` 这类**行内代码**里；
+    //    反引号/竖线/`#` 会破坏它 ⇒ 反解出的节名**少一截**（截断瞄错节）。
+    //    ⚠️ 这些字符在**文档标题行**里也是 markdown 元字符，本就不该出现在节名里。
+    if (/[`|]/.test(s.name)) {
+      errs.push(`${at}（${name}）：节名不能含反引号或竖线 —— 它会被渲染进行内代码，**反解时会被截断**（截断会瞄错节）。`)
+    }
+    if (name.startsWith('#')) errs.push(`${at}：节名不要带 \`#\`（工具会自己加 \`## \`）。`)
     if (names.includes(name)) errs.push(`${at}：节名 \`${name}\` 重复。`)
     names.push(name)
   }
@@ -279,14 +336,22 @@ export function renderTemplateDoc(t: Template): string {
     fm,
     `# 交接文档模板 — ${t.title || t.id}`,
     '',
-    `<!-- 这是模板 \`${t.id}\`：\`## \` 标题 = 节名；标题下的正文 = "这一节要干嘛"（会进写作规范）。`,
-    '     ⭐ 建项目时工具会把它复制成那份项目文档的结构，此后两者解耦（改这里不影响已有文档）。',
-    '     ⚠️ 行末 `<!-- truncate -->` 表示该节参与自动截断归档。 -->',
+    `<!-- 这是模板 \`${t.id}\`：\`## \` 标题 = 节名；标题下的 ${FENCE}${SPEC_BLOCK_FENCE} 围栏 = "这一节要干嘛"。`,
+    '     ⭐ 建项目时工具会把**整份结构（含规范块）**复制成那份项目文档，此后两者解耦（改这里不影响已有文档）。',
+    `     ⚠️ 围栏起始行末尾写 \`truncate\`（如 ${FENCE}${SPEC_BLOCK_FENCE} truncate）表示该节参与自动截断归档。 -->`,
     '',
   ]
   for (const s of t.sections) {
-    parts.push(`## ${s.name}${s.truncate === true ? ' <!-- truncate -->' : ''}`, '')
-    if (s.desc.trim() !== '') parts.push(s.desc.trim(), '')
+    parts.push(`## ${s.name}`, '')
+    // ⭐⭐ 决策 209：desc 放进**规范块**（与项目文档同形）。
+    //    ⚠️ 即使 desc 是空串也照样写围栏 —— 否则解析回来分不清
+    //       "这一节没有规范"与"规范是空的"，而后者是**校验要报的错**。
+    parts.push(
+      `${FENCE}${SPEC_BLOCK_FENCE}${s.truncate === true ? ' truncate' : ''}`,
+      s.desc.trim(),
+      FENCE,
+      '',
+    )
   }
   return `${parts.join('\n').trimEnd()}\n`
 }
@@ -313,10 +378,43 @@ export function parseTemplateDoc(text: string, fallbackId: string): Template | u
   const fmTitle = typeof data?.['title'] === 'string' ? (data['title'] as string) : ''
 
   const sections: TemplateSection[] = []
-  let cur: TemplateSection | undefined
+  /** 当前节在**全文行数组**里的起始下标（攒行用；`undefined` = 还没有节）。 */
+  let curFrom = -1
   let inFence = false
-  for (const line of body.split(/\r?\n/)) {
+  const all = body.split(/\r?\n/)
+
+  /** 收尾：把 `all[curFrom, to)` 这一节解析出来（⭐ 规范块由 `specBlockRange` 单独取）。 */
+  const flush = (to: number): void => {
+    if (curFrom < 0) return
+    const seg = all.slice(curFrom, to)
+    const head = /^##\s+(.+?)\s*$/.exec(seg[0] ?? '')
+    if (head === null) { curFrom = -1; return }
+    let name = (head[1] ?? '').trim()
+    // ⚠️ **兼容旧的 `<!-- truncate -->` 行末标记**（决策 208 的存量模板）；
+    //    新形态的标记在规范块的围栏起始行上（见下）。
+    const legacyTrunc = /<!--\s*truncate\s*-->/i.test(name)
+    name = name.replace(/<!--\s*truncate\s*-->/i, '').trim()
+    if (name === '') { curFrom = -1; return }
+    // ⭐⭐ 决策 209：**围栏的内容 = desc**（`specBlockRange` 是唯一边界实现）。
+    const r = specBlockRange(seg)
+    // ⚠️⚠️ **兼容旧形态（决策 208）**：那时 desc 是**标题下的裸正文**。
+    //    🔴 不接住它们 ⇒ 存量模板的 desc **全部变成空串** ⇒ `validateTemplate`
+    //       报"desc 必填" ⇒ **用户会以为自己的模板坏了**（而它只是旧格式）。
+    //    ⭐ 判据：**换存储形态时，读侧必须同时认两种**（本项目的老纪律）。
+    const desc = r === undefined
+      ? seg.slice(1).join('\n').trim()
+      : seg.slice(r.bodyStart, r.bodyEnd).join('\n').trim()
+    const sec: TemplateSection = { name, desc }
+    if (r?.truncate === true || legacyTrunc) sec.truncate = true
+    sections.push(sec)
+    curFrom = -1
+  }
+
+  for (let i = 0; i < all.length; i += 1) {
+    const line = all[i] ?? ''
     // ⚠️ 跳过代码围栏内的伪标题（与人侧文档解析同规）。
+    //    🔴 **但规范块的围栏起始行不在此列** —— 它由 `specBlockRange` 认，
+    //       而这里只需知道"进了围栏、里面的 `##` 不是节"。
     if (/^\s*```/.test(line)) {
       inFence = !inFence
       continue
@@ -324,27 +422,19 @@ export function parseTemplateDoc(text: string, fallbackId: string): Template | u
     if (inFence) continue
     const m = /^##\s+(.+?)\s*$/.exec(line)
     if (m !== null) {
-      let name = (m[1] ?? '').trim()
-      // ⚠️ **必须宽容**（这是"选 md 让人手改"的直接后果）：人手写时很容易
-      //    写成 `<!--truncate-->`（没空格）或留多余空格 ⇒ 用正则而不是精确串匹配，
-      //    否则用户"明明标了却没生效"，**而且不报错**。
-      const trunc = /<!--\s*truncate\s*-->/i.test(name)
-      name = name.replace(/<!--\s*truncate\s*-->/i, '').trim()
-      if (name === '') continue
-      cur = { name, desc: '' }
-      if (trunc) cur.truncate = true
-      sections.push(cur)
+      flush(i)
+      curFrom = i
       continue
     }
     // ⚠️ 顶层 `# ` 是文件标题 ⇒ 结束当前节（"这一节要干嘛"不会跨过它）。
     if (/^#\s+/.test(line)) {
-      cur = undefined
+      flush(i)
       continue
     }
-    if (cur !== undefined) cur.desc = cur.desc === '' ? line.trim() : `${cur.desc}\n${line.trim()}`
   }
+  flush(all.length)
+
   if (sections.length === 0) return undefined
-  for (const s of sections) s.desc = s.desc.trim()
   return { version: TEMPLATE_VERSION, id, title: fmTitle.trim() !== '' ? fmTitle.trim() : id, sections }
 }
 
@@ -493,70 +583,56 @@ export async function deleteTemplate(id: string): Promise<boolean> {
 export const DEFAULT_SECTION_NAMES: readonly string[] = NARRATIVE_TITLES
 
 /**
- * ⭐⭐⭐ **渲染「本档写作规范」整节**（2026-10-12，模板与提示词解耦）。
+/**
+ * ⭐⭐⭐ **渲染"建项目用的骨架"——每节连它的规范块一起生成**（决策 209）。
  *
- * ── 它是什么 ──────────────────────────────────────────────────────────────
- * 把"这份文档有几节、每节要干嘛、哪节会被自动截断"写成**文档正文里的一节**，
- * 排在叙事末尾、`## 沉淀知识` 之前。**建项目时从模板复制进来，之后归文档自己所有。**
+ * ── 它取代了什么 ──────────────────────────────────────────────────────────
+ * 取代 `renderSpecSection()`（决策 207 的"文档末尾单列一节"）。
+ * 现在规范**长在它讲的那一节自己身上**（用户最初的形态）：
  *
- * 🔴 **为什么放正文、不放 `memj_read` 的按需注入**（这是本次解耦的核心）：
- *   ① **常驻不了**：`context()` 是单条快照、按整条文本比较 ⇒ 按项目动态改它会
- *      **每轮 append 一条新消息**（库内知识 `74a18e19`）；
- *   ② **按需注入也有代价**：那要求"读文档时现去查模板" ⇒ 模板被删就得走 fallback、
- *      且**模型不读那份文档就永远看不到规范**（而它正是"该怎么写这份文档"）；
- *   ③ ⭐ **落进正文之后它天然免疫一类 bug**：`rebuildDerivedLayers()` 会重写
- *      frontmatter 且**只带它自己那张字段表** ⇒ `sections` / `truncateSections` /
- *      `template` 全被抹掉（已实测复现）；而**正文是 rebuild 唯一不碰的东西**
- *      （实测 sha256 逐字相同）。
+ *   ## 目标
  *
- * 🔴 **必须是纯函数 + 幂等**：落盘路径上每次都会调它，而它旁边那份旧规范会被
- *   `cutSpecSection()` 砍掉 ⇒ 同一个输入永远得到同一个输出。
+ *   ```${SPEC_BLOCK_FENCE}
+ *   这个项目要做什么
+ *   ```
+ *
+ *   （空行留给模型写正文）
+ *
+ * ── 🔴 三条纪律 ───────────────────────────────────────────────────────────
+ *   1. **纯函数 + 幂等**：建项目路径上每次都会调它（同一输入永远同一输出）；
+ *   2. **围栏语言标记走 `SPEC_BLOCK_FENCE` 常量**（与解析侧同源，改一处即两侧同步）；
+ *   3. **只产出"标题 + 规范块 + 空行"**，不动正文（正文由 `mergeNarrative` 负责）。
+ *
+ * ⚠️ **desc 为空也照样写围栏** —— 否则解析回来分不清"这一节没有规范"与
+ *   "规范是空的"，而后者正是 `validateTemplate` 要报的错。
  * @param t - 模板。
- * @returns 完整的该节文本（含 `## ` 标题行、末尾无多余空行）。
+ * @returns 骨架全文（末尾一个换行）。
  */
-export function renderSpecSection(t: Template): string {
-  const lines: string[] = [
-    SPEC_SECTION,
-    '',
-    fillSlots(promptText('tpl:guidance-head', TPL_GUIDANCE_HEAD), { count: String(t.sections.length) }),
-    '',
-  ]
+export function renderSpecBlocksSkeleton(t: Template): string {
+  const out: string[] = []
   for (const s of t.sections) {
-    const trunc = s.truncate === true ? promptText('tpl:guidance-trunc-mark', TPL_GUIDANCE_TRUNC_MARK) : ''
-    lines.push(
-      fillSlots(promptText('tpl:guidance-row', TPL_GUIDANCE_ROW), { name: s.name, desc: s.desc, trunc }),
-    )
+    const mark = s.truncate === true ? ' truncate' : ''
+    out.push(`## ${s.name}`, '', `${FENCE}${SPEC_BLOCK_FENCE}${mark}`)
+    if (s.desc.trim() !== '') out.push(s.desc.trim())
+    out.push(FENCE, '')
   }
-  const truncs = t.sections.filter((s) => s.truncate === true)
-  if (truncs.length === 0) {
-    lines.push('', promptText('tpl:guidance-no-trunc', TPL_GUIDANCE_NO_TRUNC))
-  }
-  lines.push(
-    '',
-    fillSlots(promptText('tpl:guidance-foot', TPL_GUIDANCE_FOOT), { knowledgeTitle: KNOWLEDGE_TITLE }),
-    '',
-    // ⭐⭐ **必须显式写清"这一节由工具维护"** —— 否则模型会顺手去改它，
-    //    而它的每一次改动都会被下次落盘**静默覆盖**（同「沉淀知识」的纪律）。
-    `🔴 **本节由工具维护**（从模板 \`${t.id}\` 复制而来），**不要手工改**——`,
-    '改模板不会影响已有文档（它们是解耦的）；要改**这一份文档**的规范，直接改本节即可。',
-  )
-  return lines.join('\n').trimEnd()
+  return `${out.join('\n').trimEnd()}\n`
 }
 
 /**
- * ⭐⭐ **从「本档写作规范」节里解析出"哪些节可自动截断"**（2026-10-12）。
+ * ⚠️⚠️ **兼容读（决策 207 的旧形态）** —— 从末尾那一节「本档写作规范」里
+ *   反解"哪几节能自动截断"。
  *
- * 🔴 **为什么需要它**：截断目标原先只记在 `frontmatter.truncateSections`，
- *   而那个字段**会被 `rebuildDerivedLayers()` 的旁路重写抹掉**（实测复现）。
- *   ⇒ 与节名同样，把**权威放回正文**：规范节里已经写着"哪节会被自动截断"，
- *   那是**给人/模型看的同一份事实**，顺手就能读出来。
- *
- * ⚠️ **判据是"这一行带不带截断标记"**，因此要与 `renderSpecSection()` **同源**：
- *   两边都用 `promptText('tpl:guidance-trunc-mark')` ⇒ 用户改了那句文案时
- *   **写与读会一起变**（这正是"配对"的意义）。
- *   为防"文档渲染于旧文案、后来文案被改"的错配，本函数**同时认内置默认文案**。
- * @param specSection - 规范节原文（`extractSpecSection()` 的产物）。
- * @returns 可截断的节名数组（顺序即文档顺序）；解析不出 ⇒ 空数组。
+ * 🔴 **决策 209 之后它不再是主路径**（主路径是 `truncateTitlesFromBlocks()`，
+ *   从**各节自己的规范块**读）。**但必须留着**：
+ *   存量文档（决策 207 建的）里规范仍在末尾那一节 ⇒ 删掉它，那些文档会
+ *   **静默变成"不截"**（`a113fcb` 事故的同族：判据翻转 + 完全静默）。
+ * ⚠️ 与 `renderSpecSection()` 配对：两边都用 `tpl:guidance-trunc-mark`
+ *   ⇒ 用户改那句文案时**写与读会一起变**。为防"文档渲染于旧文案、后来文案被改"
+ *   的错配，本函数**同时认内置默认文案**。
+ * @param specSection - 旧形态规范节原文（`extractSpecSection()` 的产物）。
+ * @returns 可截断的节名数组；解析不出 ⇒ 空数组。
+ * @deprecated 用 `truncateTitlesFromBlocks()`（决策 209）。
  */
 export function truncateTitlesFromSpec(specSection: string): string[] {
   if (specSection.trim() === '') return []
@@ -566,7 +642,7 @@ export function truncateTitlesFromSpec(specSection: string): string[] {
   ].filter((m) => m.trim() !== '')
   const out: string[] = []
   for (const line of specSection.split(/\r?\n/)) {
-    // 规范节里每个叙事节一行：`- \`## <节名>\` —— <用途><截断标记>`
+    // 旧形态里每个叙事节一行：`- \`## <节名>\` —— <用途><截断标记>`
     const m = /^\s*-\s+`##\s+(.+?)`/.exec(line)
     if (m === null) continue
     const name = (m[1] ?? '').trim()
@@ -575,3 +651,4 @@ export function truncateTitlesFromSpec(specSection: string): string[] {
   }
   return out
 }
+

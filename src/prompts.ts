@@ -812,14 +812,15 @@ const PROMPT_SPECS_RAW: readonly PromptSpec[] = [
     checks: [{ kind: 'nonEmpty' }],
   },
 
-  // ⭐⭐⭐ 「本档写作规范」那一节的骨架（2026-10-12；`{{…}}` 是插槽）。
-  //    ⭐ **落点是文档正文**：`handoff` 落盘时由 `renderSpecSection()` 渲染成
-  //    `## 本档写作规范` 一节，**建项目时从模板复制进来、之后归文档自己所有**。
-  //    ⚠️ 它们**不再**是"`memj_read` 额外附一份"的通路（那条已退役，见 `tools.ts` 的说明）。
-  //    🔴 里面嵌着运行时才知道的值（节数、节名、每节用途）⇒ 用插槽模板。
+  // ⚠️⚠️ **决策 209（2026-10-05）：`tpl:guidance-*` 五条已退役三条。**
+  //    规范不再住"文档末尾那一节"，而是**长在各节自己身上**
+  //    （`## 节名` 下的 ```memj:spec 围栏，形态由代码生成、**不过提示词**）
+  //    ⇒ ⭐ 顺带消灭了当年的坑：**用户把外壳改坏 ⇒ 反解静默失效**（现在改不了）。
+  //    🔴 **退役的 key 仍然登记**（不能删）：用户可能在设置页改过它们，
+  //       删 key 会让那份覆盖变成**孤儿**（页面上看不到、也删不掉）。
   {
     key: 'tpl:guidance-head',
-    injectMode: '文档正文（handoff 落盘时渲染进「本档写作规范」一节）',
+    injectMode: '⚠️ 已退役（决策 209）——不再有消费者，保留登记以免旧覆盖变孤儿',
     breaksCache: 'no',
     sourceFile: F.templates,
     sourceConst: 'TPL_GUIDANCE_HEAD',
@@ -832,7 +833,7 @@ const PROMPT_SPECS_RAW: readonly PromptSpec[] = [
   },
   {
     key: 'tpl:guidance-row',
-    injectMode: '文档正文（handoff 落盘时渲染进「本档写作规范」一节）',
+    injectMode: '⚠️ 已退役（决策 209）——规范块的形态改由代码生成，不再走提示词',
     breaksCache: 'no',
     sourceFile: F.templates,
     sourceConst: 'TPL_GUIDANCE_ROW',
@@ -849,7 +850,7 @@ const PROMPT_SPECS_RAW: readonly PromptSpec[] = [
   },
   {
     key: 'tpl:guidance-trunc-mark',
-    injectMode: '文档正文（handoff 落盘时渲染进「本档写作规范」一节）',
+    injectMode: '⚠️ **只剩兼容读**（决策 209）：只服务"规范还在末尾那一节"的存量文档',
     breaksCache: 'no',
     sourceFile: F.templates,
     sourceConst: 'TPL_GUIDANCE_TRUNC_MARK',
@@ -859,7 +860,7 @@ const PROMPT_SPECS_RAW: readonly PromptSpec[] = [
   },
   {
     key: 'tpl:guidance-no-trunc',
-    injectMode: '文档正文（handoff 落盘时渲染进「本档写作规范」一节）',
+    injectMode: '建项目回执（"本模板没有可截断的节"那句警告）',
     breaksCache: 'no',
     sourceFile: F.templates,
     sourceConst: 'TPL_GUIDANCE_NO_TRUNC',
@@ -869,7 +870,7 @@ const PROMPT_SPECS_RAW: readonly PromptSpec[] = [
   },
   {
     key: 'tpl:guidance-foot',
-    injectMode: '文档正文（由 handoff 落盘时渲染进「本档写作规范」一节）',
+    injectMode: '⚠️ 已退役（决策 209）——那句话改由回执报，不再写进文档',
     breaksCache: 'no',
     sourceFile: F.templates,
     sourceConst: 'TPL_GUIDANCE_FOOT',

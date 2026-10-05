@@ -1777,7 +1777,7 @@ export function registerTools(deps: ToolDeps): void {
             // ⚠️ `type:'object'` 节点**必须显式给 `additionalProperties`**（文件头第 9 行那条铁律）。
             additionalProperties: false,
             description:
-              '`create` 时给。⭐ `desc` 必填（这一节要干嘛，会拼进写作指导）；' +
+              '`create` 时给。⭐ `desc` 必填（**这一节要干嘛**，会写进该节标题下的规范块）；' +
               '`truncate` **可多节**设 true（各自独立），**一节都不设 = 该文档不会自动截断**。',
             properties: {
               id: {
@@ -1798,7 +1798,7 @@ export function registerTools(deps: ToolDeps): void {
                     desc: {
                       type: 'string',
                       required: true,
-                      description: '⭐ **这一节要干嘛**（必填，≤200 字符）。',
+                      description: '⭐ **这一节要干嘛**（必填，≤200 字符）——它会写进该节标题下的规范块。',
                     },
                     truncate: {
                       type: 'boolean',

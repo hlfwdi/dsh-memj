@@ -81,6 +81,217 @@ export const SPEC_TITLE = '本档写作规范'
 /** 「本档写作规范」节标题（带 `## ` 前缀）。 */
 export const SPEC_SECTION = `## ${SPEC_TITLE}`
 
+// ══════════════════════════════════════════════════════════════════════════
+// ⭐⭐⭐ **规范块**（决策 209）—— 每节标题下的受保护围栏块
+//
+// ── 它是什么 ──────────────────────────────────────────────────────────────
+// `## <节名>` 紧跟一个 ```memj:spec 围栏块。**围栏起始行是机器读的标记**，
+// **围栏内是给人/模型读的规范文字**。模板文件与建出来的项目文档**同形**。
+//
+//   ## 目标
+//
+//   ```memj:spec
+//   这个项目要做什么
+//   压缩：只做语义精炼，不删条目
+//   ```
+//
+//   （以下是正文，模型写）
+//
+// ── 🔴 为什么必须带语言标记（不能用裸 ```）────────────────────────────────
+//   裸围栏在本套解析器里的语义**已经是"整段跳过"**（6 处 `inFence` 判断），
+//   而**项目文档里到处用裸围栏写代码示例**（真实存在）
+//   ⇒ 裸围栏**无法区分**"这是规范"与"这是它的代码示例"。
+//
+// ── 🔴 三条纪律 ───────────────────────────────────────────────────────────
+//   1. **取与砍必须共用同一个 `specBlockRange()`**（同 `specRange()` 的既有铁律）——
+//      否则"取出来的"与"砍掉的"范围不一致，会**静默留下半截**；
+//   2. **围栏不闭合 ⇒ 当作没有规范块**（不猜、不半取）；
+//   3. **本模块零依赖**：只接受**行数组**，节的切分由调用方做
+//      （`splitH2` / `splitAny` / `splitSectionsForHistory` 各有各的用途）。
+// ══════════════════════════════════════════════════════════════════════════
+
+/**
+ * ⭐ 规范块的**围栏语言标记**（唯一源头）。
+ *
+ * ⚠️ 它同时出现在渲染侧（`renderTemplateDoc` / 建项目的骨架）与解析侧
+ *   （本文件的 `specBlockFenceInfo`）⇒ **改它必须两处一起改**；
+ *   落在同一常量上 ⇒ 结构上不会漂。
+ */
+export const SPEC_BLOCK_FENCE = 'memj:spec'
+
+/** 围栏起始行：` ```memj:spec ` 或 ` ```memj:spec truncate `（标记即机器读的那一位）。 */
+const SPEC_BLOCK_OPEN_RE = new RegExp(`^\\s*\`\`\`${SPEC_BLOCK_FENCE}(?:\\s+(truncate))?\\s*$`, 'i')
+
+/** 围栏结束行：一个**裸的** ``` 行。 */
+const FENCE_CLOSE_RE = /^\s*```\s*$/
+
+/**
+ * ⭐ 判一行是不是规范块的**围栏起始行**。
+ *
+ * ⚠️ **宽容**（与 `.md` 模板的取向一致：选 md 就是为了让人能手改）：
+ *   允许行首缩进、允许行尾空白、`truncate` 大小写不敏感。
+ * @param line - 一行。
+ * @returns 是围栏起始行 ⇒ `{ truncate }`（该节是否声明可截断）；否则 `undefined`。
+ */
+export function specBlockFenceInfo(line: string): { truncate: boolean } | undefined {
+  const m = SPEC_BLOCK_OPEN_RE.exec(line)
+  if (m === null) return undefined
+  return { truncate: m[1] !== undefined }
+}
+
+/** 一个规范块在行数组里的位置（行号相对**传入的那个数组**）。 */
+export interface SpecBlockRange {
+  /** 围栏起始行下标。 */
+  open: number
+  /** 正文首行下标（= `open + 1`）。 */
+  bodyStart: number
+  /** 正文结束下标（不含）—— 即结束围栏那一行。 */
+  bodyEnd: number
+  /** 结束围栏行下标。 */
+  close: number
+  /** 该节是否声明可截断。 */
+  truncate: boolean
+}
+
+/**
+ * ⭐⭐ **找一节里的规范块**——本模块的**唯一边界实现**。
+ *
+ * 🔴 只在**该节自己的行区间**里找（调用方保证区间是"这一节"）：
+ *   从标题行之后找**第一个**围栏起始行，再找它后面**第一个**裸 ``` 行。
+ * ⚠️ **不闭合 ⇒ `undefined`**（不猜、不半取）。
+ * ⚠️ 只找**第一个**块：一节只有一个规范块（多写的第二个会被当正文）。
+ * @param lines - 该节的行（**含**标题行）。
+ * @param from - 从哪一行开始找（默认 1 = 跳过标题行）。
+ * @returns 位置；没有规范块 ⇒ `undefined`。
+ */
+export function specBlockRange(lines: readonly string[], from = 1): SpecBlockRange | undefined {
+  for (let i = from; i < lines.length; i += 1) {
+    const info = specBlockFenceInfo(lines[i] ?? '')
+    if (info === undefined) continue
+    for (let j = i + 1; j < lines.length; j += 1) {
+      if (FENCE_CLOSE_RE.test(lines[j] ?? '')) {
+        return { open: i, bodyStart: i + 1, bodyEnd: j, close: j, truncate: info.truncate }
+      }
+    }
+    return undefined // 起始行有了、结束行没有 ⇒ 不认
+  }
+  return undefined
+}
+
+/**
+ * ⭐ 取一节里规范块的**规范文字**（围栏内的内容，已 trim；没有 ⇒ `''`）。
+ * @param lines - 该节的行（含标题行）。
+ * @returns 规范文字。
+ */
+export function extractSpecBlock(lines: readonly string[]): string {
+  const r = specBlockRange(lines)
+  if (r === undefined) return ''
+  return lines.slice(r.bodyStart, r.bodyEnd).join('\n').trim()
+}
+
+/**
+ * ⭐ 取一节里规范块的**原文行**（含围栏起始/结束行；没有 ⇒ `[]`）。
+ *
+ * 🔴 用途：`mergeNarrative` **从盘上旧文档回填**规范块 —— 回填必须是
+ *   **逐字原样**（不能重新渲染，否则用户手改过的措辞会被"规范化"掉）。
+ * @param lines - 该节的行（含标题行）。
+ * @returns 规范块原文行。
+ */
+export function extractSpecBlockLines(lines: readonly string[]): string[] {
+  const r = specBlockRange(lines)
+  if (r === undefined) return []
+  return lines.slice(r.open, r.close + 1)
+}
+
+/**
+ * ⭐ 剥掉一节里的规范块（**只剥块，正文一字不动**；没有 ⇒ 原样返回）。
+ *
+ * ⚠️ 与 `extractSpecBlock()` **共用 `specBlockRange()`** —— 见本组开头的纪律 1。
+ * @param lines - 该节的行（含标题行）。
+ * @returns 剥掉后的行（标题行仍在）。
+ */
+export function stripSpecBlock(lines: readonly string[]): string[] {
+  const r = specBlockRange(lines)
+  if (r === undefined) return [...lines]
+  return [...lines.slice(0, r.open), ...lines.slice(r.close + 1)]
+}
+
+/**
+ * ⭐⭐ **取"这份文档里哪几节声明了可自动截断"**（决策 209 —— 取代
+ *   `truncateTitlesFromSpec()`）。
+ *
+ * 🔴 **为什么权威在正文**（与节名同一取向，见 `docSectionsOf` 的注释）：
+ *   规范块住正文，而正文是 `rebuildDerivedLayers()` **唯一逐字保留**的地方
+ *   （实测 sha256 相同）⇒ 它不会被旁路重写抹掉。
+ *
+ * ⚠️ **判据是"该节规范块的围栏起始行带不带 `truncate`"** ——
+ *   与渲染侧共用同一份语法（`SPEC_BLOCK_FENCE`）⇒ 写与读**同源**。
+ * ⚠️ 跳过围栏内的伪标题（与 `sectionsFromNarrative` 同规）。
+ * @param narrative - 纯叙事文本（含规范块）。
+ * @returns 可截断的节名数组（顺序即文档顺序）。
+ */
+export function truncateTitlesFromBlocks(narrative: string): string[] {
+  const lines = narrative.split(/\r?\n/)
+  const out: string[] = []
+  let cur: { title: string; from: number } | undefined
+  let inFence = false
+  const flush = (to: number): void => {
+    if (cur === undefined) return
+    const inner = lines.slice(cur.from, to)
+    const r = specBlockRange(inner)
+    if (r !== undefined && r.truncate && !out.includes(cur.title)) out.push(cur.title)
+    cur = undefined
+  }
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i] ?? ''
+    // 🔴 **必须跳过所有围栏内的行**（否则规范块里若写了 `## 示例` 会被当成一节）。
+    if (specBlockFenceInfo(line) !== undefined || FENCE_CLOSE_RE.test(line)) {
+      inFence = !inFence
+      continue
+    }
+    if (inFence) continue
+    const m = /^##\s+(.+?)\s*$/.exec(line)
+    if (m !== null) {
+      flush(i)
+      const title = (m[1] ?? '').trim()
+      if (title !== '' && title !== KNOWLEDGE_TITLE && title !== SPEC_TITLE) {
+        cur = { title, from: i }
+      }
+      continue
+    }
+  }
+  flush(lines.length)
+  return out
+}
+
+/**
+ * ⭐ **剥掉整份文档里所有节内规范块**（模型回传的 `doc` 走这条）。
+ *
+ * 🔴 **为什么必须有它**：模型写 `doc` 时可能**照抄**文档（含规范块）——
+ *   若不剥，`mergeNarrative` 会把那份副本当"正文"，与盘上的规范块**并存**。
+ * @param narrative - 纯叙事文本。
+ * @returns 剥掉全部规范块后的文本。
+ */
+export function stripAllSpecBlocks(narrative: string): string {
+  const lines = narrative.split(/\r?\n/)
+  const out: string[] = []
+  let i = 0
+  while (i < lines.length) {
+    const line = lines[i] ?? ''
+    // 顶层节标题 ⇒ 从它开始找块，找到就整块跳过。
+    if (/^##\s+/.test(line)) {
+      let j = i + 1
+      while (j < lines.length && !/^##\s+/.test(lines[j] ?? '')) j += 1
+      out.push(line, ...stripSpecBlock(lines.slice(i, j)).slice(1))
+      i = j
+      continue
+    }
+    out.push(line)
+    i += 1
+  }
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').trim()
+}
+
 /**
  * ⭐ 判断一行是不是「本档写作规范」的**顶层标题行**。
  *

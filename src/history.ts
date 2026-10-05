@@ -31,6 +31,8 @@ import { randomUUID } from 'node:crypto'
 // ⭐ 节名走**唯一源头**（`store.ts`）——历史上这里是硬编码的 `'当前进度'` 字面量，
 //   与 `handoff.ts` 的同类判据是**各自一份**（2026-09-30 合并）。
 import { PROGRESS_TITLE } from './store.ts'
+// ⭐ 决策 209：截断配额要剔除各节的规范块（与 `handoff.ts` 的 `sectionCharCount` 同源）。
+import { stripSpecBlock } from './sections.ts'
 
 /** 「历史进展」小节名（**「当前进度」内部**的 `###` 小节，用户裁定）。 */
 export const HISTORY_SECTION = '历史进展'
@@ -295,7 +297,12 @@ function truncateOneSection(
     return { narrative, beforeChars: 0, afterChars: 0, chunks: [], warning: `没有「${targetTitle}」这一节，未截断。` }
   }
   const secLines = lines.slice(progress.start, progress.end)
-  const beforeChars = secLines.join('\n').trimEnd().length
+  // ⭐⭐ **决策 209：算体量前先剔掉规范块** ——
+  //    规范块是**工具维护的固定开销**（几百字符），算进去会让
+  //    ① 阈值被规范吃掉；② 文档刚建就"接近超阈值"。
+  //    ⚠️ 与 `handoff.ts` 的 `sectionCharCount()` **同源**（同一个 `stripSpecBlock`）
+  //      —— 否则"该不该截"与"回执报多少"会给出两个数。
+  const beforeChars = stripSpecBlock(secLines).join('\n').trimEnd().length
   // 🔴 **触发判据是 `warnChars`**（阈值），不是 `keepChars`。
   if (beforeChars <= warnChars) {
     return { narrative, beforeChars, afterChars: beforeChars, chunks: [], warning: '' }

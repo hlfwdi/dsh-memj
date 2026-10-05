@@ -616,6 +616,10 @@ export {
   // ⭐⭐ 决策 134：按节操作（`docSection` + `docOp`）——纯函数，测试与探针可直接验。
   applySectionOp,
   findEmptySections,
+  // ⭐⭐⭐ 决策 209：叙事合并/规范化——**规范块的剥离与回填就在这两处**，
+  //    所以它们必须可被测试直接验（`test-spec-block.mjs` 的 R1/R2 反证靠它）。
+  mergeNarrative,
+  normalizeNarrative,
   // ⭐⭐⭐ 决策 156：挂靠依据核对（`themeWhy` 有没有逐字引所挂主题的 desc）——纯函数。
   quoteAppearsIn,
 } from './handoff.ts'
