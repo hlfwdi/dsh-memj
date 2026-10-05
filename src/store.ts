@@ -709,8 +709,8 @@ export async function syncEntryFrontmatter(cover: Cover, body?: string): Promise
 /**
  * 读某个项目文档并把它的叙事与封面拆开。
  *
- * 「叙事」= 去掉封面围栏后的前六节文本（保留「沉淀知识」节标题，
- * 供写回时重建结构）。
+ * 「叙事」= 去掉封面围栏后的**叙事节**文本（**节数由该文档自己的模板决定**，
+ * 不是固定六节；保留「沉淀知识」节标题，供写回时重建结构）。
  * @param id - 项目 id。
  * @returns 文档信息；不存在时 `undefined`。
  */

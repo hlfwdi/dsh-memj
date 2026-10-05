@@ -73,7 +73,9 @@ check('回执附了现有项目清单', r1.message.includes('库里现有项目'
 check('createdProject = true', r1.createdProject === true)
 check('项目文档已建', exists('projects/HANDOFF-dsh-memj.md'))
 check('条目正文已落盘', readdirSync(join(lib, 'entries')).length === 1)
-check('handoff 含七节', ['## 目标', '## 当前进度', '## 有效做法', '## 失败/踩坑', '## 关键上下文', '## 下一步', '## 沉淀知识']
+// ⚠️ 这条用的是**默认模板**建的项目 ⇒ 落到默认六节 + 工具维护的「沉淀知识」。
+//    ⭐ 不叫"七节"——节名/节数由**该项目自己的模板**决定，默认模板只是其中一种。
+check('handoff 含默认六节 + 沉淀知识节', ['## 目标', '## 当前进度', '## 有效做法', '## 失败/踩坑', '## 关键上下文', '## 下一步', '## 沉淀知识']
   .every((s) => read('projects/HANDOFF-dsh-memj.md').includes(s)))
 check('封面写在「沉淀知识」节内', read('projects/HANDOFF-dsh-memj.md').includes('<!-- memj:entry'))
 check('frontmatter 有项目 desc', read('projects/HANDOFF-dsh-memj.md').includes('desc:'))

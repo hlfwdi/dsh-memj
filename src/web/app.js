@@ -1632,7 +1632,8 @@ async function renderProjectDetail(id, opts = {}) {
   }
   const md = renderBody(data.narrative ?? '')
   box.append(md)
-  // ⭐ 目录（决策 132）——项目详情渲染的是 handoff 的叙事六节，目录正好是那几节。
+  // ⭐ 目录（决策 132）——项目详情渲染的是 handoff 的叙事节（**节名/节数由该文档自己的模板决定**），
+  //    目录就按实际渲染出来的标题生成（不假定是六节）。
   attachToc(box, md, data.narrative ?? '')
 }
 
@@ -3506,7 +3507,8 @@ async function openTemplatesPage() {
     tplState.items = body.items
     if (status) status.textContent = `共 ${body.items.length} 份`
     renderTemplatesList()
-    // ⭐ 首次打开且表单为空 ⇒ 给一份"默认六节"作起点（省得用户从零敲六行）。
+    // ⭐ 首次打开且表单为空 ⇒ 用**当前生效的默认模板**作起点（省得用户从零敲）。
+    //    ⚠️ 不说死"六节"——默认模板**也落盘、用户可能改过**（决策 208）。
     if (tplState.sections.length === 0) loadTemplateIntoForm(body.items.find((t) => t.id === 'default'))
   } catch (e) {
     if (status) status.textContent = `读取失败：${e.message}`
