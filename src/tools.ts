@@ -77,38 +77,21 @@ import {
 } from './tool-descriptions.ts'
 
 // ══════════════════════════════════════════════════════════════════════════
-// ⭐⭐⭐ **`memj_read` 附带的「写作指导」外壳**（2026-10-12 开放编辑；`{{…}}` 是插槽）
+// 🔴🔴 **原「`memj_read` 附带的写作指导外壳」已删除**（2026-10-12，模板与提示词解耦）
 //
-// 🔴 **它是什么**：读一个**用了自定义模板**的项目文档时，`memj_read` 的返回值末尾会
-//    附上这段（"+ 本文档的节结构 / 每节要干嘛"）。⚠️ 默认六节的项目**一字不加**。
+// 这里原有三条提示词：`tpl:notice-templated` / `tpl:notice-fallback` / `tpl:notice-missing`
+// —— 它们的作用是"`memj_read` 读项目文档时，额外附一份该文档的节结构与每节用途"。
 //
-// ⚠️ **两个分支**：找得到原模板 ⇒ 走 `tpl:notice-templated`（内含 `tpl:guidance-*` 拼的正文）；
-//    模板已被删/改名 ⇒ 走 `tpl:notice-fallback`（从**文档自己记着的节名**还原）。
-export const TPL_NOTICE_TEMPLATED: string = `
-
----
-
-## 本文档的写作指导（按模板 \`{{tplId}}\` 生成）
-
-{{guidance}}`
-
-export const TPL_NOTICE_FALLBACK: string = `
-
----
-
-## 本文档的节结构（共 {{count}} 节，顺序固定）
-
-{{secLines}}
-
-{{missingNote}}
-🔴 \`## {{knowledgeTitle}}\` 由工具生成（放封面），**不在上面这几节里**。`
-
-export const TPL_NOTICE_MISSING: string =
-  '⚠️ 原模板 `{{tplId}}` 已不存在 —— 上面这份是从**文档自己记着的节名**还原的，**它才是准的**。'
-
-registerPromptDefault('tpl:notice-templated', TPL_NOTICE_TEMPLATED)
-registerPromptDefault('tpl:notice-fallback', TPL_NOTICE_FALLBACK)
-registerPromptDefault('tpl:notice-missing', TPL_NOTICE_MISSING)
+// ⭐ **为什么删掉是对的**：那份规范现在**就写在这份文档自己的正文里**
+//    （叙事末尾的 `## 本档写作规范` 一节，由 `handoff` 落盘时从模板复制/维护）
+//    ⇒ `memj_read` 返回的 `content` **本来就带着它**。
+//    ⚠️ 留着这三条会变成**同一事实的第二份副本**，且**两个副本会同时出现在返回值里**
+//    （模型看到两份、可能不一致的规范）—— 正是本项目判据
+//    "同一事实被两条路维护 ⇒ 必然漂开"的教科书场景。
+//
+// ⚠️ **`tpl:guidance-*` 那五条【保留】**：它们现在被 `renderSpecSection()` 用来
+//    **渲染那一节**（骨架 + 插槽），仍是活的提示词，只是不再有"读文档时另附一份"的通路。
+// ══════════════════════════════════════════════════════════════════════════
 
 /** 工具依赖。 */
 export interface ToolDeps {
@@ -728,65 +711,30 @@ export function registerTools(deps: ToolDeps): void {
               }
             }
 
-            // ⭐⭐⭐ **按需注入该文档的写作指导**（决策 205 / 用户裁定的形态①）。
+            // ⭐⭐⭐ **原「按需注入写作指导」已退役**（2026-10-12，模板与提示词解耦）。
             //
-            // 🔴🔴 **为什么不放常驻 `context()`**：`context()` 是**单条快照、按整条文本比较**
-            //    （库内知识 `74a18e19`）⇒ 按项目动态改它会**每轮 append 一条新消息**
-            //    （旧的不删、直到 compaction）。而模板说明**只在交接那一刻有用**
-            //    ⇒ 放在**读项目文档时按需给出** —— 不占常驻预算、也不破缓存。
+            // 🔴🔴 **为什么删掉它**：规范现在**就写在这份文档自己的正文里**
+            //    （叙事末尾的 `## 本档写作规范` 一节，由 `handoff` 落盘时维护）
+            //    ⇒ `decision.content` **本来就带着它**（`memj_read` 读的是正文）。
+            //    ⚠️ 再附一份就是**同一事实的第二份副本** —— 而本项目的判据是
+            //    "同一事实被两条路维护 ⇒ 必然漂开"，且这两个副本会**同时出现在返回值里**
+            //    （模型看到两份可能不一致的规范）。
             //
-            // ⚠️ **只在"该文档用了自定义模板"时才附**：默认六节的项目**一字不加**
-            //    ⇒ 既有行为零变化（这是本改动敢做的前提）。
-            let tplNotice = ''
-            try {
-              const { loadProjectDoc } = await import('./store.ts')
-              const doc2 = await loadProjectDoc(projectId)
-              const secs = doc2?.frontmatter.sections ?? []
-              const tplId = doc2?.frontmatter.template ?? ''
-              // ⭐ 判据：**文档自己记着节名**（= 自定义模板建的）才附。
-              if (secs.length > 0) {
-                const { listTemplates, renderTemplateGuidance } = await import('./templates.ts')
-                const all = await listTemplates()
-                // ⚠️ 优先按 `template` 找回原模板；找不到（被删/改名）⇒
-                //    用**文档自己记着的节名**现拼一份（**不撒谎**：它就是这份文档的结构）。
-                const t = all.find((x) => x.id === tplId)
-                if (t !== undefined) {
-                  tplNotice = fillSlots(promptText('tpl:notice-templated', TPL_NOTICE_TEMPLATED), {
-                    tplId: t.id,
-                    guidance: renderTemplateGuidance(t),
-                  })
-                } else {
-                  const truncSet = new Set(doc2?.frontmatter.truncateSections ?? [])
-                  const secLines = secs
-                    .map((s) => {
-                      const trunc = truncSet.has(s)
-                        ? promptText('tpl:guidance-trunc-mark', TPL_GUIDANCE_TRUNC_MARK)
-                        : ''
-                      return `- \`## ${s}\`${trunc}`
-                    })
-                    .join('\n')
-                  tplNotice = fillSlots(promptText('tpl:notice-fallback', TPL_NOTICE_FALLBACK), {
-                    count: String(secs.length),
-                    secLines,
-                    // ⚠️ 原模板已被删/改名时才有这一句；没有就填空串（插槽仍保留）。
-                    missingNote:
-                      tplId !== ''
-                        ? fillSlots(promptText('tpl:notice-missing', TPL_NOTICE_MISSING), { tplId })
-                        : '',
-                    knowledgeTitle: KNOWLEDGE_TITLE,
-                  })
-                }
-              }
-            } catch {
-              /* 拼不出指导不该让读取失败 */
-            }
+            // ⭐ 净收益：少一次 `loadProjectDoc` + `listTemplates` 的读盘、
+            //    少 8 条提示词（`tpl:guidance-*` 5 条 + `tpl:notice-*` 3 条）、
+            //    少一个"模板被删就得走 fallback"的分支。
+            //
+            // ⚠️ **但 `tpl:*` 那 8 条**仍被 `renderSpecSection()` 用着
+            //    （它们现在是"渲染那一节"的骨架）⇒ 提示词账本里**继续保留**，
+            //    只是不再有"读文档时额外附一份"这条通路。
 
             return {
               found: true,
               id: projectId,
               title: `项目交接文档 ${projectId}`,
               mode: decision.mode,
-              content: tplNotice === '' ? decision.content : `${decision.content}${tplNotice}`,
+              // ⭐ 规范就在正文里（见上面的退役说明）⇒ **原样返回 `decision.content`**。
+              content: decision.content,
               availableSections: decision.availableSections,
               sectionGroups: decision.sectionGroups,
               sectionRequested: decision.sectionRequested,

@@ -52,10 +52,16 @@ import {
 } from './parse.ts'
 import {
   KNOWLEDGE_SECTION,
+  KNOWLEDGE_TITLE,
   NARRATIVE_TITLES,
   PROGRESS_TITLE,
+  SPEC_TITLE,
   buildSkeleton,
   cutKnowledgeSection,
+  cutSpecSection,
+  docSectionsOf,
+  extractSpecSection,
+  sectionsFromNarrative,
   sectionsOf,
   loadEntryDoc,
   loadProjectDoc,
@@ -77,7 +83,9 @@ import {
   defaultTemplate,
   listTemplates,
   loadTemplate,
+  renderSpecSection,
   templateSectionNames,
+  truncateTitlesFromSpec,
   validateTemplate,
 } from './templates.ts'
 // ⭐⭐⭐ 决策 167：落知识时**由插件自己记一笔**（供轮次结束的自动规范化判断）。
@@ -406,8 +414,21 @@ export interface HandoffResult {
 
 /**
  * 把一段叙事文本按 `## ` 切成节（**跳过代码围栏内的伪标题**）。
+ *
+ * 🔴🔴 **排除"工具自己维护的节"**（2026-10-12）：
+ *   `## 沉淀知识`（封面容器）与 `## 本档写作规范`（模板复制的规范）
+ *   **都不是叙事节** —— 它们由工具生成、模型既不写也不该"读到才算读全"。
+ *   ⚠️ **为什么在这里统一排除**（而不是各个调用点各排一次）：
+ *     本函数有 **13 个调用点**，其中 9 处要的是"顶层叙事节"
+ *     ⇒ 逐个加过滤必然漏（本项目判据："一段代码里已经有了一种过滤，
+ *       就问其他几条路径为什么不需要"）。
+ *   ⭐ 排除之后的连带好处（都是"少一类静默错误"）：
+ *     · 合并/规范化**不会**把规范节当成"自定义节"保留下来（否则会与重建的那份并存）；
+ *     · 体量行与截断配额**不再把规范的字数算进去**（规范可能几百字符）；
+ *     · `inheritedIn` / `replacedIn` 的回声不再冒出"本档写作规范"这个假节名；
+ *     · 读记录闸门（`narrativeTopSections`）不会要求模型去读它。
  * @param text - 叙事文本。
- * @returns 节数组。
+ * @returns 节数组（**不含**工具维护的节）。
  */
 function splitH2(text: string): Array<{ title: string; lines: string[] }> {
   const out: Array<{ title: string; lines: string[] }> = []
@@ -421,12 +442,18 @@ function splitH2(text: string): Array<{ title: string; lines: string[] }> {
     }
     const m = inFence ? null : /^##\s+(.+?)\s*$/.exec(line)
     if (m !== null) {
-      cur = { title: (m[1] ?? '').trim(), lines: [] }
+      const title = (m[1] ?? '').trim()
+      // ⭐ 工具维护的节：**整节丢弃**（连它的正文也不并进上一节）。
+      if (title === KNOWLEDGE_TITLE || title === SPEC_TITLE) {
+        cur = undefined
+        continue
+      }
+      cur = { title, lines: [] }
       out.push(cur)
       continue
     }
     if (cur !== undefined) cur.lines.push(line)
-    // 节之前的内容（如引言）没有归属，直接丢弃——七节结构里没有前言的位置。
+    // 节之前的内容（如引言）没有归属，直接丢弃——固定节结构里没有前言的位置。
   }
   return out
 }
@@ -893,7 +920,12 @@ function narrativeFromDocBare(doc: string | undefined): string {
   const narrative = cutKnowledgeSection(withoutCovers)
   const noTitle = narrative.replace(/^#\s+HANDOFF[^\n]*\n+/i, '')
   // 同 `narrativeFromDoc`：剥掉我们自己加的「文件位置」注释，防止每轮 +1。
-  return noTitle.replace(/^\s*<!--\s*文件位置：[^>]*-->\s*$/gm, '')
+  const noLoc = noTitle.replace(/^\s*<!--\s*文件位置：[^>]*-->\s*$/gm, '')
+  // 🔴🔴 **必须砍掉「本档写作规范」节**（2026-10-12）：模型若把整份文档回传
+  //   （它确实会——本项目实测过多次），旧规范就会作为**一个自定义节**进入合并
+  //   ⇒ 与我们随后重建的那一份**并存**（文档里出现两个规范节）。
+  //   ⚠️ 与「沉淀知识」同样的处置：**内容由工具维护 ⇒ 先砍掉、后重建**。
+  return cutSpecSection(noLoc)
 }
 
 /**
@@ -901,8 +933,15 @@ function narrativeFromDocBare(doc: string | undefined): string {
  *
  * 与 `inheritedIn` 用同一个 `splitH2`——**同一份解析实现**，
  * 否则"哪些节存在"两处会漂移。
+ *
+ * 🔴🔴 **必须排除工具自己维护的两节**（2026-10-12 新增；否则闸门会瞎拦）：
+ *    `## 沉淀知识` 与 `## 本档写作规范` 都**由工具生成**，模型既不需要写、
+ *    也不该被要求"读过它们才算读全"。
+ *    ⚠️ 判据据实：`memj_read` 的 `availableSections` 是**按正文切出来的全部顶层节**
+ *    ⇒ 若这里不过滤，`missing` 会**永远包含规范节** ⇒ **模型把文档读得再全也过不了闸门**
+ *    （这正是本函数的输出被拿去当"必须读到的集合"用的缘故）。
  * @param narrative - 纯叙事文本。
- * @returns 节标题数组（按文档顺序，已去重）。
+ * @returns 节标题数组（按文档顺序，已去重、已剔除工具维护的节）。
  */
 function narrativeTopSections(narrative: string): string[] {
   const out: string[] = []
@@ -914,26 +953,33 @@ function narrativeTopSections(narrative: string): string[] {
  * ⭐⭐ **该文档要自动截断的那些节**（决策 204 / 206）——**完全从文档自己身上取**。
  *
  * 🔴🔴 **为什么不查模板**：模板**可以被改、被删**，而文档与它**解耦**
- *   ⇒ 文档必须**自描述**。光有节名不够（节名不表达"哪节能截"）
- *   ⇒ 所以 `truncateSections` 也存进 frontmatter。
+ *   ⇒ 文档必须**自描述**。光有节名不够（节名不表达"哪节能截"）。
  *
- * ⚠️ **判据分两步（顺序有意义）**：
- *   · `sections` **为空**（老文档 / 未指定）⇒ 用默认六节的目标（「当前进度」）
- *     —— 这是**零行为变化**的保证；
- *   · `sections` **非空**（自定义模板建的）⇒ **以 `truncateSections` 为准**，
- *     空数组就是**真的不截**。
+ * 🔴🔴 **2026-10-12 起：正文优先**（与节名同一取向，见 `docSectionsOf`）。
+ *   原先只读 `frontmatter.truncateSections`，而那个字段会被
+ *   `rebuildDerivedLayers()` 的旁路重写**抹掉**（实测复现）⇒ "哪节能截"丢失。
+ *   现在：**规范节里写着的那份**（正文，权威）→ frontmatter → 默认六节的目标。
+ *
+ * ⚠️ **判据顺序有意义（别调换）**：
+ *   ① 正文规范节里解析出「有截断标记」的节 ⇒ 用它（**哪怕结果为空数组**：那是"真的不截"）；
+ *   ② 正文没有规范节（老文档）⇒ 看 frontmatter：`sections` 空 ⇒ 默认六节目标；
+ *      `sections` 非空 ⇒ 以 `truncateSections` 为准（空 = 不截，**不猜**）。
  * @param sections - 文档 frontmatter 里的节名清单。
  * @param truncateSections - 文档 frontmatter 里的截断目标节（**可多个**，决策 206）。
+ * @param narrative - 纯叙事文本（含规范节；**权威来源**）。
  * @returns 要截断的节名数组；空数组 = 不截。
  */
 function defaultTruncateTitle(
   sections: readonly string[] | undefined,
   truncateSections: readonly string[] | undefined,
+  narrative?: string,
 ): string[] {
+  // ① **正文优先**：规范节存在就认它（含"存在但没有任何截断标记"= 不截）。
+  const spec = extractSpecSection(narrative ?? '')
+  if (spec.trim() !== '') return truncateTitlesFromSpec(spec)
+  // ② 回落 frontmatter（老文档 / 还没生成规范节）。
   const mine = (sections ?? []).map((s) => s.trim()).filter((s) => s !== '')
-  // 老文档（没记节名）⇒ 默认六节的目标节。
   if (mine.length === 0) return [PROGRESS_TITLE]
-  // 自定义模板建的文档 ⇒ 自己记着目标；空 = 不截（**不猜**）。
   return (truncateSections ?? []).map((s) => s.trim()).filter((s) => s !== '')
 }
 
@@ -1588,12 +1634,28 @@ export async function runHandoff(
   let newSections: string[] = existing?.frontmatter.sections ?? []
   let templateId = existing?.frontmatter.template ?? ''
   let newTruncateSection: string[] = existing?.frontmatter.truncateSections ?? []
-  /** 该文档的节名（**所有按节工作的机制都用它**；老文档回落默认六节）。 */
-  let docSections: readonly string[] = sectionsOf(existing?.frontmatter.sections)
+  /**
+   * ⭐⭐⭐ **该文档的节名**（所有按节工作的机制都用它）。
+   *
+   * 🔴🔴 **2026-10-12 改：正文优先，frontmatter 降级为兼容读**（`docSectionsOf`）。
+   *   起因是一次实测复现的损坏：`rebuildDerivedLayers()` 汇总 `themes:` 时
+   *   **手工重写 frontmatter**，而它那张字段表里**没有 `sections`**
+   *   ⇒ 一旦触发重写就把 `sections` / `truncateSections` / `template` 整行抹掉
+   *   ⇒ `sectionsOf(空)` 回落默认六节 ⇒ **自定义模板的文档被按默认六节理解**
+   *   ⇒ 下次 handoff 只更新一节时，**六个默认空壳节被插到最前面**
+   *   （实测 6 → 12 节；生产 `metax-688802` 的镜像里留过一次 6 → 43 节的真现场）。
+   *   ⭐ 正文是 `rebuildDerivedLayers()` **唯一逐字保留**的东西（实测 sha256 相同）
+   *   ⇒ 把权威放在正文，这**整类**失败模式从结构上消失。
+   */
+  let docSections: readonly string[] = docSectionsOf(
+    existing?.narrative ?? '',
+    existing?.frontmatter.sections,
+  )
   /** 该文档要截断的**那些**节（决策 206：可多节；空数组 = 不截）。 */
   let docTruncateTitle: string[] = defaultTruncateTitle(
     existing?.frontmatter.sections,
     existing?.frontmatter.truncateSections,
+    existing?.narrative,
   )
 
   if (isNewProjForTpl) {
@@ -2140,6 +2202,66 @@ export async function runHandoff(
   //    见 `historyCovers` 的注释（那是实测踩到的真 bug）。
   const allCovers = [...allCoversBase, ...historyCovers]
 
+  // ══════════════════════════════════════════════════════════════════════
+  // ⭐⭐⭐ **本档写作规范节**（2026-10-12，模板与提示词解耦）
+  //
+  // 🔴🔴 **它的权威在文档正文里**（不在模板、不在 frontmatter）：
+  //    · **已有文档** ⇒ **原样保住它**（`extractSpecSection`）——
+  //      用户裁定"后续更新项目文档的时候就在项目自己的文档里去更新"
+  //      ⇒ ⚠️ **不按模板重建**（否则用户在本文档里改过的规范会被模板覆盖回去，
+  //        而模板与文档是**解耦**的：改模板不该影响已有文档）。
+  //    · **新建文档** ⇒ 从它建时用的模板**复制一份进来**（`renderSpecSection`）
+  //      —— 这就是"建项目 = 复制模板"落地的地方。
+  //
+  // 🔴🔴 **已有文档若【没有】规范节，绝不替它合成一份**（我第一版就是这么错的）：
+  //    它的 `template:` 很可能**从来没记过**（生产实测：全库 0 份文档有该字段——
+  //    早期项目是手工照模板写的）⇒ 那时只能回落 `defaultTemplate()`，
+  //    于是会给一份**六节默认规范**贴到一份**结构完全不同的文档**上
+  //    （实例：`metax-688802` 的节是「研究目标 / 公司画像 / …」）
+  //    ⇒ 那是**主动误导**，比没有规范更糟。
+  //    ⭐ 判据：**合成规范的前提是"我知道这份文档该有哪几节"**；不知道就**什么都不写**。
+  //
+  // 🔴 **必须砍掉旧的再拼**：`finalNarrative` 可能带着模型回传的旧规范
+  //    （`narrativeFromDocBare` 已砍一次，但按节路径 `applySectionOp` 与
+  //     `existing.narrative` 那条路都可能把它带过来）⇒ 这里统一"先砍后拼"。
+  // ══════════════════════════════════════════════════════════════════════
+  // 🔴🔴 **必须先看"旧文档里的规范节"**（实测踩到的真 bug，第一版就错在这里）：
+  //    `mergeNarrative()` 会**按该文档的节名重建叙事**，而规范节**不是叙事节**
+  //    （`splitH2` 已把它排除）⇒ **重建后它就没了**。
+  //    ⚠️ 所以 `finalNarrative` 里**根本取不到**它：
+  //      · 更新路径 ⇒ 取 `existing.narrative`（旧文档里那份，**权威**）；
+  //      · 按节路径 ⇒ 同理（`applySectionOp` 也只动叙事节，规范节会原样留着，
+  //        但要给它一个**统一的取法**，别依赖"碰巧还在"）。
+  //    ⭐ 判据：**工具维护的节，权威永远在"盘上那份旧文档"里** ——
+  //      模型写的 `doc` 里即使带了它也不算数（那一份是它回传的副本）。
+  // ══════════════════════════════════════════════════════════════════════
+  let specText = extractSpecSection(existing?.narrative ?? '')
+  if (specText === '' && existing !== undefined) {
+    // 兜底：旧文档没有（少见）⇒ 再在本次结果里找一次。
+    specText = extractSpecSection(finalNarrative)
+  }
+  if (specText === '' && existing === undefined) {
+    // ⭐ 只在**新建**时从模板复制（默认模板永远可用；自定义模板被删则不猜）。
+    const tplForSpec = templateId === '' ? defaultTemplate() : await loadTemplate(templateId)
+    if (tplForSpec !== undefined) specText = renderSpecSection(tplForSpec)
+  }
+  const narrativeBody = cutSpecSection(finalNarrative)
+  const finalWithSpec = specText === '' ? narrativeBody : `${narrativeBody.trimEnd()}\n\n${specText}\n`
+
+  // ⭐⭐⭐ **frontmatter 的 `sections` / `truncateSections` 改成"正文的镜像"**（2026-10-12）。
+  //
+  // 🔴🔴 **为什么必须镜像而不是"沿用旧的"**：
+  //   权威已经是**正文**（`docSectionsOf`）⇒ 若 frontmatter 继续留着**旧值**，
+  //   两者就会漂开，而 `sections` 仍是**索引/兼容读**的来源之一
+  //   ⇒ 出现"程序按正文工作、但某个读 frontmatter 的地方按旧值工作"这种
+  //   **半新半旧**状态（本项目判据：同一事实两份值 ⇒ 必然漂开）。
+  //   ⭐ 每次落盘顺手把正文的事实**写回**frontmatter ⇒ 两者**结构上不可能不一致**。
+  //
+  // ⚠️ **顺序很重要**：必须在 `finalWithSpec` 算完之后取（规范节已被排除，
+  //   `sectionsFromNarrative` 不会把「本档写作规范」算成一个叙事节）。
+  const mirrorSections = sectionsFromNarrative(narrativeBody)
+  const mirrorTruncate = truncateTitlesFromSpec(specText)
+
   await writeProjectDoc(
     projectId,
     {
@@ -2160,18 +2282,30 @@ export async function runHandoff(
       //    （正常路径下归档项目会在更早处被拒，这里是**纵深防御**：
       //      万一哪条路径绕过了那道闸门，也绝不静默改掉人的设置。）
       archivedAt: existing?.frontmatter.archivedAt ?? '',
-      // ⭐⭐ 节名清单（决策 204）：**必须沿用已有的**——与 `title`/`themes`/`archivedAt`
-      //    是**同一类陷阱**：漏了它 ⇒ **每次 handoff 都把自定义模板的节名擦成空**
-      //    ⇒ 那份文档立刻退回默认六节（用户会看到"我的模板过了几轮自己失效了"）。
-      //    ⚠️ 新建项目时 `existing === undefined` ⇒ 用本次选中的模板节名（见 `newSections`）。
-      sections: existing !== undefined ? existing.frontmatter.sections : newSections,
+      // ⭐⭐ 节名清单：**正文的镜像**（见上面 `mirrorSections` 的说明）。
+      //
+      // 🔴🔴 **老文档保持"空就不写"**（`test-template.mjs` 的【6】盯着这条，它抓到了一个真陷阱）：
+      //    `store.ts` 的渲染规则是"**空就不写这一行**"⇒ 语义上"没有这一行" == "空数组"
+      //    == "回落默认六节 + 「当前进度」可截断"。
+      //    ⚠️ 但**一旦给它写上非空值，判据就翻转**：
+      //      `defaultTruncateTitle()` 的第二步是"`sections` 非空 ⇒ 以 `truncateSections` 为准"
+      //      ⇒ 老文档若只被写进 `sections`、而 `truncateSections` 仍为空
+      //      ⇒ **它从此再也不自动截断**（`a113fcb` 那个真事故的同族）。
+      //    ⇒ ⭐ 判据：**只把"已经有值"的文档镜像化**；老文档（原来就是空）**保持空**
+      //      —— 反正它与正文**本来就一致**（空 = 回落 = 正文那六节）。
+      sections: mirrorSections.length > 0 && (existing?.frontmatter.sections ?? []).length > 0
+        ? mirrorSections
+        : (existing !== undefined ? existing.frontmatter.sections : newSections),
       // ⭐ 建文档用的模板 id（决策 204）：同样**必须沿用已有的**（纯记录，但别擦）。
       template: existing !== undefined ? (existing.frontmatter.template ?? '') : templateId,
-      // ⭐⭐ 自动截断目标节（决策 204 / 206）：同样**必须沿用已有的**（否则自定义模板的文档
-      //    过了几轮就"忘记自己哪节能截"⇒ 静默不再瘦身）。
-      truncateSections: existing !== undefined ? existing.frontmatter.truncateSections : newTruncateSection,
+      // ⭐⭐ 自动截断目标节：**正文规范节的镜像**（同上）。
+      //    ⚠️ 与 `sections` 同一纪律：老文档（两个字段都空）**保持空**，
+      //       否则会把它推进"以 `truncateSections` 为准"的分支 ⇒ 静默不截。
+      truncateSections: specText !== '' || (existing?.frontmatter.truncateSections ?? []).length > 0
+        ? (specText === '' ? newTruncateSection : mirrorTruncate)
+        : (existing?.frontmatter.truncateSections ?? []),
     },
-    finalNarrative,
+    finalWithSpec,
     allCovers,
     keptOrphans,
   )
@@ -2329,44 +2463,56 @@ export async function runHandoff(
     //    硬编码了"项目文档共七节"，模型只能凭印象猜。
     //    ⭐ 光改描述不够：**每一轮都把"本项目真实的节名清单"摆在回执最前面**，
     //    模型下一次就不用猜。
-    // 🔴 **一致性检出**：`sections`（建档时定的契约）与文档现状可能已经不一致
-    //    （本次事故就是典型：多出 6 个默认节、少了 1 个自定义节）⇒ 必须如实报出。
+    // 🔴 **一致性检出**（2026-10-12 改基准）：
+    //    ⭐ **权威已经是正文**（`docSectionsOf`）⇒ "清单 vs 现状"这种比较**已无意义**
+    //      （两者同源，必然相等）。
+    //    ⇒ 改为与**模板契约**比：`template:` 记着"这份文档本来该有哪几节"
+    //      —— 它是**独立于文档现状**的一手证据，才能检出"文档被写坏了"。
+    //    ⚠️ 模板可能已被删/改名 ⇒ 那时**不猜**（只回声现状，不报异常）。
     if (existing !== undefined || newSections.length > 0) {
-      const actualTop = [...new Set(splitH2(finalNarrative).map((s) => s.title))]
-      const declared = [...docSections]
-      const missing = declared.filter((t) => !actualTop.includes(t))
-      // 🔴🔴 **只报「与默认六节同名」的多余节**（2026-10-12 收窄，防误报）。
-      //
-      // ⭐ 为什么必须收窄：**"文档里有额外自定义节"在这个库里是既成事实、不是异常**
-      //    （实例：`dsh-memj` 项目自己的文档就有一个 `第十二批…` 自定义节，
-      //     而 `第十二批` 是它自己有意加的）。
-      // ⇒ 若把所有多余节都报成"不一致"，会**天天误报**，真问题就被淹掉了。
-      // 🔴 **真正的误写特征**：多出的节名**恰好在默认六节里**
-      //    且**不在本项目的清单里** —— 那说明有人把"别套模板的节名"写了进来。
-      const defaultSet = new Set(NARRATIVE_TITLES)
-      const suspicious = actualTop.filter(
-        (t) => !declared.includes(t) && defaultSet.has(t),
-      )
-      const tplLabel =
-        (existing?.frontmatter.template ?? templateId ?? '') !== ''
-          ? `（模板 \`${existing?.frontmatter.template ?? templateId}\`）`
-          : '（默认模板）'
+      const actualTop = sectionsFromNarrative(finalNarrative)
+      const tplIdNow = (existing?.frontmatter.template ?? templateId ?? '').trim()
+      /** 模板契约里的节名（拿不到 ⇒ `undefined` = 无基准、不报异常）。 */
+      let contract: readonly string[] | undefined
+      if (tplIdNow !== '') {
+        const t = await loadTemplate(tplIdNow)
+        if (t !== undefined) contract = templateSectionNames(t)
+      } else {
+        contract = NARRATIVE_TITLES
+      }
+      const tplLabel = tplIdNow !== '' ? `（模板 \`${tplIdNow}\`）` : '（默认模板）'
       lines.push(
-        `📐 **本项目节名${tplLabel}**：${declared.join(' / ')}` +
-          (declared.length > 0 ? '' : '（空）'),
+        `📐 **本项目节名${tplLabel}**：${actualTop.join(' / ')}` +
+          (actualTop.length > 0 ? '' : '（空）'),
       )
-      if (suspicious.length > 0 || missing.length > 0) {
-        lines.push(
-          `\n⚠️ **文档结构异常**（\`sections\` = 建档时的契约，现状 = 盘上真实结构）：` +
-            (suspicious.length > 0
-              ? `\n    🔴 多出了**默认模板的节**：${suspicious.map((t) => `\`${t}\``).join('、')}` +
-                '\n       这多半是**误写**——把别套模板的默认节名写进了本项目的文档。'
-              : '') +
-            (missing.length > 0
-              ? `\n    清单里有、文档里没有：${missing.map((t) => `\`${t}\``).join('、')}`
-              : '') +
-            '\n    🔴 清理：对每个多出的节用 `docSection` + `docOp: \'drop\'` 逐个删。',
+      if (contract !== undefined) {
+        const missing = contract.filter((t) => !actualTop.includes(t))
+        // 🔴🔴 **只报「与默认六节同名」的多余节**（2026-10-12 收窄，防误报）。
+        //
+        // ⭐ 为什么必须收窄：**"文档里有额外自定义节"在这个库里是既成事实、不是异常**
+        //    （实例：`dsh-memj` 项目自己的文档就有一个 `第十二批…` 自定义节，
+        //     而 `第十二批` 是它自己有意加的）。
+        // ⇒ 若把所有多余节都报成"不一致"，会**天天误报**，真问题就被淹掉了。
+        // 🔴 **真正的误写特征**：多出的节名**恰好在默认六节里**
+        //    且**不在本项目的模板清单里** —— 那说明"别套模板的节名"被写了进来
+        //    （`metax-688802` 那次 6 节 → 43 节的真事故，前六个正是默认六节）。
+        const defaultSet = new Set(NARRATIVE_TITLES)
+        const suspicious = actualTop.filter(
+          (t) => !contract.includes(t) && defaultSet.has(t),
         )
+        if (suspicious.length > 0 || missing.length > 0) {
+          lines.push(
+            `\n⚠️ **文档结构异常**（模板契约 = 该文档本来该有的节，现状 = 盘上真实结构）：` +
+              (suspicious.length > 0
+                ? `\n    🔴 多出了**模板里没有的默认节**：${suspicious.map((t) => `\`${t}\``).join('、')}` +
+                  '\n       这多半是**误写**——把别套模板的默认节名写进了本项目的文档。'
+                : '') +
+              (missing.length > 0
+                ? `\n    模板里有、文档里没有：${missing.map((t) => `\`${t}\``).join('、')}`
+                : '') +
+              '\n    🔴 清理：对每个多出的节用 `docSection` + `docOp: \'drop\'` 逐个删。',
+          )
+        }
       }
     }
 

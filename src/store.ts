@@ -86,6 +86,12 @@ import {
   isKnowledgeHeading,
   cutKnowledgeSection,
   sectionsOf,
+  cutSpecSection,
+  extractSpecSection,
+  docSectionsOf,
+  sectionsFromNarrative,
+  SPEC_TITLE,
+  SPEC_SECTION,
 } from './sections.ts'
 
 export {
@@ -98,6 +104,12 @@ export {
   isKnowledgeHeading,
   cutKnowledgeSection,
   sectionsOf,
+  cutSpecSection,
+  extractSpecSection,
+  docSectionsOf,
+  sectionsFromNarrative,
+  SPEC_TITLE,
+  SPEC_SECTION,
 }
 
 /** 一个项目在库里的全貌。 */
@@ -1205,6 +1217,19 @@ export async function rebuildDerivedLayers(): Promise<{
     const rest = p.text.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '')
     // ⚠️ 这里**手工重写 frontmatter**（不是走 `writeProjectDoc`），
     //    所以新增字段时**两处都要加**——漏了会把 `title` 静默丢掉。
+    //
+    // 🔴🔴 **2026-10-12 实测事故：这个坑又踩了一次**（本项目判据"同一事实两条维护
+    //    路径 ⇒ 必须两条都查"的又一个实例）。上一轮的注释只警告了 `title`，而
+    //    决策 204 之后新增的 `sections` / `truncateSections` / `template` /
+    //    `archivedAt` **都不在这张表里** ⇒ 一旦某项目的 `themes:` 需要更新，
+    //    重写就把它们**整行抹掉**：
+    //      · `sections` 被抹 ⇒ `sectionsOf(空)` **回落默认六节** ⇒ 自定义模板的文档
+    //        被按默认六节理解 ⇒ 下次 handoff **插进六个默认空壳节**（实测 6 → 12 节）；
+    //      · `archivedAt` 被抹 ⇒ **归档过的项目自己冒出来**（正是下面注释警告的那件事）。
+    //    ⭐ 根治有两层（**都已落地，缺一不可**）：
+    //      ① 本条：**把字段补全**（存量文档的安全网）；
+    //      ② `docSectionsOf()`：把"节名"的权威**移到正文**（rebuild 唯一不碰的地方）
+    //         —— 结构类信息从此**不依赖这张表**。
     const fm = renderFrontmatter([
       ['project', yamlScalar(p.frontmatter.project)],
       ...((p.frontmatter.title ?? '') !== ''
@@ -1221,6 +1246,22 @@ export async function rebuildDerivedLayers(): Promise<{
         : []),
       ...((p.frontmatter.updatedAt ?? '') !== ''
         ? ([['updatedAt', yamlScalar(p.frontmatter.updatedAt)]] as Array<readonly [string, string]>)
+        : []),
+      // ⭐⭐ 归档时间（决策 133）：**空就不写行**（= 活跃）。
+      ...((p.frontmatter.archivedAt ?? '') !== ''
+        ? ([['archivedAt', yamlScalar(p.frontmatter.archivedAt)]] as Array<readonly [string, string]>)
+        : []),
+      // ⭐⭐ 节名清单（决策 204）：**空就不写行**（老文档零 diff）。
+      ...((p.frontmatter.sections ?? []).length > 0
+        ? ([['sections', renderYamlArray(p.frontmatter.sections ?? [])]] as Array<readonly [string, string]>)
+        : []),
+      // ⭐ 建文档时用的模板 id（决策 204）：**空就不写行**。
+      ...((p.frontmatter.template ?? '') !== ''
+        ? ([['template', yamlScalar(p.frontmatter.template)]] as Array<readonly [string, string]>)
+        : []),
+      // ⭐⭐ 自动截断目标节（决策 204 / 206）：**空就不写行**。
+      ...((p.frontmatter.truncateSections ?? []).length > 0
+        ? ([['truncateSections', renderYamlArray(p.frontmatter.truncateSections ?? [])]] as Array<readonly [string, string]>)
         : []),
     ])
     await writeTextAtomic(projectDocPath(p.id), `${fm}${rest}`)

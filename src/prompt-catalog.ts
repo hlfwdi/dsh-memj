@@ -498,20 +498,25 @@ export const PROMPT_CATALOG: Readonly<Record<string, PromptCatalogEntry>> = {
   },
 
   // ══════ ⑩ 交接文档模板的写作指导 ══════
+  //
+  // ⭐⭐ **2026-10-12 起：这五条的落点从"`memj_read` 的返回值"改成"文档正文里那一节"**。
+  //    它们现在是 `renderSpecSection()` 的**拼装积木**：`handoff` 落盘时渲染成
+  //    每个项目文档末尾的 `## 本档写作规范` 一节（建项目时从模板复制进来）。
+  //    ⇒ ⚠️ 改它们**不会**影响已有文档（那些文档自己存着一份，与模板解耦）。
   'tpl:guidance-head': {
     group: 'templates',
-    owner: '文档模板 · 写作指导（表头）',
-    purpose: '拼装积木之一，拼出"本文档共 N 节（顺序固定……）"这一行。它下面会接若干个"节行"。',
+    owner: '文档模板 · 写作规范（表头）',
+    purpose: '拼装积木之一，拼出"本文档共 N 节（顺序固定……）"这一行。它下面会接若干个"节行"。⚠️ 它渲染进的是**每个项目文档自己的正文**（`## 本档写作规范` 一节），不是 `memj_read` 的返回值。',
   },
   'tpl:guidance-row': {
     group: 'templates',
-    owner: '文档模板 · 写作指导（每个节一行）',
-    purpose: '拼装积木之一，**每一节生成一行**：节名 + 这一节要干嘛（你在模板页写的）+ 是否会被自动截断。单独看它只是一行模板，拼起来才是完整指导。',
+    owner: '文档模板 · 写作规范（每个节一行）',
+    purpose: '拼装积木之一，**每一节生成一行**：节名 + 这一节要干嘛（你在模板页写的）+ 是否会被自动截断。单独看它只是一行模板，拼起来才是完整规范。',
   },
   'tpl:guidance-trunc-mark': {
     group: 'templates',
     owner: '文档模板 · 截断标记',
-    purpose: '拼在节行末尾的小标记，表示"这一节的较早内容会被自动归档"。⚠️ 它还被另一处（`tools.ts` 的兜底分支）用到，改它两处都会变。',
+    purpose: '拼在节行末尾的小标记，表示"这一节的较早内容会被自动归档"。🔴 **它同时是机器读的标记**：`truncateTitlesFromSpec()` 靠它反解出"哪节能截"⇒ 改这句话会**同时改掉写与读两侧**（两边同源，不会漂）。',
   },
   'tpl:guidance-no-trunc': {
     group: 'templates',
@@ -520,23 +525,8 @@ export const PROMPT_CATALOG: Readonly<Record<string, PromptCatalogEntry>> = {
   },
   'tpl:guidance-foot': {
     group: 'templates',
-    owner: '文档模板 · 写作指导（收尾）',
+    owner: '文档模板 · 写作规范（收尾）',
     purpose: '最后一行：声明「沉淀知识」那一节由工具生成（放封面）。⭐ **为什么必须说**——那一节里放的是机器生成的知识封面，模型若往那里写正文会破坏结构。',
-  },
-  'tpl:notice-templated': {
-    group: 'templates',
-    owner: '文档模板 · 通知外壳（找得到模板）',
-    purpose: '当文档记着的模板**还在**：用这个外壳包住标题「本文档的写作指导（按模板 X 生成）」和拼好的指导正文。',
-  },
-  'tpl:notice-fallback': {
-    group: 'templates',
-    owner: '文档模板 · 通知外壳（模板已删/改名）',
-    purpose: '当模板**已经不存在**：改用这个外壳（标题变成「本文档的节结构」），并从**文档自己记着的节名**还原一份。⭐ 这样不撒谎——文档记着自己的节名，还原出来仍然准。',
-  },
-  'tpl:notice-missing': {
-    group: 'templates',
-    owner: '文档模板 · 「模板已不存在」说明',
-    purpose: '接在上面那个外壳中间：明确告诉模型"原模板 X 已不存在，上面这份是从文档自己记着的节名还原的，**它才是准的**"。',
   },
 }
 

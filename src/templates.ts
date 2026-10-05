@@ -28,7 +28,12 @@ import { mkdir, readdir, readFile, rm } from 'node:fs/promises'
 import { templatesDir, templatePath } from './paths.ts'
 import { writeTextAtomic } from './files.ts'
 import { fillSlots, promptText, registerPromptDefault } from './prompts.ts'
-import { KNOWLEDGE_TITLE, NARRATIVE_TITLES } from './sections.ts'
+import {
+  KNOWLEDGE_TITLE,
+  NARRATIVE_TITLES,
+  SPEC_SECTION,
+  SPEC_TITLE,
+} from './sections.ts'
 
 // ══════════════════════════════════════════════════════════════════════════
 // ⭐⭐⭐ **「本文档的写作指导」的骨架**（2026-10-12 开放编辑；`{{…}}` 是插槽）
@@ -302,3 +307,95 @@ export function renderTemplateGuidance(t: Template): string {
 
 /** 供内部使用：默认六节的节名（= 无模板时的回落）。 */
 export const DEFAULT_SECTION_NAMES: readonly string[] = NARRATIVE_TITLES
+
+/**
+ * ⭐⭐⭐ **渲染「本档写作规范」整节**（2026-10-12，模板与提示词解耦）。
+ *
+ * ── 它是什么 ──────────────────────────────────────────────────────────────
+ * 把"这份文档有几节、每节要干嘛、哪节会被自动截断"写成**文档正文里的一节**，
+ * 排在叙事末尾、`## 沉淀知识` 之前。**建项目时从模板复制进来，之后归文档自己所有。**
+ *
+ * 🔴 **为什么放正文、不放 `memj_read` 的按需注入**（这是本次解耦的核心）：
+ *   ① **常驻不了**：`context()` 是单条快照、按整条文本比较 ⇒ 按项目动态改它会
+ *      **每轮 append 一条新消息**（库内知识 `74a18e19`）；
+ *   ② **按需注入也有代价**：那要求"读文档时现去查模板" ⇒ 模板被删就得走 fallback、
+ *      且**模型不读那份文档就永远看不到规范**（而它正是"该怎么写这份文档"）；
+ *   ③ ⭐ **落进正文之后它天然免疫一类 bug**：`rebuildDerivedLayers()` 会重写
+ *      frontmatter 且**只带它自己那张字段表** ⇒ `sections` / `truncateSections` /
+ *      `template` 全被抹掉（已实测复现）；而**正文是 rebuild 唯一不碰的东西**
+ *      （实测 sha256 逐字相同）。
+ *
+ * 🔴 **必须是纯函数 + 幂等**：落盘路径上每次都会调它，而它旁边那份旧规范会被
+ *   `cutSpecSection()` 砍掉 ⇒ 同一个输入永远得到同一个输出。
+ * @param t - 模板。
+ * @returns 完整的该节文本（含 `## ` 标题行、末尾无多余空行）。
+ */
+export function renderSpecSection(t: Template): string {
+  const lines: string[] = [
+    SPEC_SECTION,
+    '',
+    fillSlots(promptText('tpl:guidance-head', TPL_GUIDANCE_HEAD), { count: String(t.sections.length) }),
+    '',
+  ]
+  for (const s of t.sections) {
+    const trunc = s.truncate === true ? promptText('tpl:guidance-trunc-mark', TPL_GUIDANCE_TRUNC_MARK) : ''
+    lines.push(
+      fillSlots(promptText('tpl:guidance-row', TPL_GUIDANCE_ROW), { name: s.name, desc: s.desc, trunc }),
+    )
+  }
+  const truncs = t.sections.filter((s) => s.truncate === true)
+  if (truncs.length === 0) {
+    lines.push('', promptText('tpl:guidance-no-trunc', TPL_GUIDANCE_NO_TRUNC))
+  }
+  lines.push(
+    '',
+    fillSlots(promptText('tpl:guidance-foot', TPL_GUIDANCE_FOOT), { knowledgeTitle: KNOWLEDGE_TITLE }),
+    '',
+    // ⭐⭐ **必须显式写清"这一节由工具维护"** —— 否则模型会顺手去改它，
+    //    而它的每一次改动都会被下次落盘**静默覆盖**（同「沉淀知识」的纪律）。
+    `🔴 **本节由工具维护**（从模板 \`${t.id}\` 复制而来），**不要手工改**——`,
+    '改模板不会影响已有文档（它们是解耦的）；要改**这一份文档**的规范，直接改本节即可。',
+  )
+  return lines.join('\n').trimEnd()
+}
+
+/**
+ * ⭐⭐ **从「本档写作规范」节里解析出"哪些节可自动截断"**（2026-10-12）。
+ *
+ * 🔴 **为什么需要它**：截断目标原先只记在 `frontmatter.truncateSections`，
+ *   而那个字段**会被 `rebuildDerivedLayers()` 的旁路重写抹掉**（实测复现）。
+ *   ⇒ 与节名同样，把**权威放回正文**：规范节里已经写着"哪节会被自动截断"，
+ *   那是**给人/模型看的同一份事实**，顺手就能读出来。
+ *
+ * ⚠️ **判据是"这一行带不带截断标记"**，因此要与 `renderSpecSection()` **同源**：
+ *   两边都用 `promptText('tpl:guidance-trunc-mark')` ⇒ 用户改了那句文案时
+ *   **写与读会一起变**（这正是"配对"的意义）。
+ *   为防"文档渲染于旧文案、后来文案被改"的错配，本函数**同时认内置默认文案**。
+ * @param specSection - 规范节原文（`extractSpecSection()` 的产物）。
+ * @returns 可截断的节名数组（顺序即文档顺序）；解析不出 ⇒ 空数组。
+ */
+export function truncateTitlesFromSpec(specSection: string): string[] {
+  if (specSection.trim() === '') return []
+  const marks = [
+    promptText('tpl:guidance-trunc-mark', TPL_GUIDANCE_TRUNC_MARK),
+    TPL_GUIDANCE_TRUNC_MARK,
+  ].filter((m) => m.trim() !== '')
+  const out: string[] = []
+  for (const line of specSection.split(/\r?\n/)) {
+    // 规范节里每个叙事节一行：`- \`## <节名>\` —— <用途><截断标记>`
+    const m = /^\s*-\s+`##\s+(.+?)`/.exec(line)
+    if (m === null) continue
+    const name = (m[1] ?? '').trim()
+    if (name === '' || name === KNOWLEDGE_TITLE || name === SPEC_TITLE) continue
+    if (marks.some((mk) => mk !== '' && line.includes(mk)) && !out.includes(name)) out.push(name)
+  }
+  return out
+}
+
+/**
+ * ⭐ 取「本档写作规范」的**节名**（供回执/前端显示，避免各处硬编码）。
+ * @returns 节名（无 `## ` 前缀）。
+ */
+export function specTitle(): string {
+  return SPEC_TITLE
+}

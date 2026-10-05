@@ -812,12 +812,14 @@ const PROMPT_SPECS_RAW: readonly PromptSpec[] = [
     checks: [{ kind: 'nonEmpty' }],
   },
 
-  // ⭐⭐⭐ `memj_read` 附带的「本文档的写作指导」外壳（2026-10-12 新增；`{{…}}` 是插槽）。
-  //    ⚠️ 只对**用了自定义模板**的项目文档生效（默认六节的项目一字不加）。
-  //    🔴 里面嵌着运行时才知道的值（节数、节名、每节用途、模板 id）⇒ 用插槽模板。
+  // ⭐⭐⭐ 「本档写作规范」那一节的骨架（2026-10-12；`{{…}}` 是插槽）。
+  //    ⭐ **落点是文档正文**：`handoff` 落盘时由 `renderSpecSection()` 渲染成
+  //    `## 本档写作规范` 一节，**建项目时从模板复制进来、之后归文档自己所有**。
+  //    ⚠️ 它们**不再**是"`memj_read` 额外附一份"的通路（那条已退役，见 `tools.ts` 的说明）。
+  //    🔴 里面嵌着运行时才知道的值（节数、节名、每节用途）⇒ 用插槽模板。
   {
     key: 'tpl:guidance-head',
-    injectMode: '工具返回值（进模型上下文；不进 node 0、不破前缀缓存）',
+    injectMode: '文档正文（handoff 落盘时渲染进「本档写作规范」一节）',
     breaksCache: 'no',
     sourceFile: F.templates,
     sourceConst: 'TPL_GUIDANCE_HEAD',
@@ -830,7 +832,7 @@ const PROMPT_SPECS_RAW: readonly PromptSpec[] = [
   },
   {
     key: 'tpl:guidance-row',
-    injectMode: '工具返回值（进模型上下文；不进 node 0、不破前缀缓存）',
+    injectMode: '文档正文（handoff 落盘时渲染进「本档写作规范」一节）',
     breaksCache: 'no',
     sourceFile: F.templates,
     sourceConst: 'TPL_GUIDANCE_ROW',
@@ -847,7 +849,7 @@ const PROMPT_SPECS_RAW: readonly PromptSpec[] = [
   },
   {
     key: 'tpl:guidance-trunc-mark',
-    injectMode: '工具返回值（进模型上下文；不进 node 0、不破前缀缓存）',
+    injectMode: '文档正文（handoff 落盘时渲染进「本档写作规范」一节）',
     breaksCache: 'no',
     sourceFile: F.templates,
     sourceConst: 'TPL_GUIDANCE_TRUNC_MARK',
@@ -857,7 +859,7 @@ const PROMPT_SPECS_RAW: readonly PromptSpec[] = [
   },
   {
     key: 'tpl:guidance-no-trunc',
-    injectMode: '工具返回值（进模型上下文；不进 node 0、不破前缀缓存）',
+    injectMode: '文档正文（handoff 落盘时渲染进「本档写作规范」一节）',
     breaksCache: 'no',
     sourceFile: F.templates,
     sourceConst: 'TPL_GUIDANCE_NO_TRUNC',
@@ -867,7 +869,7 @@ const PROMPT_SPECS_RAW: readonly PromptSpec[] = [
   },
   {
     key: 'tpl:guidance-foot',
-    injectMode: '工具返回值（进模型上下文；不进 node 0、不破前缀缓存）',
+    injectMode: '文档正文（由 handoff 落盘时渲染进「本档写作规范」一节）',
     breaksCache: 'no',
     sourceFile: F.templates,
     sourceConst: 'TPL_GUIDANCE_FOOT',
@@ -880,53 +882,6 @@ const PROMPT_SPECS_RAW: readonly PromptSpec[] = [
         tokens: ['knowledgeTitle'],
         why: '那是「沉淀知识」这个钉死的节名（来自 sections.ts），由程序填；写死会与服务端常量漂开',
       },
-    ],
-  },
-  {
-    key: 'tpl:notice-templated',
-    injectMode: '工具返回值（进模型上下文；不进 node 0、不破前缀缓存）',
-    breaksCache: 'no',
-    sourceFile: F.tools,
-    sourceConst: 'TPL_NOTICE_TEMPLATED',
-    hotReload: 'immediate',
-    editable: true,
-    checks: [
-      { kind: 'nonEmpty' },
-      {
-        kind: 'slots',
-        tokens: ['tplId', 'guidance'],
-        why: '模板 id 与拼好的写作指导都由程序填；删掉这一段就没有内容可给模型',
-      },
-    ],
-  },
-  {
-    key: 'tpl:notice-fallback',
-    injectMode: '工具返回值（进模型上下文；不进 node 0、不破前缀缓存）',
-    breaksCache: 'no',
-    sourceFile: F.tools,
-    sourceConst: 'TPL_NOTICE_FALLBACK',
-    hotReload: 'immediate',
-    editable: true,
-    checks: [
-      { kind: 'nonEmpty' },
-      {
-        kind: 'slots',
-        tokens: ['count', 'secLines', 'missingNote', 'knowledgeTitle'],
-        why: '节数、节行、原模板缺失说明、以及钉死的「沉淀知识」节名都由程序填',
-      },
-    ],
-  },
-  {
-    key: 'tpl:notice-missing',
-    injectMode: '工具返回值（进模型上下文；不进 node 0、不破前缀缓存）',
-    breaksCache: 'no',
-    sourceFile: F.tools,
-    sourceConst: 'TPL_NOTICE_MISSING',
-    hotReload: 'immediate',
-    editable: true,
-    checks: [
-      { kind: 'nonEmpty' },
-      { kind: 'slots', tokens: ['tplId'], why: '它是那个已不存在的模板 id，由程序填' },
     ],
   },
 ]
