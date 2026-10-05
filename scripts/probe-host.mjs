@@ -343,9 +343,11 @@ check('memj-review 不声明 input（它是 popupSelect 装饰，保持原样）
   check('⭐ 补充的话进入注入文本', text.includes('用户随命令补充的话') && text.includes('整理一下'),
     text.slice(-300))
   check('  且原规范仍在（补充的话不是替代）',
-    // ⚠️ 锚点用**语义稳定的词**，不用会被文案调整带走的字面：
-    //    决策 112 把第 2 条从"写六节叙事"改成"先读再写六节"，字面变了但规范仍在。
-    text.includes('memj_handoff') && text.includes('六节') && text.includes('归属'))
+    // ⚠️ 锚点必须用**语义稳定的词**，不用会被文案调整带走的字面。
+    //    🔴 实测踩到：本条原锚点是 `'六节'`，而 2026-10-05 把"默认六节，自定义模板则完全不同"
+    //       改成了"节名以正文的 `##` 标题为准" ⇒ **锚点当场失配、断言报红**。
+    //    ⭐ 现选：命令名（必现）+ 第 2 条的核心动作（`memj_read`）+ 第 4 条的主题（`归属`）。
+    text.includes('memj_handoff') && text.includes('memj_read') && text.includes('归属'))
   check('  措辞中性（不预设它是"重点"——用户可能写的是做法/程度）',
     !text.includes('本次重点'), text.slice(-200))
   check('  没有数错条数（上面实际列了 4 条，不该说"三步"）',
@@ -357,7 +359,8 @@ check('memj-review 不声明 input（它是 popupSelect 装饰，保持原样）
   handoffCmd.handler({ agent: fakeAgent, rawInput: '   ' })
   const text = injected.map((m) => (m.content ?? []).map((b) => b.text ?? '').join('')).join('\n')
   check('未补充时：不出现空的「用户补充」段', !text.includes('用户随命令补充的话'), text.slice(-160))
-  check('  未补充时原规范照常注入', text.includes('memj_handoff') && text.includes('六节'))
+  check('  未补充时原规范照常注入',
+    text.includes('memj_handoff') && text.includes('memj_read') && text.includes('归属'))
 }
 
 console.log('\n【D】路由注册（exact + 前缀冲突规避）')
