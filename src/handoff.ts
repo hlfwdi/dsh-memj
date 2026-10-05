@@ -335,7 +335,7 @@ export interface HandoffRequest {
   /** ⭐ **本次做哪几步**（决策 101）：缺省 `all`；可给数组；顺序固定。 */
   step?: HandoffStep | readonly HandoffStep[] | undefined
   projectDesc?: string | undefined
-  /** 文档的叙事部分（前六节）；不含封面。 */
+  /** 文档的叙事部分（该文档自己的叙事节）；不含封面。 */
   doc?: string | undefined
   /**
    * ⭐⭐ **只写某一节**（决策 134）——节名，匹配规则与 `memj_read` 的 `section` 一致。
@@ -380,8 +380,11 @@ export interface HandoffRequest {
    *    · 新建 ⇒ 按该模板的节名建骨架，并把节名**写进文档自己的 frontmatter**。
    *   ⇒ 此后那份文档**按自己记着的节名**工作，**与模板解耦**
    *     （改模板、甚至删掉模板，都**不影响**它）。
+   *   ⚠️ **2026-10-05 起**：frontmatter 那份是**镜像**（权威已改成**正文的 `##` 标题**，
+   *      见 `docSectionsOf()`）—— 因为 frontmatter 会被某些重建流程改写，而正文不会。
    *
-   * ⚠️ **省略 = 默认六节**（行为与改造前完全一致）。
+   * ⚠️ **省略 = 用"当前生效的默认模板"**（它**也落盘、用户可能改过** ⇒
+   *   `loadDefaultTemplate()` 读盘优先；内置值只是回落）—— 节数**不保证是六节**。
    * ⚠️ **模型要改已有文档的结构 ⇒ 做不到，这是有意的**；要换结构只能新建项目。
    */
   template?: string | undefined
@@ -744,7 +747,10 @@ export function applySectionOp(
 }
 
 /**
- * 把叙事**规范成固定的六节结构**（§3.1「顺序固定」/ §4.2「文档共七节」）。
+ * 把叙事**规范成固定的节结构**（§3.1「顺序固定」）。
+ *
+ * ⚠️ **"固定"指的是"按该文档自己的节名清单固定"**，不是"固定六节" ——
+ *    节名来自 `titles` 参数（`sectionsOf(fm.sections)`），自定义模板完全不同。
  *
  * 🔴 **为什么必须规范化**：LLM 可能只写了其中几节（"这次没有踩坑"很常见）。
  * 若不补齐，文档结构就会随每次调用漂移——而设计明确要求**顺序固定**，
@@ -806,13 +812,14 @@ export function normalizeNarrative(text: string, titles: readonly string[] = NAR
  *    ⇒ 想清空某节就把它写出来、内容留空（这是唯一能清空的方式）。
  *
  * ── 为什么必须做在工具里，而不是"让模型自己带上老内容" ──────────────────────
- * 实测发现：**模型没有任何工具能读到项目文档的六节**
+ * 实测发现：**模型没有任何工具能读到项目文档的全部叙事节**
  * （`memj_info` 只给项目 desc、`memj_read` 只读知识正文）
  * ⇒ 它**只能凭记忆重写**，而"凭记忆"必然压缩、丢细节。
  * ⇒ 把合并做在工具里，**累积就变成默认行为**，不依赖模型记得。
  *
- * ⚠️ **向后兼容**：模型**写全六节**时，合并结果与原来的"整份替换"**完全相同**
+ * ⚠️ **向后兼容**：模型**写全该文档的全部节**时，合并结果与原来的"整份替换"**完全相同**
  *    ⇒ 现有行为一个字都不变（这是本改动敢做的前提）。
+ *    ⚠️ 不是"写全六节"——节数由**该文档自己的节名清单**决定（`titles` 参数）。
  *
  * ⚠️ **标准节与自定义节一视同仁**：两边都按"出现过 = 替换，没出现 = 保留"处理
  *    （自定义节同样**不会被丢弃**——这正是用户报的"内容丢了"的一部分）。
@@ -1383,7 +1390,7 @@ export async function runHandoff(
   // ⭐⭐ **写叙事前必须先读过该项目文档**（决策 112）
   //
   // 🔴 **为什么是硬校验**：决策 109 让 `doc` 按节合并，但当时就承认了缺口——
-  //    **模型没有任何工具能读到项目文档的六节** ⇒ 只能凭记忆重写。
+  //    **模型没有任何工具能读到项目文档的全部叙事节** ⇒ 只能凭记忆重写。
   //    ⚠️ **真实事故**：某轮 handoff 我读了四节、**唯独漏读「当前进度」**
   //    ——恰恰是要写的那一节 ⇒ 没把新批次写进该节，反而另起了一个顶层自定义节，
   //    把"该写没写"包装成了"按节合并的设计如此"。
@@ -1635,6 +1642,8 @@ export async function runHandoff(
   let newSections: string[] = existing?.frontmatter.sections ?? []
   let templateId = existing?.frontmatter.template ?? ''
   let newTruncateSection: string[] = existing?.frontmatter.truncateSections ?? []
+  /** ⭐ 本次真正用的那份模板（**只用于回执现报节数**，见下方赋值处）。 */
+  let appliedTemplate: { id: string; sections: Array<{ name: string }> } | undefined
   /**
    * ⭐⭐⭐ **该文档的节名**（所有按节工作的机制都用它）。
    *
@@ -1678,7 +1687,16 @@ export async function runHandoff(
       templateId = wantTpl === 'default' ? '' : wantTpl
       docSections = newSections
       docTruncateTitle = newTruncateSection
+      appliedTemplate = t
     }
+  }
+  /**
+   * ⭐⭐ **本次真正用的那份模板**（回执要据它现报"几节"，**不写死数字**）。
+   * ⚠️ 新建且没给 `template` ⇒ 取"当前生效的默认模板"（它**也落盘、用户可能改过**）。
+   * ⚠️ 已有项目 ⇒ 保持 `undefined`（那时回执走"已更新"分支，不报骨架）。
+   */
+  if (isNewProjForTpl && appliedTemplate === undefined) {
+    appliedTemplate = await loadDefaultTemplate()
   }
   const newCovers: Cover[] = []
   /** ⭐ 本次**覆盖**掉的知识（决策 104）——回执要单独报，语义与"新增"不同。 */
@@ -2421,8 +2439,16 @@ export async function runHandoff(
   // ── 回执：**必须区分"更新/新建"**（决策 48）──
   const lines: string[] = []
   if (isNewProject) {
+    // 🔴 **不要写死"七节/六节"**（2026-10-05 修）：节名与节数由**该项目的模板**决定，
+      //    默认模板是六节、自定义模板完全不同 ⇒ 写死等于**给模型一个假事实**
+      //    （本项目真实事故：模型照写死的清单去猜节名，把文档结构写坏）。
+      //    ⭐ 判据：**回执里凡"节数/节名"一律现取自本次真正用的那份模板**。
+    const tplLabel = appliedTemplate === undefined
+      ? ''
+      : `，模板 \`${appliedTemplate.id === '' ? 'default' : appliedTemplate.id}\` 共 ${appliedTemplate.sections.length} 节：` +
+        appliedTemplate.sections.map((s) => `\`${s.name}\``).join(' / ')
     lines.push(
-      `⭐ **已新建项目 \`${projectId}\`**（连同七节骨架一起建立）。`,
+      `⭐ **已新建项目 \`${projectId}\`**（骨架已按模板建立${tplLabel}）。`,
       `库里现有项目：${[...existingProjects, projectId].map((p) => `\`${p}\``).join('、')}`,
     )
   } else {
@@ -2435,11 +2461,12 @@ export async function runHandoff(
   //    实测连续几轮交接都没压，「当前进度」涨到 24,983 字符仍在涨。
   //    ⇒ 把体量变成**每次看得见的事实**，比再写一条规范有效（"记在文档里不构成防线"）。
   //
-  // 🔴🔴 **为什么报的是"全部六节"而不只是「当前进度」**（2026-09-21 补）：
+  // 🔴🔴 **为什么报的是"全部叙事节"而不只是「当前进度」**（2026-09-21 补）：
   //    实测发现——**只报一节时，模型要压缩还得自己数其余节的大小**
   //    （本项目真实发生过：我为了量「有效做法/失败踩坑」各多大，**自己跑 node 脚本去数文件**）。
   //    ⇒ ⭐ 那就等于"**触发条件报了一个数，却把判断所需的其余数留给调用方自己找**"——
-  //      判据不完整。**一次把六节都报出来，压缩该动哪一节就是现成的**。
+  //      判据不完整。**一次把全部叙事节都报出来，压缩该动哪一节就是现成的**。
+  //    ⚠️ 是"该文档自己的节"，**不是写死的六节**（自定义模板的文档节名完全不同）。
   //
   // ⚠️ **只报数字，不提「批次」等内部形态**——规范**不规定**「当前进度」怎么划分
   //    （可以按批次、按阶段、按主题、或一张表里的几行）。
