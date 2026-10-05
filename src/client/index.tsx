@@ -55,6 +55,16 @@ const PLUGIN_BASE = '/plugins/dsh-memj'
 /** host 侧的人侧面板命令名（必须与 `commands.ts` 一致）。 */
 const CMD_REVIEW = 'memj-review'
 
+/**
+ * 侧栏入口图标里那个渐变页层的 `id`。
+ *
+ * ⚠️ **必须全局唯一**：SVG 的 `id` 是全文档作用域，若与页面里别的 `defs` 撞名，
+ * `url(#...)` 会静默指错（图标缺一块或变色，不报错）。
+ * 实测本入口在侧栏**只渲染一份**，且 DSH 页面里当时没有别的 `linearGradient`
+ * ⇒ 用一个带插件前缀的名字就足够安全。
+ */
+const MEMJ_MARK_GRAD_ID = 'dsh-memj-mark-grad'
+
 /** ⭐ 两个「取交接」命令名（与 host 侧 `commands.ts` **必须一致**）。 */
 const CMD_GET_PROJECT = 'memj-get-handoff-project'
 const CMD_GET_THEME = 'memj-get-handoff-theme'
@@ -224,7 +234,10 @@ function MemjEntryButton({ wide, useSessions }: EntryButtonProps): React.ReactEl
         gap: wide ? '8px' : '0',
         width: '100%',
         height: '32px',
-        padding: wide ? '0 10px' : '0',
+        // ⭐ 对齐基准 = 「图标左缘对齐图标左缘」（实测官方各行容器 x 本就不一致：
+        //    设置 x=10/图标 x=18、插件 x=14/图标 x=22 ⇒ 没法靠容器对齐）。
+        //    memj 容器 x=12 ⇒ padL 取 6px 让图标左缘正好落在 x=18，与「设置」精确对齐。
+        padding: wide ? '0 6px' : '0',
         boxSizing: 'border-box',
         borderRadius: '6px',
         color: 'var(--dsw-alias-label-primary, inherit)',
@@ -234,7 +247,66 @@ function MemjEntryButton({ wide, useSessions }: EntryButtonProps): React.ReactEl
         cursor: 'pointer',
       },
     },
-    React.createElement('span', { 'aria-hidden': true, style: { fontSize: '15px' } }, '📚'),
+    React.createElement(
+      'span',
+      {
+        'aria-hidden': true,
+        style: {
+          // ⭐ 固定 16×16 图标槽（官方「插件」行同款：16px 槽 + 8px gap ⇒ 文字对齐官方 x=42）。
+          width: '16px',
+          height: '16px',
+          flex: '0 0 16px',
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        },
+      },
+      React.createElement(
+        'svg',
+        {
+          width: 16,
+          height: 16,
+          viewBox: '0 0 24 24',
+          fill: 'none',
+          xmlns: 'http://www.w3.org/2000/svg',
+          'aria-hidden': true,
+        },
+        React.createElement(
+          'defs',
+          null,
+          React.createElement(
+            'linearGradient',
+            { id: MEMJ_MARK_GRAD_ID, x1: 0, y1: 1, x2: 1, y2: 0 },
+            React.createElement('stop', { offset: 0, stopColor: '#9B4DFF' }),
+            React.createElement('stop', { offset: 1, stopColor: '#6E7BFF' }),
+          ),
+        ),
+        // ── 三层渐变"记忆页"：从 j 的钩后向右下层叠（用户 2026-10-03 认可的设计）──
+        React.createElement(
+          'g',
+          { fill: `url(#${MEMJ_MARK_GRAD_ID})` },
+          React.createElement('rect', { x: 15.2, y: 14.6, width: 6.4, height: 3.6, rx: 1.1, opacity: 0.85 }),
+          React.createElement('rect', { x: 14.6, y: 16.8, width: 6.4, height: 3.6, rx: 1.1, opacity: 0.55 }),
+          React.createElement('rect', { x: 14, y: 19, width: 6.4, height: 3.6, rx: 1.1, opacity: 0.3 }),
+        ),
+        // ── j：粗描边画出正规字母降部钩（深钩、末端上扬、全笔画等粗）──
+        //    ⚠️ 16px 下实际线宽 = 4.6 × 16/24 ≈ 3.07px ⇒ 实心感，是刻意的"粗标记"，
+        //       与齿轮那种 1.3px 细线条图标并置时形成主次对比。
+        React.createElement('path', {
+          d: 'M13.8 7.8 L13.8 14.5 C13.8 19.0 11.2 21.6 7.4 21.6 C5.0 21.6 3.4 20.0 3.4 18.2',
+          stroke: 'currentColor',
+          'stroke-width': 4.6,
+          'stroke-linecap': 'round',
+          'stroke-linejoin': 'round',
+          fill: 'none',
+        }),
+        // ── 四角星：替代 j 的点，右上悬浮（内径≈外径 1/3）──
+        React.createElement('path', {
+          d: 'M21.80 3.30L19.33 4.03L18.60 6.50L17.87 4.03L15.40 3.30L17.87 2.57L18.60 0.10L19.33 2.57Z',
+          fill: 'currentColor',
+        }),
+      ),
+    ),
     wide ? React.createElement('span', null, 'memj 记忆库') : null,
   )
 }
