@@ -3519,9 +3519,12 @@ function loadTemplateIntoForm(t) {
   if (!t) return
   const idEl = document.getElementById('tpl-id')
   const titleEl = document.getElementById('tpl-title')
-  // ⚠️ 内置 default **不能被覆盖** ⇒ 不带入 id（让用户自己起个新 id）。
-  if (idEl) idEl.value = t.id === 'default' ? '' : t.id
-  if (titleEl) titleEl.value = t.id === 'default' ? '' : t.title
+  // ⭐⭐ **决策 208（2026-10-12）：`default` 现在也可以编辑**（模板落成 .md、默认模板也落盘）
+  //    ⇒ **必须把它的 id 也带进表单**，否则点"编辑默认模板"再保存会**新建一份**、
+  //      而不是改掉默认模板（用户会看到"我改的没生效、还多出来一份"）。
+  //    ⚠️ 原先这里刻意把 default 的 id 清空（那时它"不可覆盖"）—— 判据随设计更新。
+  if (idEl) idEl.value = t.id
+  if (titleEl) titleEl.value = t.title
   // ⚠️ **深拷一份**：直接引用 `t.sections` 会让"取消编辑"后仍改到列表里的对象。
   tplState.sections = t.sections.map((s) => ({ name: s.name, desc: s.desc, truncate: s.truncate === true }))
   renderTemplateSections()
@@ -3541,7 +3544,8 @@ function renderTemplatesList() {
     name.textContent = `${t.id}${t.title && t.title !== t.id ? `（${t.title}）` : ''}`
     const meta = document.createElement('span')
     meta.className = 'dim'
-    meta.textContent = `${t.sectionCount} 节${t.id === 'default' ? '｜内置，不可删' : ''}`
+    // ⭐ 决策 208：`default` 也可编辑（只是不可删）⇒ 文案跟着改，别再说"不可覆盖"。
+    meta.textContent = `${t.sectionCount} 节${t.id === 'default' ? '｜默认模板（可编辑，不可删）' : ''}`
     info.append(name, meta)
     // ⚠️ 不合法的模板**逐条报出来**（否则它会静默不可用）。
     if (t.errors && t.errors.length > 0) {

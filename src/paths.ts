@@ -416,7 +416,7 @@ export function promptHistoryDir(): string {
 }
 
 /**
- * ⭐⭐ **交接文档模板目录**（决策 204）——`<库根>/templates/<id>.json`。
+ * ⭐⭐ **交接文档模板目录**（决策 204）——`<库根>/templates/<id>.md`。
  *
  * 🔴 **为什么放库根而不是插件仓**：模板是**用户数据**（用户自己建、可能改、会删），
  *   而插件仓是交付物（升级会覆盖）⇒ 放库根才能跟着库走、也能被 git 维护。
@@ -431,13 +431,37 @@ export function templatesDir(): string {
 /**
  * 一份模板文件的绝对路径。
  *
+ * ⭐⭐ **2026-10-12（决策 208）：模板从 `.json` 改成 `.md`**（用户裁定"做"）。
+ * 理由：模板现在**就是一份文档的雏形**（每节一个 `## ` 标题 + "这一节要干嘛"的正文），
+ *   ⇒ 用 markdown 存**人可以直接读、直接手改**，与"建项目 = 复制模板"是同一个心智模型。
+ *   ⚠️ 旧的 `.json` 仍**兼容读**（见 `legacyTemplatePath()`）——
+ *   生产库里当时就有一份 `company-deep-research.json`。
+ *
  * ⚠️ **内部自己做 `safeName` 消毒** —— 调用方**不要**再消毒一遍
  *    （两处各消一次会让"该不该消毒"变成调用方的记忆负担，本项目吃过这类漂移）。
  * @param id - 模板 id。
  * @returns 绝对路径。
  */
 export function templatePath(id: string): string {
+  return join(templatesDir(), `${safeName(id)}.md`)
+}
+
+/**
+ * ⭐ **模板的旧路径**（`.json`）——只用于**兼容读与迁移**。
+ *
+ * 🔴 **为什么必须兼容读**：决策 204 的模板是 JSON 存的，而**生产库里真有存量**
+ *   （`templates/company-deep-research.json`）。若不接住它 ⇒ 那份模板**静默消失**
+ *   ⇒ 已存在文档虽不受影响（它们记着自己的节名），但用户会发现"我的模板没了"。
+ * @param id - 模板 id。
+ * @returns 旧格式的绝对路径。
+ */
+export function legacyTemplatePath(id: string): string {
   return join(templatesDir(), `${safeName(id)}.json`)
+}
+
+/** ⭐ `default` 模板在磁盘上的路径（决策 208：默认模板**也落盘**，可被用户编辑）。 */
+export function defaultTemplatePath(): string {
+  return templatePath('default')
 }
 
 /**

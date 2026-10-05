@@ -1529,9 +1529,8 @@ export async function handleApi(
         return { status: 400, body: { ok: false, error: '请求体不是合法 JSON' } }
       }
       if (t === undefined) return { status: 400, body: { ok: false, error: '模板形状不合法（缺 id 或 sections 全空）' } }
-      if (t.id === 'default') {
-        return { status: 400, body: { ok: false, error: '`default` 是内置模板，不可覆盖（可以另建一个 id）。' } }
-      }
+      // ⭐⭐ 决策 208：`default` **现在可以保存**（用户可编辑默认模板）。
+      //    ⚠️ 组件包办"落盘后 loadDefaultTemplate() 会读到它" ⇒ 这里只放开闸门，不加特判。
       const errs = await saveTemplate(t)
       return { status: errs.length === 0 ? 200 : 400, body: { ok: errs.length === 0, errors: errs } }
     }

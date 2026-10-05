@@ -131,8 +131,15 @@ console.log('\n【4】API 契约')
   })
   check('非法模板 ⇒ 400 + errors', r3.status === 400 && r3.body.errors.length > 0)
 
+  // ⭐⭐ **决策 208（2026-10-12）：`default` 现在【可以保存】**（模板落成 .md、默认模板也落盘，
+  //    用户可直接编辑它）。⚠️ 原先这条断言是"覆盖 default ⇒ 400" ——
+  //    **判据随设计更新，不是代码 bug**（本项目纪律：设计变了就改判据，且要说明为什么）。
   const r4 = await api('POST', '/template/save', { template: { id: 'default', title: 'D', sections: [{ name: 'A', desc: 'x' }] } })
-  check('覆盖 default ⇒ 400', r4.status === 400)
+  check('⭐⭐ 覆盖 default ⇒ **200**（决策 208：默认模板可编辑）', r4.status === 200 && r4.body.ok === true)
+  check('  ⭐ 落盘后读到的是用户改过的那份', (await loadTpl('default'))?.sections?.[0]?.name === 'A')
+  // 还原（否则会影响后续用例：默认模板已不是六节）
+  const { defaultTemplate: dtpl, saveTemplate: stpl } = mod
+  await stpl(dtpl())
 
   const r5 = await api('POST', '/template/delete', { id: 'api-tpl' })
   check('POST /template/delete ⇒ 200', r5.status === 200 && r5.body.ok === true)

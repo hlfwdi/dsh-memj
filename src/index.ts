@@ -27,6 +27,8 @@ import { extname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Config, DEFAULT_CONFIG, type MemjConfig } from './config.ts'
 import { ensureLibraryDirs, libraryRoot } from './store.ts'
+// ⭐ 决策 208：`default` 模板也落盘（文件不存在时写一份出来，幂等、不覆盖用户改动）。
+import { ensureDefaultTemplateFile } from './templates.ts'
 import { PROTOCOL_SECTION_ORDER, PROTOCOL_TEXT, protocolText } from './protocol.ts'
 // ⭐⭐ 运行时上下文（决策 124）：走 `context()`，**改它不破前缀缓存**。
 import { CONTEXT_NAME, CONTEXT_ORDER, CONTEXT_TEXT } from './context.ts'
@@ -203,6 +205,11 @@ export function apply(ctx: Context, config: MemjConfig = DEFAULT_CONFIG): void {
 
   // 库目录在启动时就建好——首次使用时不必再判存在性。
   void ensureLibraryDirs().catch(() => {})
+
+  // ⭐⭐ **确保 `default` 模板已落盘**（决策 208：默认模板也可被用户编辑）。
+  //    🔴 **幂等**：文件已存在就**不碰**（否则每次重启都会把用户的改动覆盖回内置值）。
+  //    ⚠️ **best-effort**：写不出来也不该影响启动（回落内置值即可）。
+  void ensureDefaultTemplateFile().catch(() => {})
 
   // ⭐⭐⭐ **预热提示词覆盖缓存**（本次新增）。
   //

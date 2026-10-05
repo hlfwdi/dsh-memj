@@ -82,6 +82,7 @@ import { entryRelPath } from './paths.ts'
 import {
   defaultTemplate,
   listTemplates,
+  loadDefaultTemplate,
   loadTemplate,
   renderSpecSection,
   templateSectionNames,
@@ -1661,7 +1662,10 @@ export async function runHandoff(
   if (isNewProjForTpl) {
     const wantTpl = (req.template ?? '').trim()
     if (wantTpl !== '') {
-      const t = wantTpl === 'default' ? defaultTemplate() : await loadTemplate(wantTpl)
+      // ⭐⭐ 决策 208：`default` **也落盘了**，用户可能改过它
+      //    ⇒ 必须走 `loadDefaultTemplate()`（磁盘优先、回落内置），
+      //      不能用纯函数 `defaultTemplate()` 把用户的改动盖掉。
+      const t = wantTpl === 'default' ? await loadDefaultTemplate() : await loadTemplate(wantTpl)
       if (t === undefined) {
         return { ...fail(`模板 \`${wantTpl}\` 不存在。可用：${(await listTemplates()).map((x) => `\`${x.id}\``).join('、')}`), similarProjects: [] }
       }
@@ -2242,7 +2246,9 @@ export async function runHandoff(
   }
   if (specText === '' && existing === undefined) {
     // ⭐ 只在**新建**时从模板复制（默认模板永远可用；自定义模板被删则不猜）。
-    const tplForSpec = templateId === '' ? defaultTemplate() : await loadTemplate(templateId)
+    // ⭐ 决策 208：`default` 也落盘且可被用户编辑 ⇒ 走读盘优先的那一个。
+    //    ⚠️ 新建（`existing === undefined`）时 `templateId` 为空 ⇒ 取当前生效的默认模板。
+    const tplForSpec = templateId === '' ? await loadDefaultTemplate() : await loadTemplate(templateId)
     if (tplForSpec !== undefined) specText = renderSpecSection(tplForSpec)
   }
   const narrativeBody = cutSpecSection(finalNarrative)

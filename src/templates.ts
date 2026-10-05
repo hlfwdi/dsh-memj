@@ -25,9 +25,10 @@
  * @module dsh-memj/templates
  */
 import { mkdir, readdir, readFile, rm } from 'node:fs/promises'
-import { templatesDir, templatePath } from './paths.ts'
+import { defaultTemplatePath, legacyTemplatePath, templatePath, templatesDir } from './paths.ts'
 import { writeTextAtomic } from './files.ts'
 import { fillSlots, promptText, registerPromptDefault } from './prompts.ts'
+import { renderFrontmatter, splitFrontmatter, yamlScalar } from './parse.ts'
 import {
   KNOWLEDGE_TITLE,
   NARRATIVE_TITLES,
@@ -91,9 +92,15 @@ export interface Template {
 }
 
 /**
- * ⭐ 内置默认模板（= 改造前的硬编码六节，**行为一字不变**）。
+ * ⭐ **内置默认模板**（= 改造前的硬编码六节）。
  *
  * 🔴 `truncate` 落在「当前进度」——与既有实现一致（`PROGRESS_TITLE`）。
+ *
+ * ⭐⭐ **2026-10-12（决策 208）：`default` 也落盘，用户可直接编辑它。**
+ *   ⇒ 本函数是**纯函数回落值**（磁盘上没有那份文件时用它）；
+ *     真正"当前生效的默认模板"请用 **`loadDefaultTemplate()`**（它读盘优先）。
+ *   ⚠️ **为什么必须留一个纯函数的版本**：很多地方（校验、测试、UI 初值）要一个
+ *     不依赖磁盘的确定值；而"用户改过默认模板"这件事只影响**新建项目**。
  */
 export function defaultTemplate(): Template {
   return {
@@ -109,6 +116,46 @@ export function defaultTemplate(): Template {
       { name: '下一步', desc: '待办' },
     ],
   }
+}
+
+/**
+ * ⭐⭐ **取"当前生效的默认模板"**（决策 208）——**磁盘优先，回落内置**。
+ *
+ * 🔴 **为什么要它**：`default` 落盘之后，用户可能**改过它**
+ *   （这正是"default 也落盘"的目的）⇒ 凡"要用默认模板去建项目 / 渲染规范"的地方，
+ *   都该用本函数而不是 `defaultTemplate()`，否则**用户的修改会被内置值悄悄盖掉**。
+ *
+ * ⚠️ 与 `loadTemplate('default')` 的关系：那个也能读盘，但它**没有内置回落**
+ *   （文件不在就 `undefined`）⇒ 默认模板**必须永远可用**（它是 `delete` 的拒绝理由、
+ *   也是 `template` 参数的默认档），所以这里补上回落。
+ * @returns 模板（**永不 `undefined`**）。
+ */
+export async function loadDefaultTemplate(): Promise<Template> {
+  const t = await loadTemplate('default')
+  return t ?? defaultTemplate()
+}
+
+/**
+ * ⭐⭐ **确保 `default` 模板已落盘**（决策 208）——首次使用时写一份出来。
+ *
+ * 🔴 **为什么需要"确保"而不是"启动时无条件写"**：
+ *   ① 它必须可被用户编辑 ⇒ 不能每次启动都把用户的改动**覆盖回内置值**；
+ *   ⇒ 判据 = **文件不存在才写**（幂等，不碰已有内容）。
+ * @returns 是否本次新建了该文件。
+ */
+export async function ensureDefaultTemplateFile(): Promise<boolean> {
+  const p = defaultTemplatePath()
+  let exists = false
+  try {
+    await readFile(p, 'utf8')
+    exists = true
+  } catch {
+    exists = false
+  }
+  if (exists) return false
+  await mkdir(templatesDir(), { recursive: true })
+  await writeTextAtomic(p, renderTemplateDoc(defaultTemplate()))
+  return true
 }
 
 /**
@@ -177,21 +224,146 @@ export function templateSectionNames(t: Template): string[] {
   return t.sections.map((s) => s.name)
 }
 
-/** 读一份模板；文件不存在或结构不合法 ⇒ `undefined`（**不猜**）。 */
+/**
+ * ⭐⭐⭐ **把一份模板渲染成 markdown 文档**（决策 208，2026-10-12）。
+ *
+ * ── 形态（人可读写，机器也能解析）────────────────────────────────────────
+ * ```
+ * ---
+ * version: 1
+ * id: company-deep-research
+ * title: 公司深度研究交接文档
+ * ---
+ *
+ * # <文件位置说明>
+ *
+ * ## 研究目标
+ *
+ * 本次要研究这家公司是为了回答哪些问题……（= 这一节要干嘛）
+ *
+ * ## 公司画像
+ *
+ * ……
+ * ```
+ *
+ * 🔴 **每节 = 一个 `## ` 标题 + 一段"这一节要干嘛"**：
+ *   · `## ` 标题就是**节名** → 它同时是 `renderSpecSection()` 里那条 `- \`## X\` —— desc`；
+ *   · 标题下的正文就是 **`desc`**（决策 204 的"这一节要干嘛"）。
+ *   ⭐ 于是**同一份文件**既是"模板"、又是人能直接读懂的结构说明 ——
+ *     这正是用户要的"把初始模板作为一个文档模板存 md"。
+ *
+ * 🔴 **"可截断"怎么表达**：写成标题行末的 ` <!-- truncate -->`（HTML 注释，
+ *   在渲染出的页面里**不显示**、不干扰人阅读）⇒ 与 `truncateTitlesFromSpec()` 的取向一致：
+ *   **机器标记要能被人忽略**。
+ * @param t - 模板。
+ * @returns markdown 全文（末尾带换行）。
+ */
+export function renderTemplateDoc(t: Template): string {
+  const fm = renderFrontmatter([
+    ['version', String(TEMPLATE_VERSION)],
+    ['id', yamlScalar(t.id)],
+    ['title', yamlScalar(t.title)],
+  ])
+  const parts: string[] = [
+    fm,
+    `# 交接文档模板 — ${t.title || t.id}`,
+    '',
+    `<!-- 这是模板 \`${t.id}\`：\`## \` 标题 = 节名；标题下的正文 = "这一节要干嘛"（会进写作规范）。`,
+    '     ⭐ 建项目时工具会把它复制成那份项目文档的结构，此后两者解耦（改这里不影响已有文档）。',
+    '     ⚠️ 行末 `<!-- truncate -->` 表示该节参与自动截断归档。 -->',
+    '',
+  ]
+  for (const s of t.sections) {
+    parts.push(`## ${s.name}${s.truncate === true ? ' <!-- truncate -->' : ''}`, '')
+    if (s.desc.trim() !== '') parts.push(s.desc.trim(), '')
+  }
+  return `${parts.join('\n').trimEnd()}\n`
+}
+
+/**
+ * ⭐⭐ **解析 markdown 模板**（`renderTemplateDoc()` 的逆；决策 208）。
+ *
+ * 🔴 **必须能容忍人手改**（这是选 md 的理由之一）：
+ *   · 标题级别只用 `## `；`# ` 那行是文件标题、**不是节**；
+ *   · 行末的 `<!-- truncate -->` 决定该节是否可截断（⚠️ 用 `includes` 而非严格相等：
+ *     人手改时很容易多打个空格）；
+ *   · `id`/`title` 优先取 frontmatter；**缺 frontmatter 时从文件名兜底**
+ *     （`fallbackId`）⇒ 用户新建一个裸 md 也能用。
+ * @param text - markdown 全文。
+ * @param fallbackId - 文件名推出的 id（frontmatter 没有时用）。
+ * @returns 模板；**一个 `## ` 节都没有 ⇒ `undefined`**（不猜）。
+ */
+export function parseTemplateDoc(text: string, fallbackId: string): Template | undefined {
+  const { data, body } = splitFrontmatter(text)
+  const id = typeof data?.['id'] === 'string' && (data['id'] as string).trim() !== ''
+    ? (data['id'] as string).trim()
+    : fallbackId.trim()
+  if (id === '') return undefined
+  const fmTitle = typeof data?.['title'] === 'string' ? (data['title'] as string) : ''
+
+  const sections: TemplateSection[] = []
+  let cur: TemplateSection | undefined
+  let inFence = false
+  for (const line of body.split(/\r?\n/)) {
+    // ⚠️ 跳过代码围栏内的伪标题（与人侧文档解析同规）。
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence
+      continue
+    }
+    if (inFence) continue
+    const m = /^##\s+(.+?)\s*$/.exec(line)
+    if (m !== null) {
+      let name = (m[1] ?? '').trim()
+      // ⚠️ **必须宽容**（这是"选 md 让人手改"的直接后果）：人手写时很容易
+      //    写成 `<!--truncate-->`（没空格）或留多余空格 ⇒ 用正则而不是精确串匹配，
+      //    否则用户"明明标了却没生效"，**而且不报错**。
+      const trunc = /<!--\s*truncate\s*-->/i.test(name)
+      name = name.replace(/<!--\s*truncate\s*-->/i, '').trim()
+      if (name === '') continue
+      cur = { name, desc: '' }
+      if (trunc) cur.truncate = true
+      sections.push(cur)
+      continue
+    }
+    // ⚠️ 顶层 `# ` 是文件标题 ⇒ 结束当前节（"这一节要干嘛"不会跨过它）。
+    if (/^#\s+/.test(line)) {
+      cur = undefined
+      continue
+    }
+    if (cur !== undefined) cur.desc = cur.desc === '' ? line.trim() : `${cur.desc}\n${line.trim()}`
+  }
+  if (sections.length === 0) return undefined
+  for (const s of sections) s.desc = s.desc.trim()
+  return { version: TEMPLATE_VERSION, id, title: fmTitle.trim() !== '' ? fmTitle.trim() : id, sections }
+}
+
+/**
+ * ⭐ 读一份模板 —— **`.md` 优先，回落旧的 `.json`**（决策 208 + 兼容读）。
+ *
+ * 🔴 **两种格式都必须接住**：决策 204 的存量是 `.json`（生产库当时有一份
+ *   `company-deep-research.json`）⇒ 只顾新格式会让它**静默消失**。
+ * @param id - 模板 id。
+ * @returns 模板；两种都不存在或都不可解析 ⇒ `undefined`（**不猜**）。
+ */
 export async function loadTemplate(id: string): Promise<Template | undefined> {
-  let text: string
+  // ① 新格式（.md）。
+  let text: string | undefined
   try {
     text = await readFile(templatePath(id), 'utf8')
   } catch {
-    return undefined
+    text = undefined
   }
-  let raw: unknown
+  if (text !== undefined) {
+    const t = parseTemplateDoc(text, id)
+    if (t !== undefined) return t
+  }
+  // ② 旧格式（.json）——兼容读。
   try {
-    raw = JSON.parse(text)
+    const json = await readFile(legacyTemplatePath(id), 'utf8')
+    return normalizeTemplate(JSON.parse(json))
   } catch {
     return undefined
   }
-  return normalizeTemplate(raw)
 }
 
 /**
@@ -221,27 +393,45 @@ export function normalizeTemplate(raw: unknown): Template | undefined {
   return { version: TEMPLATE_VERSION, id, title, sections }
 }
 
-/** 列出库里全部模板（含内置 default，它**总是可用**且不可删）。 */
+/**
+ * 列出库里全部模板（含默认，它**总是可用**且不可删）。
+ *
+ * ⭐⭐ **2026-10-12（决策 208）**：`default` 现在**也在磁盘上**
+ *   （`ensureDefaultTemplateFile()` 首次落盘）⇒ 列表里那份**以磁盘为准**
+ *   （用户可能改过它）；磁盘上没有才回落内置值。
+ * ⚠️ 兼容读旧的 `.json`（存量模板不会因为改格式而消失）。
+ */
 export async function listTemplates(): Promise<Template[]> {
-  const out: Template[] = [defaultTemplate()]
+  // ⭐ 默认模板：磁盘优先（用户可编辑），否则内置。
+  const def = await loadDefaultTemplate()
+  const out: Template[] = [def]
   let files: string[] = []
   try {
     files = await readdir(templatesDir())
   } catch {
     return out
   }
-  for (const f of files) {
-    if (!f.endsWith('.json')) continue
-    const t = await loadTemplate(f.slice(0, -'.json'.length))
-    if (t === undefined) continue
-    if (t.id === 'default') continue // 内置的优先，磁盘上的同名忽略
-    out.push(t)
+  const seen = new Set<string>(['default'])
+  // ① 新格式（.md）优先；② 再收旧的 .json 里"还没有 .md 版本"的（兼容读）。
+  for (const ext of ['.md', '.json'] as const) {
+    for (const f of files) {
+      if (!f.endsWith(ext)) continue
+      const id = f.slice(0, -ext.length)
+      if (seen.has(id)) continue
+      const t = await loadTemplate(id)
+      if (t === undefined) continue
+      seen.add(id)
+      out.push(t)
+    }
   }
   return out
 }
 
 /**
  * 保存一份模板（**先校验、不合法不写盘**）。
+ *
+ * ⭐ **决策 208**：写 `.md`（`renderTemplateDoc`）。
+ * ⭐ **`default` 现在可以保存**（用户可编辑它）—— 落盘后 `loadDefaultTemplate()` 会读到它。
  * @param t - 模板。
  * @returns 问题清单（空 = 已写入）。
  */
@@ -249,28 +439,29 @@ export async function saveTemplate(t: Template): Promise<string[]> {
   const errs = validateTemplate(t)
   if (errs.length > 0) return errs
   await mkdir(templatesDir(), { recursive: true })
-  await writeTextAtomic(
-    templatePath(t.id),
-    `${JSON.stringify({ version: TEMPLATE_VERSION, id: t.id, title: t.title, sections: t.sections }, null, 2)}\n`,
-  )
+  await writeTextAtomic(templatePath(t.id), renderTemplateDoc(t))
   return []
 }
 
 /**
  * 删除一份模板。
- * 🔴 **`default` 不可删**（它是回落目标）；⚠️ **不影响任何已有文档**
- *    （文档记着自己的节名，与模板解耦）。
+ * 🔴 **`default` 不可删**（它是回落目标）。
  * @param id - 模板 id。
  * @returns 是否真的删了。
  */
 export async function deleteTemplate(id: string): Promise<boolean> {
   if (id === 'default') return false
-  try {
-    await rm(templatePath(id), { force: true })
-    return true
-  } catch {
-    return false
+  let deleted = false
+  // ⚠️ 两种格式都要删（否则旧的 .json 会让它"删了又回来"——`loadTemplate` 会回落读它）。
+  for (const p of [templatePath(id), legacyTemplatePath(id)]) {
+    try {
+      await rm(p, { force: true })
+      deleted = true
+    } catch {
+      /* 不存在就算了 */
+    }
   }
+  return deleted
 }
 
 /**

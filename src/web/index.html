@@ -1071,7 +1071,9 @@
           <input type="text" id="tpl-title" placeholder="给这个模板起个名字">
         </div>
         <p class="set-desc">
-          id 同时是文件名，只能用<b>全小写英文 / 数字 / 连字符</b>。内置的 <code>default</code> 不可覆盖。
+          id 同时是文件名（<code>templates/&lt;id&gt;.md</code>），只能用<b>全小写英文 / 数字 / 连字符</b>。
+          ⭐ <code>default</code> <b>也可以编辑</b>（它就是"没指定模板时用的那套"）——改它只影响<b>之后新建</b>的项目；
+          ⚠️ 它<b>不能删除</b>（删了就没有回落目标了）。
         </p>
       </div>
       <div class="set-item">
