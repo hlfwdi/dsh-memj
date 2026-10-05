@@ -22,6 +22,10 @@
  * 用法（在插件仓根跑，**先 build**）：
  *   node scripts/migrate-templates-to-spec-blocks.mjs --dry      # 只报告
  *   node scripts/migrate-templates-to-spec-blocks.mjs            # 真迁移
+ *   node scripts/migrate-templates-to-spec-blocks.mjs --refresh-comments
+ *       ⭐ **只刷新顶部那段说明注释**（形态已是新的、但注释文案过时时用）——
+ *         它**仍然逐字段校验**：字段有任何变化就**不写**（注释更新不等于可以改内容）。
+ *         它也会**先备份**。
  *
  * ⚠️ 默认读写**库里**的 `templates/`（受 `MEMJ_DATA_DIR` 影响 ⇒ 可先在库副本上试）。
  */
@@ -30,6 +34,8 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 const DRY = process.argv.includes('--dry')
+/** ⭐ 只刷新顶部说明注释（形态已是新的、但注释文案过时）。 */
+const REFRESH = process.argv.includes('--refresh-comments')
 
 // ⚠️ Windows 上 ESM 的**裸绝对路径**会被当成 URL scheme（ERR_UNSUPPORTED_ESM_URL_SCHEME）。
 const mod = await import(pathToFileURL(join(process.cwd(), 'lib', 'index.js')).href)
@@ -78,8 +84,9 @@ for (const id of mdIds) {
   const text = readFileSync(p, 'utf8')
   const before = parseTemplateDoc(text, id)
 
-  // ── 幂等：已经是新形态 ⇒ 跳过 ──
-  if (specBlockRange(text.split(/\r?\n/)) !== undefined) {
+  // ── 幂等：已经是新形态 ⇒ 跳过（**除非**是"只刷新注释"模式）──
+  const alreadyNew = specBlockRange(text.split(/\r?\n/)) !== undefined
+  if (alreadyNew && !REFRESH) {
     console.log(`  ⏭️  ${id}：已是新形态（含 \`\`\`${SPEC_BLOCK_FENCE}）⇒ 跳过`)
     skipped += 1
     continue
@@ -105,13 +112,21 @@ for (const id of mdIds) {
     continue
   }
 
+  // ⭐ **"只刷新注释"模式**下，若渲染结果与盘上那份**一字不差**，说明没什么可刷的。
+  if (REFRESH && next === text) {
+    console.log(`  ⏭️  ${id}：注释已是最新（渲染结果与盘上逐字相同）⇒ 跳过`)
+    skipped += 1
+    continue
+  }
+
   if (DRY) {
-    console.log(`  🔍 ${id}：可升级（${before.sections.length} 节，${text.length} → ${next.length} 字符，往返等价 ✅）`)
+    console.log(`  🔍 ${id}：${REFRESH ? '可刷新注释' : '可升级'}（${before.sections.length} 节，${text.length} → ${next.length} 字符，往返等价 ✅）`)
     upgraded += 1
     continue
   }
 
   // ── 备份 → 写盘 → 复验 ──
+  //    🔴 **两种模式共用同一套纪律**：字段等价校验照做（注释更新**不等于**可以改内容）。
   mkdirSync(backupDir, { recursive: true })
   copyFileSync(p, join(backupDir, `${id}.md`))
   writeFileSync(p, next, 'utf8')

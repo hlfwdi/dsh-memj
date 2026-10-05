@@ -336,9 +336,11 @@ export function renderTemplateDoc(t: Template): string {
     fm,
     `# 交接文档模板 — ${t.title || t.id}`,
     '',
-    `<!-- 这是模板 \`${t.id}\`：\`## \` 标题 = 节名；标题下的 ${FENCE}${SPEC_BLOCK_FENCE} 围栏 = "这一节要干嘛"。`,
+    `<!-- 这是模板 \`${t.id}\`：\`## \` 标题 = 节名；标题下的 ${FENCE}${SPEC_BLOCK_FENCE} 围栏里写"这一节要干嘛"。`,
     '     ⭐ 建项目时工具会把**整份结构（含规范块）**复制成那份项目文档，此后两者解耦（改这里不影响已有文档）。',
-    `     ⚠️ 围栏起始行末尾写 \`truncate\`（如 ${FENCE}${SPEC_BLOCK_FENCE} truncate）表示该节参与自动截断归档。 -->`,
+    `     ⚠️ 只有**要参与自动截断归档**的节，才在围栏那一行末尾加 \`truncate\`：`,
+    `        · 截断： ${FENCE}${SPEC_BLOCK_FENCE} truncate`,
+    `        · 不截断：${FENCE}${SPEC_BLOCK_FENCE}      ← 大多数节是这种（本节共 ${t.sections.filter((s) => s.truncate === true).length} 节写了 truncate） -->`,
     '',
   ]
   for (const s of t.sections) {
