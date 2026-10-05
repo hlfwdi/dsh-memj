@@ -64,7 +64,13 @@ for (const f of files) {
     closed.push(id)
     flags.push('🔴 sections 非空但 truncateSections 空 ⇒ **已不再自动截断**')
   }
-  if ((hasBlock || legacySpec !== '') && JSON.stringify(fromBody) !== JSON.stringify(trunc)) {
+  // ⚠️ **判据修正**（实测踩到）：`sections` 与 `truncateSections` **两边都空**时
+  //    frontmatter 的"空"与正文反解出的值**不算漂移** ——
+  //    那正是"老文档不写这两个字段"的纪律（`handoff.ts` 的镜像规则），
+  //    而生效值以**正文**为准（`truncateTitlesFromBlocks`）。
+  //    ⇒ 只有**frontmatter 明确写了值、且与正文不同**才是真漂移。
+  const fmDeclared = secs.length > 0 || trunc.length > 0
+  if (fmDeclared && (hasBlock || legacySpec !== '') && JSON.stringify(fromBody) !== JSON.stringify(trunc)) {
     drift.push(id)
     flags.push(`⚠️ 正文反解 ${JSON.stringify(fromBody)} ≠ frontmatter ${JSON.stringify(trunc)}`)
   }
