@@ -1798,7 +1798,11 @@ export function registerTools(deps: ToolDeps): void {
                     desc: {
                       type: 'string',
                       required: true,
-                      description: '⭐ **这一节要干嘛**（必填，≤200 字符）——它会写进该节标题下的规范块。',
+                      // ⭐ 2026-10-05（用户裁定）：**上限取消**（200 字对"书写规范"偏紧）。
+                      //    ⚠️ 与知识封面的 `desc` **不是一回事** —— 那个是检索键，仍然是 200。
+                      description:
+                        '⭐ **这一节的书写规范**（必填）—— 它会写进该节标题下的规范块。' +
+                        '**没有字数上限**（不占截断配额；超过 2000 字只给提醒，不阻断保存）。',
                     },
                     truncate: {
                       type: 'boolean',

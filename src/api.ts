@@ -40,6 +40,7 @@ import {
   listTemplates,
   normalizeTemplate,
   saveTemplate,
+  templateWarnings,
   validateTemplate,
   type Template,
 } from './templates.ts'
@@ -1514,6 +1515,8 @@ export async function handleApi(
         // ⭐ 内置的 default **不可删**（它是回落目标）。
         deletable: t.id !== 'default',
         errors: validateTemplate(t),
+        // ⭐⭐ 2026-10-05：**提醒**与**错误**分开返回（错误拦保存、提醒只告知）。
+        warnings: templateWarnings(t),
       }))
       return { status: 200, body: { ok: true, items, dir: templatesDir() } }
     }
@@ -1532,7 +1535,16 @@ export async function handleApi(
       // ⭐⭐ 决策 208：`default` **现在可以保存**（用户可编辑默认模板）。
       //    ⚠️ 组件包办"落盘后 loadDefaultTemplate() 会读到它" ⇒ 这里只放开闸门，不加特判。
       const errs = await saveTemplate(t)
-      return { status: errs.length === 0 ? 200 : 400, body: { ok: errs.length === 0, errors: errs } }
+      // ⭐⭐ 2026-10-05：保存**成功**时也要把提醒带回去（`ok: true` + `warnings`）——
+      //    否则"太长了"这条提示永远到不了人眼前。
+      return {
+        status: errs.length === 0 ? 200 : 400,
+        body: {
+          ok: errs.length === 0,
+          errors: errs,
+          warnings: errs.length === 0 ? templateWarnings(t) : [],
+        },
+      }
     }
 
     // 删除一份模板（⚠️ **不影响任何已有文档**——文档记着自己的节名）。

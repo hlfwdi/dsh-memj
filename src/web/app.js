@@ -3598,12 +3598,28 @@ function renderTemplateSections() {
     name.value = s.name
     name.addEventListener('input', () => { s.name = name.value })
 
-    const desc = document.createElement('input')
-    desc.type = 'text'
+    // ⭐⭐ 2026-10-05（用户要求）：这一格从 `input` 改成 **`textarea`** ——
+    //    它装的是**完整的书写规范**（要写什么 + 怎么写 + 截断/归档规则），
+    //    可能要写不少字，单行输入框既写不下也看不到换行。
+    const desc = document.createElement('textarea')
     desc.className = 'tpl-sec-desc'
-    desc.placeholder = '这一节要干嘛（必填）'
+    desc.rows = 2
+    desc.placeholder = '这一节要干嘛（必填）—— 可多行；写清"要写什么 + 怎么写"。写得长不影响截断配额'
     desc.value = s.desc
-    desc.addEventListener('input', () => { s.desc = desc.value })
+    /**
+     * ⭐ **自动长高**：让框跟着内容长，避免"写了 5 行却只看到 2 行"。
+     * ⚠️ 必须先归零再读 `scrollHeight` —— 否则它**只增不减**（删字后框不会缩回去）。
+     */
+    const autoGrow = () => {
+      desc.style.height = 'auto'
+      desc.style.height = `${desc.scrollHeight}px`
+    }
+    desc.addEventListener('input', () => {
+      s.desc = desc.value
+      autoGrow()
+    })
+    // ⚠️ 插进 DOM 之前量不到真实高度（`scrollHeight` 是 0）⇒ 等一次微任务再量。
+    queueMicrotask(autoGrow)
 
     const truncWrap = document.createElement('label')
     truncWrap.className = 'tpl-sec-trunc'
@@ -3635,19 +3651,28 @@ function renderTemplateSections() {
 /** 保存当前表单里的模板。 */
 async function saveTemplateForm() {
   const errBox = document.getElementById('tpl-errors')
-  const showErrs = (list) => {
-    if (!errBox) return
-    errBox.replaceChildren()
-    if (!list || list.length === 0) { errBox.hidden = true; return }
-    errBox.hidden = false
+  /** ⭐ 把一份清单渲染进指定容器（错误与提醒共用同一套渲染）。 */
+  const render = (box, list) => {
+    if (!box) return
+    box.replaceChildren()
+    if (!list || list.length === 0) { box.hidden = true; return }
+    box.hidden = false
     const ul = document.createElement('ul')
     for (const e of list) {
       const li = document.createElement('li')
       li.textContent = e
       ul.append(li)
     }
-    errBox.append(ul)
+    box.append(ul)
   }
+  const showErrs = (list) => render(errBox, list)
+  /**
+   * ⭐⭐ 2026-10-05：**提醒**（不阻断保存）。
+   * 🔴 与错误**必须是两个容器** —— 同框会让人以为"保存没成功"，
+   *    而其实它只是想说"这一节写得有点长，确认一下"。
+   */
+  const warnsBox = document.getElementById('tpl-warnings')
+  const showWarns = (list) => render(warnsBox, list)
   const id = (document.getElementById('tpl-id')?.value ?? '').trim()
   const title = (document.getElementById('tpl-title')?.value ?? '').trim()
   const template = {
@@ -3672,7 +3697,13 @@ async function saveTemplateForm() {
       return
     }
     showErrs([])
-    toast(`模板「${id}」已保存`)
+    // ⭐⭐ 2026-10-05：**提醒**（`warnings`）与**错误**分开显示 ——
+    //    错误拦保存、提醒只告知。⚠️ 保存**成功了**也要把它显示出来，
+    //    否则"这一节的规范特别长"这条提示永远到不了人眼前。
+    const warns = body.warnings || []
+    if (warns.length > 0) showWarns(warns)
+    else showWarns([])
+    toast(warns.length > 0 ? `模板「${id}」已保存（有 ${warns.length} 条提醒）` : `模板「${id}」已保存`)
     await openTemplatesPage()
   } catch (e) {
     showErrs([`请求失败：${e.message}`])

@@ -271,5 +271,27 @@ console.log('\n【6】老文档回落默认六节（零行为变化）')
 }
 
 rmSync(lib, { recursive: true, force: true })
+// ─────────────────────────────────────────────────────────────
+console.log('\n【N】desc 上限已取消（2026-10-05 用户裁定：干脆不限 + 超长只提醒）')
+{
+  const mk = (desc) => ({ version: 1, id: 'tt', title: 'T', sections: [{ name: '目标', desc }] })
+  // ⭐ 硬闸门必须**真的没了** —— 否则"能写很多字"是假的（框写得下、保存被拒）。
+  check('201 字符 ⇒ 通过（旧上限已取消）', mod.validateTemplate(mk('x'.repeat(201))).length === 0)
+  check('2500 字符 ⇒ 通过', mod.validateTemplate(mk('x'.repeat(2500))).length === 0)
+  check('20000 字符 ⇒ 也通过（无上限）', mod.validateTemplate(mk('x'.repeat(20000))).length === 0)
+  // ⭐ 提醒：**只在超过 2000 时出现**，且**不进 errors**（不阻断保存）。
+  check('恰 2000 ⇒ 无提醒', mod.templateWarnings(mk('x'.repeat(2000))).length === 0)
+  check('2001 ⇒ 有一条提醒', mod.templateWarnings(mk('x'.repeat(2001))).length === 1)
+  check('⭐ 超长**不影响** errors（不阻断保存）', mod.validateTemplate(mk('x'.repeat(5000))).length === 0)
+  check('  （上一条不是假阳性：提醒确实存在）', mod.templateWarnings(mk('x'.repeat(5000))).length === 1)
+  // ⭐ 多行规范要能往返（textarea 允许多行 ⇒ 存进 md 再读回必须逐字一致）。
+  const multi = '第一段：写什么。\n第二段：怎么写。\n- 要点 A\n- 要点 B'
+  const rt = mod.parseTemplateDoc(mod.renderTemplateDoc(mk(multi)), 'tt')
+  check('多行 desc 往返逐字一致', rt?.sections?.[0]?.desc === multi, JSON.stringify(rt?.sections?.[0]?.desc))
+  // ⭐ 别把别的校验顺手改坏。
+  check('空 desc 仍报「必填」', mod.validateTemplate(mk('')).some((e) => e.includes('必填')))
+}
+
+
 console.log(`\n═══ 模板测试：${pass} 通过 / ${fail} 失败 ═══`)
 process.exit(fail === 0 ? 0 : 1)

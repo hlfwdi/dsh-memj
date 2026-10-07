@@ -2456,11 +2456,25 @@ dialog.prompt-dlg:not([open]) { display: none; }
   padding: 2px 8px; font-size: 12px; line-height: 1.6; flex: 0 0 auto;
 }
 
-/* 节编辑行：⭐ 用 grid 四列（节名 / 用途 / 可截断 / 删除）——**不靠字符凑对齐**。 */
+/* 节编辑行：⭐ 用 grid（节名 / 可截断 / 删除 一行；书写规范**通栏**一行）。
+   ⚠️ 规范那格是 `textarea`（2026-10-05 用户要求）——它可能要写不少字，
+      ⇒ **必须通栏**，不能跟节名挤在同一行（否则写两行就看不见了）。
+   🔴 **每个元素都要显式给行列** —— 只给一部分会让 grid 的**自动放置**
+      把剩下的塞进意料之外的位置（实测：删除按钮跑到第 1 行、与节名挤在一起）。 */
 .tpl-sections { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
 .tpl-sec {
-  display: grid; grid-template-columns: minmax(90px, 1fr) minmax(160px, 2fr) auto auto;
+  display: grid; grid-template-columns: minmax(90px, 1fr) auto auto;
   gap: 6px; align-items: center;
+}
+.tpl-sec-name { grid-column: 1; grid-row: 1; }
+.tpl-sec-trunc { grid-column: 2; grid-row: 1; }
+.tpl-sec > button { grid-column: 3; grid-row: 1; }
+/* 规范：通栏、可多行、可纵向拖拽；`box-sizing` 必须显式给（否则 100% + padding 会溢出）。 */
+.tpl-sec-desc {
+  grid-column: 1 / -1; grid-row: 2;
+  box-sizing: border-box; width: 100%; min-width: 0;
+  resize: vertical; overflow: hidden;
+  font: inherit; line-height: 1.6; padding: 6px 8px;
 }
 .tpl-sec input[type="text"] { width: 100%; min-width: 0; }
 .tpl-sec-trunc { display: flex; align-items: center; gap: 4px; font-size: 12px; white-space: nowrap; }
@@ -2473,16 +2487,24 @@ dialog.prompt-dlg:not([open]) { display: none; }
 }
 .tpl-errors ul { margin: 0; padding-left: 18px; }
 
-/* ⚠️ 窄屏：节行改成两行（四列放不下）。
-   🔴 **每个元素都必须显式给行列** —— 只给一部分会让 grid 的**自动放置**
-   把剩下的元素塞进意料之外的位置（实测：删除按钮跑到了第 1 行、与节名挤在一起）。 */
+/* ⭐ 提醒（**不阻断保存**，2026-10-05）——刻意用**不同颜色**与错误区分：
+   错误是红的（不改就不给存），提醒是中性偏暖的（存了，只是让你确认一下）。 */
+.tpl-warnings {
+  margin-top: 8px; padding: 8px 10px; border-radius: 6px;
+  border: 1px solid var(--dsw-alias-state-warning-primary, #b8860b);
+  color: var(--dsw-alias-state-warning-primary, #b8860b); font-size: 13px;
+}
+.tpl-warnings ul { margin: 0; padding-left: 18px; }
+
+/* ⚠️ 窄屏：节行本来就已是"第 1 行 = 节名 + 可截断 + 删除、第 2 行 = 规范通栏"
+   （2026-10-05 把规范改成 textarea 时一并调成了这个形态）⇒
+   **这里不再需要改布局**，只把第 1 行的节名压缩一点，别让"可截断 + 删除"被挤出去。
+   🔴 保留本段的理由：**窄屏曾经因为漏给行列而错位过**（删除按钮跑到第 1 行与节名挤在一起）
+      ⇒ 留一条显式声明 + 这句注释，提醒后来人**新增元素时要给行列**。 */
 @media (max-width: 900px) {
-  .tpl-sec { grid-template-columns: 1fr auto; }
-  /* 第 1 行：节名 + 可截断 */
+  .tpl-sec { grid-template-columns: minmax(60px, 1fr) auto auto; }
   .tpl-sec-name { grid-column: 1; grid-row: 1; }
   .tpl-sec-trunc { grid-column: 2; grid-row: 1; }
-  /* 第 2 行：用途（通栏） */
+  .tpl-sec > button { grid-column: 3; grid-row: 1; justify-self: end; }
   .tpl-sec-desc { grid-column: 1 / -1; grid-row: 2; }
-  /* 第 3 行：删除按钮（靠右） */
-  .tpl-sec > button { grid-column: 2; grid-row: 3; justify-self: end; }
 }

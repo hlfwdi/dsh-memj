@@ -240,7 +240,12 @@ export function validateTemplate(t: Template): string[] {
     if (name.startsWith('#')) errs.push(`${at}：节名不要带 \`#\`（工具会自己加 \`## \`）。`)
     // ⭐ desc 必填（用户 2026-09-30 裁定："必须写"）——它要进写作指导。
     if (s.desc.trim() === '') errs.push(`${at}（${name || '未命名'}）：\`desc\` 必填——它是"这一节要干嘛"。`)
-    if ([...s.desc].length > 200) errs.push(`${at}（${name}）：\`desc\` 超长（${[...s.desc].length} > 200 字符）。`)
+    // ⭐⭐ **2026-10-05（用户裁定）：`desc` 的 200 字符硬上限【取消】，改为软提醒**（见 `templateWarnings`）。
+    //    理由：这一节现在装的是**完整的书写规范**（要写什么 + 怎么写 + 截断/归档规则），
+    //    200 字对它偏紧（实测生产模板最多已用到 83 字，很快会不够）；
+    //    而**它不吃截断配额**（`sectionCharCount` 把规范块整体剔除）⇒ 写长没有副作用。
+    //    ⇒ ⭐ 判据：**"太长"是提醒，不是拒绝** —— 异常长多半是"误贴了整篇文档"，
+    //      那该由人判断，而不是让校验替他拒绝。
     if (name === KNOWLEDGE_TITLE) {
       errs.push(`${at}：节名不能是「${KNOWLEDGE_TITLE}」——**那一节由工具维护**（封面存在那里），不开放给模板。`)
     }
@@ -281,6 +286,40 @@ export function validateTemplate(t: Template): string[] {
   //       各自产出自己的历史归档块（`history.ts` 的 `truncateProgress` 已支持）。
   //    （因此这里**不再有任何数量校验**。）
   return errs
+}
+
+/**
+ * ⭐⭐ **`desc` 超过这个长度就提醒**（**不阻断保存**）——2026-10-05 用户裁定。
+ *
+ * 🔴 **为什么是"提醒"而不是"上限"**：
+ *   这一节装的是**完整的书写规范**（要写什么 + 怎么写 + 截断/归档规则），
+ *   用户明确裁定"**干脆不限**"；而它**不吃截断配额**（规范块被整体剔除）⇒ 写长没有副作用。
+ * ⚠️ 保留一个提醒的理由很实际：**异常长多半是"误贴了整篇文档进来"** ——
+ *   那是人要判断的事，工具只负责**让他看见**，不替他拒绝。
+ */
+export const DESC_SOFT_WARN = 2000
+
+/**
+ * ⭐ **模板的"提醒"清单**（**不阻断保存**，与 `validateTemplate` 的"错误"分开）。
+ *
+ * ⭐ 为什么要和错误分开：两者的**后果完全不同** ——
+ *   错误 ⇒ 保存被拒（必须改）；提醒 ⇒ 照常保存，只是一句话告诉你"这看着不太对"。
+ *   混在一个数组里会让调用方**分不清该不该拦**。
+ * @param t - 待检查的模板。
+ * @returns 提醒清单（空 = 没什么可说的）。
+ */
+export function templateWarnings(t: Template): string[] {
+  const warns: string[] = []
+  for (const [i, s] of t.sections.entries()) {
+    const n = [...s.desc].length
+    if (n > DESC_SOFT_WARN) {
+      warns.push(
+        `第 ${i + 1} 节（${s.name.trim() || '未命名'}）：这一节的书写规范有 **${n}** 字符` +
+          `（超过 ${DESC_SOFT_WARN}）—— 请确认不是误贴了整篇文档。**不影响保存**。`,
+      )
+    }
+  }
+  return warns
 }
 
 /**
