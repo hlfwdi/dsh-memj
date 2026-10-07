@@ -140,9 +140,14 @@ const RESERVED_MARK = '<!-- 保留 -->'
  * @returns 文件全文。
  */
 export function renderKindsDoc(defs: readonly KindDef[]): string {
+  /**
+   * 🔴 **`renderFrontmatter()` 自己就以 `\n` 结尾**（它的最后一行是 `'---', ''`）
+   *    ⇒ 这里**不能再补一个空元素**，否则 frontmatter 与标题之间会多出一个空行，
+   *      而**解析不回去**（`splitFrontmatter` 只吃一份）⇒ **往返不幂等**（实测抓到）。
+   *    ⭐ 判据：**拼接自带换行的片段时，先看清它到底带没带** —— 多补一个就多一行。
+   */
   const parts: string[] = [
     renderFrontmatter([['version', '1']]),
-    '',
     '# 知识类型',
     '',
     '<!-- ⭐ 这张表就是"知识有哪几类"。',
@@ -159,12 +164,15 @@ export function renderKindsDoc(defs: readonly KindDef[]): string {
     parts.push('')
     parts.push(`显示名：${d.label}${d.builtin ? ` ${BUILTIN_MARK}` : ''}${d.reserved ? ` ${RESERVED_MARK}` : ''}`)
     parts.push(`什么时候用：${d.when}`)
-    parts.push('书写规范：')
-    // ⭐ `guide` 多行时**逐行原样**写（不缩进）——缩进会被解析回去、破坏往返幂等。
-    parts.push(d.guide.trim() === '' ? '' : d.guide.trimEnd())
+    // ⚠️ 规范的**第一行直接跟在冒号后面**（同一行），其余行另起 ——
+    //    这样 `书写规范：` 后面**不会先空一行**，文件读起来更紧凑，
+    //    也避免"空行被解析成规范的第一个字符"（那正是先前幂等失败的根因）。
+    const guideLines = d.guide.trim() === '' ? [] : d.guide.trimEnd().split('\n')
+    parts.push(guideLines.length > 0 ? `书写规范：${guideLines[0]}` : '书写规范：')
+    for (const g of guideLines.slice(1)) parts.push(g)
     parts.push('')
   }
-  return parts.join('\n').replace(/\n+$/, '\n')
+  return parts.join('\n').replace(/\n{2,}/g, '\n\n').replace(/\n+$/, '\n')
 }
 
 /**

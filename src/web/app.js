@@ -4660,6 +4660,22 @@ function renderKindsList() {
     }
     card.append(head)
     const ro = k.builtin === true
+    /**
+     * ⭐⭐ **id 也要能填**（2026-10-05 实测补的缺口）。
+     *
+     * 🔴 **为什么之前漏了**：卡片头里已经把 id 显示出来了（`## fact` 那个机器名），
+     *    我就想当然地以为"id 是只读的、只有内置才有"。
+     *    ⇒ 而**自定义类型的 id 必须由用户指定**（它就是写进封面 `kind:` 的值），
+     *      没这个格子 ⇒ 用户点"添加"后**根本没法填 id** ⇒ 保存时被校验拒绝
+     *      （实测：报「第 6 项：id `` 不合法」）。
+     * ⚠️ 内置项**没有这个格子**（它们的 id 锁死）；所以这里**只给非内置加**。
+     */
+    if (!ro) {
+      card.append(
+        kindField('id（机器名，写进封面用）', k.id, false, (v) => { k.id = v.trim() },
+          '小写英文/数字/连字符，2–32 位，小写字母开头；改它不影响已有知识'),
+      )
+    }
     card.append(kindField('显示名', k.label, ro, (v) => { k.label = v }))
     card.append(
       kindField('什么时候用', k.when, ro, (v) => { k.when = v },
@@ -4764,13 +4780,14 @@ async function saveKindsForm() {
 function bindKindButtons() {
   document.getElementById('kinds-save')?.addEventListener('click', () => { void saveKindsForm() })
   document.getElementById('kinds-add')?.addEventListener('click', () => {
-    // ⭐ **先加本地草稿、填完才写盘** —— 与"模板的添加一节"同一取向
+    // ⭐ 先加本地草稿、填完才写盘 —— 与"模板的添加一节"同一取向
     //    （先写盘会让"空 id 被自己的校验拒" ⇒ 用户看到"点添加就报错"）。
+    // ⚠️ 草稿的 id 留空、由用户在第一格填 —— 见 `renderKindsList` 里那段的说明。
     kindsState.items.push({
       id: '', label: '', when: '', guide: '', builtin: false, reserved: false, count: 0,
     })
     renderKindsList()
-    // ⭐ 滚到底并聚焦新卡片的第一格（否则"加了但没看见"）。
+    // ⭐ 滚到底并聚焦新卡片的**第一格（id）** —— 它是必填的第一项。
     const box = document.getElementById('kinds-list')
     const last = box?.lastElementChild
     last?.scrollIntoView({ block: 'nearest' })
