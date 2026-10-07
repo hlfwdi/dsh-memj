@@ -29,6 +29,9 @@ import { Config, DEFAULT_CONFIG, type MemjConfig } from './config.ts'
 import { ensureLibraryDirs, libraryRoot } from './store.ts'
 // ⭐ 决策 208：`default` 模板也落盘（文件不存在时写一份出来，幂等、不覆盖用户改动）。
 import { ensureDefaultTemplateFile } from './templates.ts'
+// ⭐⭐⭐ 决策 215：知识类型词表的启动预热（`isEntryKind` 读的是进程内当前值）。
+import { kindIdsOf, loadKinds } from './kinds.ts'
+import { setCurrentKinds } from './schema.ts'
 import { PROTOCOL_SECTION_ORDER, PROTOCOL_TEXT, protocolText } from './protocol.ts'
 // ⭐⭐ 运行时上下文（决策 124）：走 `context()`，**改它不破前缀缓存**。
 import { CONTEXT_NAME, CONTEXT_ORDER, CONTEXT_TEXT } from './context.ts'
@@ -210,6 +213,19 @@ export function apply(ctx: Context, config: MemjConfig = DEFAULT_CONFIG): void {
   //    🔴 **幂等**：文件已存在就**不碰**（否则每次重启都会把用户的改动覆盖回内置值）。
   //    ⚠️ **best-effort**：写不出来也不该影响启动（回落内置值即可）。
   void ensureDefaultTemplateFile().catch(() => {})
+
+  // ⭐⭐⭐ **预热"当前生效的知识类型词表"**（决策 215）。
+  //
+  // 🔴🔴 **为什么必须在这里做、且不能省**：
+  //    `isEntryKind()` 是**同步**函数、有 **18 个调用点**（含两个纯函数
+  //    `parse.ts` / `store.ts`），所以它读的是 `schema.ts` 里那份**进程内当前值**。
+  //    ⇒ 不预热的话，**用户加的类型在启动后第一次解析时不被认**（要等某个触发点去刷新），
+  //      表现为"我明明加了，模型填了却被判非法"。
+  // ⚠️ **失败不阻断启动**：读不到文件 ⇒ 那份当前值保持**内置默认**
+  //    （`schema.ts` 的初值就是内置 id）—— 那正是"还没配过"的常态。
+  void loadKinds()
+    .then((defs) => setCurrentKinds(kindIdsOf(defs)))
+    .catch(() => {})
 
   // ⭐⭐⭐ **预热提示词覆盖缓存**（本次新增）。
   //
@@ -508,6 +524,11 @@ export function apply(ctx: Context, config: MemjConfig = DEFAULT_CONFIG): void {
       //      `⚠️ 未注册：/kinds —— 这些请求会落到 SPA 兜底、返回 HTML 而不是 JSON！`）。
       //    ⭐ 这正是本条注释开头说的那类事故 —— **不是靠记性，是靠那条断言**。
       `${API_BASE}/kinds`,
+      // ⭐⭐ 决策 215：类型表的**写通道**（保存整张表 / 删一条）。
+      //    🔴 与 `/kinds` 一样 —— **漏注册会静默落到 SPA 兜底返回 HTML**
+      //      （`test-web-api` 的"路由注册一致性"会当场抓到）。
+      `${API_BASE}/kind/save`,
+      `${API_BASE}/kind/delete`,
       // ⚠️ 探针路由**不在这里**注册——它有自己的 handler，见下面单独的
       //    `webServer.register`。🔴 我第一版**两处都注册了** ⇒
       //    `duplicate exact route` ⇒ **整个插件 apply 抛错、实例起不来**
@@ -562,6 +583,10 @@ export * from './paths.ts'
 export * from './read.ts'
 export * from './reads.ts'
 export * from './schema.ts'
+// ⭐⭐⭐ 决策 215：知识类型（`kind`）的**可配置词表**（`<库根>/kinds.md`）。
+//    ⚠️ 它必须与 `schema.ts` 一起导出 —— 后者的 `ENTRY_KIND_DEFS` 自本决策起
+//    **降级为"内置默认值"**，而"当前生效的那份"由本模块提供。
+export * from './kinds.ts'
 export * from './search.ts'
 export * from './store.ts'
 // ⭐⭐⭐ 决策 204/205：交接文档模板（存储 + 校验）与工具决策（两段式确认）。

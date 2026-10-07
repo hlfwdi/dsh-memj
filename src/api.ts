@@ -61,7 +61,15 @@ import {
 } from './store.ts'
 import { themeDocPath } from './paths.ts'
 import { isAbsolutePath, parseCovers } from './parse.ts'
-import { ENTRY_KIND_DEFS, SELECTABLE_ENTRY_KINDS, isEntryKind } from './schema.ts'
+import { isEntryKind, setCurrentKinds } from './schema.ts'
+// ⭐⭐⭐ 决策 215：知识类型（`kind`）的**可配置词表**。
+import {
+  deleteKindBlockReason,
+  kindIdsOf,
+  loadKinds,
+  saveKinds,
+  type KindDef,
+} from './kinds.ts'
 // ⭐⭐ 英文召回索引的「检查并补全」（判据与启动兜底**同源**，见 `en-index.ts`）。
 // ⭐⭐⭐ `pairingError` 是「模板 ↔ 模型」配对规则的**唯一出处**（用户 2026-10-07 要求）。
 import { checkAndRepair, pairingError } from './en-index.ts'
@@ -565,6 +573,65 @@ async function listCoversWithLinkCheck(
  * @param params - 查询参数。
  * @returns 状态码与响应体。
  */
+/**
+ * ⭐ **类型表的响应体**（`/kinds`、`/kind/save`、`/kind/delete` 三处共用）。
+ *
+ * ⚠️ **`count` 必须带 `includeHistory: true`** —— `scanLibrary` 默认**排除** history，
+ *    不显式带上它 ⇒ 那一项**恒显示 0**（界面撒谎，本项目已记过这类账）。
+ * @returns 可直接塞进响应体的对象。
+ */
+async function kindsPayload(): Promise<{ items: unknown[]; selectable: string[] }> {
+  const defs = await loadKinds()
+  const scanned = await scanLibrary({ includeHistory: true })
+  const counts = new Map<string, number>()
+  for (const c of scanned.covers) {
+    const k = c.cover.kind
+    if (k !== '') counts.set(k, (counts.get(k) ?? 0) + 1)
+  }
+  return {
+    items: defs.map((d) => ({
+      id: d.id,
+      label: d.label,
+      when: d.when,
+      guide: d.guide,
+      /** 🔴 内置：设置页里**只读**（不可删、id 与显示名都锁）。 */
+      builtin: d.builtin,
+      /** 🔴 保留项（`history`）：不给模型选，UI 里也标出来。 */
+      reserved: d.reserved,
+      /** 当前库里有多少条用了它（UI 显示 + 删除保护判据）。 */
+      count: counts.get(d.id) ?? 0,
+    })),
+    selectable: defs.filter((d) => !d.reserved).map((d) => d.id),
+  }
+}
+
+/**
+ * ⭐ **把请求体里的 `items` 规整成 `KindDef[]`**（形状不对 ⇒ `undefined`）。
+ *
+ * ⚠️ **宽容读、严格校验**：这里只保证"形状像"，**业务规则**（内置不可删改、
+ *    id 语法、`when` 非空…）交给 `validateKinds()` —— 一份规则只有一个出处。
+ * @param raw - 请求体里的 `items`。
+ * @returns 规整后的表；形状不对返回 `undefined`。
+ */
+function normalizeKindDefs(raw: unknown): KindDef[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  const out: KindDef[] = []
+  for (const it of raw) {
+    if (typeof it !== "object" || it === null) return undefined
+    const o = it as Record<string, unknown>
+    if (typeof o["id"] !== "string") return undefined
+    out.push({
+      id: o["id"].trim(),
+      label: typeof o["label"] === "string" ? o["label"] : "",
+      when: typeof o["when"] === "string" ? o["when"] : "",
+      guide: typeof o["guide"] === "string" ? o["guide"] : "",
+      builtin: o["builtin"] === true,
+      reserved: o["reserved"] === true,
+    })
+  }
+  return out
+}
+
 export async function handleApi(
   deps: ApiDeps,
   method: string,
@@ -1782,52 +1849,75 @@ export async function handleApi(
     }
 
     /**
-     * ⭐⭐⭐ **知识类型词表**（`kind`）—— **唯一读取入口**（2026-10-05 收敛）。
+     * ⭐⭐⭐ **知识类型词表**（`kind`）—— **唯一读取入口**。
      *
-     * 🔴 **为什么要有这个端点**：收敛之前，这套词表在**七处各写一遍**
+     * 🔴 **为什么要有这个端点**（决策 214）：收敛之前，这套词表在**七处各写一遍**
      * （`schema.ts` / `tools.ts` × 5 / 前端下拉 × 3 / placeholder × 2 / 提示词 × 2），
-     * 而其中**两处前端下拉还互相不一致**（一个带 `history` 不带"未分类"、
-     * 另一个反过来）—— 那正是"抄写多处"的必然结果。
-     * ⇒ 前端现在**从这里取**，不再自己写一份。
+     * 而其中**两处前端下拉还互相不一致** —— 那正是"抄写多处"的必然结果。
+     * ⇒ 前端**从这里取**，不再自己写一份。
      *
-     * ⚠️ 本步（第一步）只做**收敛**，词表仍来自编译期常量；
-     *    第二步会让它变成运行期可配（届时本端点**签名不变**，只是数据源变了）。
+     * ⭐⭐ **决策 215：词表已变成运行期可配**（`<库根>/kinds.md`）⇒
+     *    本端点回的是**当前生效的那份**（用户加的类型会出现在这里）。
      */
     if (route === '/kinds') {
       if (method !== 'GET') return { status: 405, body: { ok: false, error: '该接口只接受 GET' } }
-      /**
-       * ⭐ **数一遍每种 kind 各有多少条**（UI 显示 + 第二步的删除保护都要用它）。
-       * ⚠️ 走 `scanLibrary({ includeHistory: true })` —— 默认**排除** `history`，
-       *    不显式带上它的话，`history` 那一项会恒显示 0（**界面撒谎**）。
-       */
-      const scanned = await scanLibrary({ includeHistory: true })
-      const counts = new Map<string, number>()
-      for (const c of scanned.covers) {
-        const k = c.cover.kind
-        if (k !== '') counts.set(k, (counts.get(k) ?? 0) + 1)
-      }
-      return {
-        status: 200,
-        body: {
-          ok: true,
-          items: ENTRY_KIND_DEFS.map((d) => ({
-            id: d.id,
-            label: d.label,
-            when: d.when,
-            /** 🔴 保留项（目前只有 `history`）：**不可作为模型的可选项**，UI 里只读。 */
-            reserved: d.reserved === true,
-            /** ⚠️ 第二步才用得上（内置不可删改）；现在全部是内置 ⇒ 恒 `true`。 */
-            builtin: true,
-            /** 当前库里有多少条用了它（UI 显示用；第二步的删除保护也要用它）。 */
-            count: counts.get(d.id) ?? 0,
-          })),
-          /** ⭐ 可给模型选的那些（不含保留项）—— 编辑表单的下拉用它。 */
-          selectable: [...SELECTABLE_ENTRY_KINDS],
-        },
-      }
+      return { status: 200, body: { ok: true, ...(await kindsPayload()) } }
     }
 
-    // 保存一份模板（**校验在前，不过不写盘**）。
+    /**
+     * ⭐⭐ **保存整张类型表**（设置页的「保存」用）。
+     *
+     * ⚠️ **为什么是"整张表"而不是"加一条/改一条"**：顺序有意义（UI 下拉顺序），
+     *    而"增/删/改/排序"四种操作对顺序的影响各不相同 ⇒
+     *    **让前端提交最终形态**是最不容易错的做法（与模板保存同一取向）。
+     */
+    if (route === '/kind/save') {
+      if (method !== 'POST') return { status: 405, body: { ok: false, error: '该接口只接受 POST' } }
+      let defs: KindDef[] | undefined
+      try {
+        const body = JSON.parse(rawBody) as { items?: unknown }
+        defs = normalizeKindDefs(body.items)
+      } catch {
+        return { status: 400, body: { ok: false, error: '请求体不是合法 JSON' } }
+      }
+      if (defs === undefined) return { status: 400, body: { ok: false, error: '类型表形状不合法（缺 items 数组）' } }
+      const errs = await saveKinds(defs)
+      if (errs.length > 0) return { status: 400, body: { ok: false, errors: errs } }
+      // ⭐⭐ **保存成功后立即刷新进程内词表** —— 否则"新类型"要等重启才对读侧生效
+      //     （写盘只是持久化；判定用的是进程内那份，见 `schema.ts` 的 `setCurrentKinds`）。
+      setCurrentKinds(kindIdsOf(defs))
+      return { status: 200, body: { ok: true, errors: [], ...(await kindsPayload()) } }
+    }
+
+    /**
+     * ⭐⭐ **删除一个类型**（**有引用就拒绝**，用户裁定的保护）。
+     *
+     * 🔴 **为什么拒绝而不是"删了顺带把引用清成未分类"**：那要扫全库改几百个封面文件、
+     *    **不可逆**（原 kind 再也找不回）。与 `memj_promote` 的「只允许删空容器」同一纪律。
+     */
+    if (route === '/kind/delete') {
+      if (method !== 'POST') return { status: 405, body: { ok: false, error: '该接口只接受 POST' } }
+      let id = ''
+      try {
+        const body = JSON.parse(rawBody) as { id?: unknown }
+        id = typeof body.id === 'string' ? body.id.trim() : ''
+      } catch {
+        return { status: 400, body: { ok: false, error: '请求体不是合法 JSON' } }
+      }
+      if (id === '') return { status: 400, body: { ok: false, error: '缺少 id' } }
+      const defs = await loadKinds()
+      /** ⚠️ 现数引用 —— 用 `includeHistory: true`，别把 `history` 自己漏算。 */
+      const scanned = await scanLibrary({ includeHistory: true })
+      const used = scanned.covers.filter((c) => c.cover.kind === id).length
+      const why = deleteKindBlockReason(id, defs, used)
+      if (why !== '') return { status: 400, body: { ok: false, errors: [why] } }
+      const errs = await saveKinds(defs.filter((d) => d.id !== id))
+      if (errs.length > 0) return { status: 400, body: { ok: false, errors: errs } }
+      setCurrentKinds(kindIdsOf(await loadKinds()))
+      return { status: 200, body: { ok: true, errors: [], ...(await kindsPayload()) } }
+    }
+
+    /** 保存一份模板（**校验在前，不过不写盘**）。 */
     if (route === '/template/save') {
       if (method !== 'POST') return { status: 405, body: { ok: false, error: '该接口只接受 POST' } }
       let t: Template | undefined

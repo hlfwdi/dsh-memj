@@ -37,7 +37,7 @@ const TABS = ['kb', 'projects', 'themes', 'hot', 'review', 'archive', 'settings'
 //    ⭐⭐⭐ 2026-10-07：**新增 `jev`**（决策模型配置）—— 用户要求"能在前端配 JEV"。
 //       🔴 **它不进 `SAVE_UNITS`**：本页的三个动作语义各不相同（保存配置 / 保存密钥 /
 //          测试连接），而不是"一个版块一个保存按钮"那一套。
-const SET_SUBTABS = ['sink', 'hot', 'active', 'index', 'jev', 'prompts', 'templates']
+const SET_SUBTABS = ['sink', 'hot', 'active', 'index', 'jev', 'prompts', 'templates', 'kinds']
 
 /**
  * ⭐⭐⭐ **保存单元 → 所属子页**（2026-10-07，用户裁定）。
@@ -3991,6 +3991,8 @@ async function openSettingsPage(sub = 'sink', { keepMessage = false } = {}) {
   if (state.setSub === 'prompts') void openPromptsPage({ keepMessage: true })
   // ⭐⭐⭐ **【模板】页同理**：它的数据源是 `GET /templates`（不是 `/settings`）。
   if (state.setSub === 'templates') void openTemplatesPage()
+  // ⭐ 决策 215：知识类型页（每次进入都重拉 —— 计数会变，别缓存旧值）。
+  if (state.setSub === 'kinds') void openKindsPage()
   // ⭐⭐⭐ **【决策模型配置】页**：状态来自 `GET /jev-status`（不是 `/settings`）——
   //    因为"密钥有没有配"只在凭据 seam 里，`/settings` **看不到它**（也**不该**看到）。
   if (state.setSub === 'jev') void openJevPage({ keepMessage: true })
@@ -4595,6 +4597,185 @@ async function openTemplatesPage() {
     if (status) status.textContent = `读取失败：${e.message}`
     toast(`读取模板失败：${e.message}`, true)
   }
+}
+
+/** ⭐ 知识类型页的状态（决策 215）。 */
+const kindsState = { items: [] }
+
+/**
+ * ⭐⭐⭐ **知识类型页**（决策 215）—— \`kind\` 的可配置词表。
+ *
+ * 🔴 **两条只读边界**（页面上也要写明白，否则用户会问"为什么删不掉"）：
+ *   · \`builtin\`（内置）⇒ **不可删、显示名与 id 都锁**（存量几百条知识在用它们）；
+ *   · \`reserved\`（保留）⇒ **不给模型选**（工具生成的那种，手工填会让知识搜不到）。
+ * ⚠️ **保存的是"整张表"**（含顺序）—— 加/删/改/排序对顺序影响不同，
+ *    让前端提交最终形态最不容易错（与模板保存同一取向）。
+ * @returns Promise<void>
+ */
+async function openKindsPage() {
+  try {
+    const r = await fetch(API + '/kinds')
+    const body = await r.json()
+    if (!body.ok) throw new Error(body.error || '读取失败')
+    kindsState.items = body.items
+    renderKindsList()
+    showKindErrs([])
+  } catch (e) {
+    showKindErrs(['读取失败：' + e.message])
+    toast('读取知识类型失败：' + e.message, true)
+  }
+}
+
+/**
+ * ⭐ **把类型表画成可编辑的卡片列表**。
+ *
+ * 🔴 **内置项的输入框一律 \`disabled\`** —— 用户能看见它们（并看到"为什么不能改"），
+ *    但改不动。⚠️ 用 \`disabled\` 而不是"藏起来"：藏起来会让用户以为"库里没有这一类"。
+ * @returns void
+ */
+function renderKindsList() {
+  const box = document.getElementById('kinds-list')
+  if (!box) return
+  box.replaceChildren()
+  kindsState.items.forEach((k, i) => {
+    const card = h('div', { class: 'kind-card' })
+    const head = h('div', { class: 'kind-card-head' })
+    head.append(h('span', { class: 'kind-id', text: k.id }))
+    if (k.builtin) head.append(h('span', { class: 'kind-badge', text: '内置' }))
+    if (k.reserved) head.append(h('span', { class: 'kind-badge reserved', text: '保留' }))
+    // ⭐ 现报"有多少条在用" —— 删不掉时用户才知道卡在哪。
+    const cnt = k.count > 0 ? k.count + ' 条在用' : '还没人用'
+    head.append(h('span', { class: 'dim kind-count', text: cnt }))
+    if (!k.builtin) {
+      const del = h('button', { type: 'button', class: 'kind-del', text: '删除' })
+      del.addEventListener('click', () => {
+        if (k.count > 0) {
+          toast('「' + k.id + '」还有 ' + k.count + ' 条知识在用，先把它们改成别的类型再删', true)
+          return
+        }
+        kindsState.items.splice(i, 1)
+        renderKindsList()
+      })
+      head.append(del)
+    }
+    card.append(head)
+    const ro = k.builtin === true
+    card.append(kindField('显示名', k.label, ro, (v) => { k.label = v }))
+    card.append(
+      kindField('什么时候用', k.when, ro, (v) => { k.when = v },
+        '一句话说清"什么内容该归到这一类" —— 它会进提示词，是模型选类型的唯一依据'),
+    )
+    // ⭐ 书写规范**可多行**（与模板的章节规范同一形态：可能要写不少字）。
+    card.append(
+      kindField('书写规范', k.guide, ro, (v) => { k.guide = v },
+        '这一类知识该怎么写（可多行）—— 也会进提示词', true),
+    )
+    if (ro) card.append(h('p', { class: 'set-note', text: '内置类型：不可删、不可改名（库里已有知识在用它）。' }))
+    box.append(card)
+  })
+}
+
+/**
+ * ⭐ **一个带标签的输入格**（内置项 ⇒ \`disabled\`）。
+ * @param label - 标签文字。
+ * @param value - 初值。
+ * @param readonly - 是否只读。
+ * @param onInput - 输入回调。
+ * @param placeholder - 占位提示。
+ * @param multiline - \`true\` ⇒ 用 \`textarea\`（自动长高）。
+ * @returns 一个 \`.kind-field\` 元素。
+ */
+function kindField(label, value, readonly, onInput, placeholder, multiline) {
+  const wrap = h('div', { class: 'kind-field' })
+  wrap.append(h('span', { class: 'kind-field-label', text: label }))
+  const el = multiline === true
+    ? h('textarea', { rows: 2 })
+    : h('input', { type: 'text' })
+  el.value = value == null ? '' : value
+  if (placeholder) el.placeholder = placeholder
+  if (readonly) el.disabled = true
+  if (multiline === true) {
+    // ⚠️ 先归零再读 scrollHeight —— 否则框**只增不减**（删字后不会缩回去）。
+    const grow = () => {
+      el.style.height = 'auto'
+      el.style.height = el.scrollHeight + 'px'
+    }
+    el.addEventListener('input', () => { onInput(el.value); grow() })
+    queueMicrotask(grow)
+  } else {
+    el.addEventListener('input', () => onInput(el.value))
+  }
+  wrap.append(el)
+  return wrap
+}
+
+/**
+ * ⭐ 显示类型页的校验错误（与模板页同一套样式，但**自己的容器**）。
+ * @param list - 错误清单；空 ⇒ 隐藏。
+ * @returns void
+ */
+function showKindErrs(list) {
+  const box = document.getElementById('kinds-errors')
+  if (!box) return
+  box.replaceChildren()
+  if (!list || list.length === 0) { box.hidden = true; return }
+  box.hidden = false
+  const ul = h('ul')
+  for (const e of list) ul.append(h('li', { text: e }))
+  box.append(ul)
+}
+
+/**
+ * ⭐ 保存整张类型表（成功后**重拉一次**，让计数与生效状态同步回显）。
+ * @returns Promise<void>
+ */
+async function saveKindsForm() {
+  const msg = document.getElementById('settings-msg-kinds')
+  try {
+    const r = await fetch(API + '/kind/save', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ items: kindsState.items }),
+    })
+    const body = await r.json()
+    if (!body.ok) {
+      showKindErrs(body.errors || [body.error || '保存失败'])
+      toast('类型表未保存：校验没过', true)
+      return
+    }
+    showKindErrs([])
+    kindsState.items = body.items
+    renderKindsList()
+    // ⭐⭐ 类型表变了 ⇒ **kind 下拉必须跟着重填**（否则编辑知识时选不到新类型）。
+    await loadKinds()
+    fillKindFilters()
+    if (msg) msg.textContent = '已保存（' + new Date().toLocaleTimeString() + '）'
+    toast('知识类型已保存')
+  } catch (e) {
+    showKindErrs(['请求失败：' + e.message])
+    toast('保存失败：' + e.message, true)
+  }
+}
+
+/**
+ * 绑定类型页的按钮（放文件末尾 —— 同 TDZ 理由，见 \`bindTemplateButtons\`）。
+ * @returns void
+ */
+function bindKindButtons() {
+  document.getElementById('kinds-save')?.addEventListener('click', () => { void saveKindsForm() })
+  document.getElementById('kinds-add')?.addEventListener('click', () => {
+    // ⭐ **先加本地草稿、填完才写盘** —— 与"模板的添加一节"同一取向
+    //    （先写盘会让"空 id 被自己的校验拒" ⇒ 用户看到"点添加就报错"）。
+    kindsState.items.push({
+      id: '', label: '', when: '', guide: '', builtin: false, reserved: false, count: 0,
+    })
+    renderKindsList()
+    // ⭐ 滚到底并聚焦新卡片的第一格（否则"加了但没看见"）。
+    const box = document.getElementById('kinds-list')
+    const last = box?.lastElementChild
+    last?.scrollIntoView({ block: 'nearest' })
+    last?.querySelector('input')?.focus()
+  })
 }
 
 /** 把一份模板灌进表单（编辑已有模板，或以它为起点）。 */
@@ -8571,5 +8752,7 @@ if (!/^#\/(kb|project|theme|hot|review|archive)/.test(location.hash)) state.tab 
 bindNarrowEditorButtons()
 // ⭐ 【模板】页的按钮（决策 205）—— 同样放最末尾（同 TDZ 理由）。
 bindTemplateButtons()
+// ⭐ 【知识类型】页的按钮（决策 215）—— 同样放最末尾：它内部访问 `kindsState`（`const`）。
+bindKindButtons()
 renderTabs()
 void load().then(() => applyRoute())

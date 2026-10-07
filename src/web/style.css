@@ -2508,6 +2508,40 @@ dialog.prompt-dlg:not([open]) { display: none; }
 }
 .tpl-warnings ul { margin: 0; padding-left: 18px; }
 
+/* ═══════════════ 知识类型页（决策 215）═══════════════
+   ⭐ 一张卡片 = 一种类型；内置项整卡只读（输入框 `disabled`）。 */
+.kinds-list { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+.kind-card {
+  border: 1px solid var(--dsw-alias-border-secondary, #d0d0d0);
+  border-radius: 8px; padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.kind-card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.kind-id { font-weight: 600; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+/* 徽标：内置（中性）/ 保留（警示色）—— 两者含义不同，颜色也别一样。 */
+.kind-badge {
+  font-size: 11px; padding: 1px 6px; border-radius: 4px;
+  border: 1px solid var(--dsw-alias-border-secondary, #bbb); color: var(--dim, #666);
+}
+.kind-badge.reserved {
+  border-color: var(--dsw-alias-state-warning-primary, #b8860b);
+  color: var(--dsw-alias-state-warning-primary, #b8860b);
+}
+.kind-count { font-size: 12px; margin-left: auto; }
+.kind-del { padding: 2px 8px; font-size: 12px; line-height: 1.6; }
+.kind-field { display: flex; flex-direction: column; gap: 3px; }
+.kind-field-label { font-size: 12px; color: var(--dim, #666); }
+.kind-field input[type="text"],
+.kind-field textarea {
+  box-sizing: border-box; width: 100%; min-width: 0;
+  font: inherit; line-height: 1.6; padding: 4px 8px;
+}
+/* 书写规范是多行 ⇒ 允许纵向拖拽、自动长高（`overflow:hidden` 免得出现内层滚动条）。 */
+.kind-field textarea { resize: vertical; overflow: hidden; }
+/* ⚠️ 只读态要**看得出来** —— 否则用户会一直试着改"内置"那几格。 */
+.kind-field input:disabled,
+.kind-field textarea:disabled { background: var(--dsw-alias-bg-secondary, #f5f5f5); cursor: not-allowed; }
+
 /* ⭐⭐⭐ 「你配的这个模型已经不在可用清单里了」告警（2026-10-07 用户裁定）。
  * 🔴 **它取代了旧做法**：过去把失效模型**当成一个 option 插进下拉框**，
  *    那等于把一个错误状态伪装成合法选项 —— 用户以为能用，实际跑不通

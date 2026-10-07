@@ -60,7 +60,8 @@ import { bodySize, filterByContext, filterContextByTerms, normalizeQuery, scoreC
 import { resolveRef } from './paths.ts'
 // ⭐ `kind` 的受控词表判据（决策 114 的 `setFields.kind` 用）。
 import {
-  SELECTABLE_ENTRY_KINDS,
+  currentKindsOf,
+  currentReservedKinds,
   isEntryKind,
   kindsInline,
   selectableKindList,
@@ -166,6 +167,43 @@ export function turnOf(
  */
 export function registerTools(deps: ToolDeps): void {
   const { ctx, config } = deps
+
+  /**
+   * ⭐⭐⭐ **`kind` 字段的 schema 片段（`enum` 每轮现算）**（决策 215）。
+   *
+   * ── 🔴 为什么需要它 ────────────────────────────────────────────────────────
+   * 词表**运行期可配**了（用户在设置页增删类型）⇒ `enum` **不能是"注册时算一次"的常量**，
+   * 否则用户加的类型**模型填了会被判非法**（工具层先拦），而界面上却能选 —— **两边打架**。
+   *
+   * ── 机制（与 `description` 的覆盖 getter **同源**，见 `safeRegister` 的长注释）──
+   * DSH 的装配路径是 `ctx.systemPrompt.tools((context) => this.wireSchemas(...))`
+   * ⇒ **每轮重新 `schemaOf()`** ⇒ 参数对象上的 **getter 每轮都会被求值**。
+   * ⇒ ⭐ 把 `enum` 做成 getter，**加完类型下一轮即时生效、不用重启**。
+   *
+   * ⚠️ **`parameters` 是 `defineTool` 一次性构造的普通对象** ⇒
+   *    这里返回的也必须是**它当场能吃下的形态**（对象字面量 + getter）。
+   * @param desc - 该处 `kind` 的字段说明（各处文案不同，但 enum 同源）。
+   * @returns 可直接放进 `parameters` 的 schema 片段。
+   */
+  const kindParam = (desc: string): { type: 'string'; enum: string[]; description: string } => {
+    const o = {
+      type: 'string' as const,
+      description: desc,
+      /** 占位：紧接着被下面的 getter 覆盖（`defineTool` 只做普通赋值，故必须事后定义）。 */
+      enum: [] as string[],
+    }
+    Object.defineProperty(o, 'enum', {
+      enumerable: true,
+      configurable: true,
+      // ⭐ **每轮现算** —— 读的是"当前生效的词表"（`schema.ts` 的进程内当前值），
+      //    并**排除保留项**（`history` 不给模型选）。
+      get: () => {
+        const reserved = new Set(currentReservedKinds())
+        return currentKindsOf().filter((id) => !reserved.has(id))
+      },
+    })
+    return o
+  }
 
   /**
    * 逐个注册，**一个失败不拖垮其余**（同 `dsh-memory` 的教训）。
@@ -351,13 +389,13 @@ export function registerTools(deps: ToolDeps): void {
           project: { type: 'string', description: '按归属项目筛，给项目 id。' },
           theme: { type: 'string', description: '按命中主题筛，给主题 id。' },
           kind: {
-            type: 'string',
             // ⭐ 2026-10-05 收敛：取值与含义都从 `schema.ts` 的唯一词表取 ——
             //    收敛前这里**抄了一遍**，加类型时漏改就会"工具不认、UI 能选"。
-            enum: [...SELECTABLE_ENTRY_KINDS],
-            description:
+            // ⭐⭐ 决策 215：词表运行期可配 ⇒ enum 做成 getter 每轮现算（见 kindParam）。
+            ...kindParam(
               `按**形态分类**筛（决策 81）：${kindsInline()}。` +
               '与 project/theme 正交，可并用。',
+            ),
           },
           query: {
             type: 'array',
@@ -1135,12 +1173,12 @@ export function registerTools(deps: ToolDeps): void {
                     '本该幂等，而原先会写出两条知识。',
                 },
                 kind: {
-                  type: 'string',
-                  enum: [...SELECTABLE_ENTRY_KINDS],
-                  description:
+                  // ⭐⭐ 决策 215：enum 每轮现算（词表运行期可配）。
+                  ...kindParam(
                     `形态分类（**可选**）：${kindsInline()}。` +
                     '**只能填这 4 个值**，留空合法。它决定正文用哪种骨架，也便于按类型筛选。' +
                     '⚠️ 与 theme 无关：theme 是"属于谁"，kind 是"本身是什么形态"。',
+                  ),
                 },
                 tags: { type: 'array', required: true, items: { type: 'string' }, description: '至少 1 个。' },
                 theme: { type: 'array', items: { type: 'string' }, description: '要挂靠的主题 id（只能填已存在的）。' },
@@ -1213,9 +1251,7 @@ export function registerTools(deps: ToolDeps): void {
                 body: { type: 'string', description: "mode='extract' 时的正文。" },
                 desc: { type: 'string', required: true },
                 kind: {
-                  type: 'string',
-                  enum: [...SELECTABLE_ENTRY_KINDS],
-                  description: `形态分类（可选），同 entries[].kind。可选：${selectableKindList('、')}。`,
+                  ...kindParam(`形态分类（可选），同 entries[].kind。可选：${selectableKindList('、')}。`),
                 },
                 tags: { type: 'array', required: true, items: { type: 'string' } },
                 theme: { type: 'array', items: { type: 'string' } },
@@ -1364,11 +1400,10 @@ export function registerTools(deps: ToolDeps): void {
               desc: { type: 'string', description: '新描述（≤200，检索键）。' },
               tags: { type: 'array', items: { type: 'string' }, description: '新标签（至少 1 个）。' },
               kind: {
-                type: 'string',
-                enum: [...SELECTABLE_ENTRY_KINDS],
-                description:
+                ...kindParam(
                   `形态分类（受控词表：${selectableKindList('、')}）。` +
                   '⚠️ **这是 `kind` 的修改通道**（以前写完只能手工改库文件）。',
+                ),
               },
             },
           },
@@ -1630,9 +1665,7 @@ export function registerTools(deps: ToolDeps): void {
               desc: { type: 'string', description: '新描述（≤200，检索键）。' },
               tags: { type: 'array', items: { type: 'string' }, description: '新标签（至少 1 个）。' },
               kind: {
-                type: 'string',
-                enum: [...SELECTABLE_ENTRY_KINDS],
-                description: `形态分类（受控词表：${selectableKindList('、')}）。`,
+                ...kindParam(`形态分类（受控词表：${selectableKindList('、')}）。`),
               },
             },
           },

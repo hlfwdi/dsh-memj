@@ -98,15 +98,66 @@ export const SELECTABLE_ENTRY_KINDS: readonly string[] = ENTRY_KIND_DEFS.filter(
 export type EntryKind = (typeof ENTRY_KIND_DEFS)[number]['id']
 
 /**
+ * ⭐⭐⭐ **【当前生效】的 `kind` 词表** —— 运行期可配（决策 215）。
+ *
+ * ── 🔴 为什么需要一个"模块级当前值" ────────────────────────────────────────
+ * `kind` 的合法性**到处都要判**（实测 **18 处**：`api.ts` / `edit.ts` / `handoff.ts` /
+ * `parse.ts` / `store.ts` / `tools.ts`），而其中 `parse.ts` / `store.ts` 是
+ * **纯函数、不读配置**。
+ * ⇒ 把词表做成**参数** ⇒ 18 处签名全改、纯函数被污染；
+ *   做成**进程内当前值** ⇒ 签名一字不动、行为可配。
+ * ⭐ 判据：**"到处都要用的东西"值得一个进程内当前值**，代价是它的**刷新时机必须明确**。
+ *
+ * ── ⚠️ 边界 ───────────────────────────────────────────────────────────────
+ * · 它是**进程内状态** ⇒ 改了 `kinds.md` **必须有人刷新它**
+ *   （本项目的刷新点：插件 `apply()` 读一次 + 每次保存成功后立即刷新）；
+ * · 🔴 它决定"合法性" ⇒ **删掉一个类型会让存量封面变成非法值** ——
+ *   这正是"有引用不许删"（`deleteKindBlockReason`）要挡住的事。
+ */
+let currentKinds: readonly string[] = ENTRY_KIND_DEFS.map((d) => d.id)
+
+/**
+ * ⭐ **设置当前生效的词表**（插件启动与"保存类型表"两处调用）。
+ * @param ids - 全部合法 id（**含保留项** —— 读侧要认 `history`）。
+ */
+export function setCurrentKinds(ids: readonly string[]): void {
+  if (ids.length > 0) currentKinds = [...ids]
+}
+
+/**
+ * ⭐ **取当前生效的词表**。
+ * @returns 全部合法 id。
+ */
+export function currentKindsOf(): readonly string[] {
+  return currentKinds
+}
+
+/**
+ * ⭐⭐ **当前生效的"保留项"id**（不给模型选的那些）—— 决策 215。
+ *
+ * 🔴 **为什么它也要跟着变**：保留项来自内置表（`history`），而
+ *   "哪些是保留项"与"有哪些类型"一样会影响**工具 schema 的 enum**。
+ *   两者都从**同一个当前词表**派生，才能保证"UI 能选"与"工具认"一致。
+ * @returns 保留项 id（目前恒为 `['history']`，但**不再由调用方写死**）。
+ */
+export function currentReservedKinds(): readonly string[] {
+  // 保留项由内置表决定（用户加的类型都不是保留项）。
+  return ENTRY_KIND_DEFS.filter((d) => d.reserved === true).map((d) => d.id)
+}
+
+/**
  * 判断一个值是否是合法的 `kind`。
  *
- * ⚠️ **第二步（词表运行期可配）时，本函数要能接受一份外部词表** ——
- *    现在只读内置表，届时会加一个可选参数（调用点共 18 处，见 `kinds.ts` 的规划）。
+ * ⭐⭐ **2026-10-05（决策 215）起读【当前生效的词表】**，不再是编译期常量 ——
+ *    用户可在设置页增删改类型。
+ * ⚠️ 签名**刻意保持不变**（`isEntryKind(value)`，不是 `isEntryKind(value, kinds)`）——
+ *    它有 18 个调用点、其中两个是纯函数；把词表做成参数会污染它们。
+ *    ⇒ 改用"进程内当前值 + 明确的刷新时机"（见 `setCurrentKinds`）。
  * @param value - 待判断的值。
  * @returns 是否为合法 kind。
  */
 export function isEntryKind(value: unknown): value is EntryKind {
-  return typeof value === 'string' && ENTRY_KINDS.includes(value)
+  return typeof value === 'string' && currentKinds.includes(value)
 }
 
 /**

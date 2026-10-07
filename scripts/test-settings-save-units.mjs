@@ -127,7 +127,7 @@ check('⭐ 每个 `data-savepage` 都有同名的结果行（缺 ⇒ 保存后**
 //    ② **即时开关**（`hot-inject-enabled` / `ai-on`）：用户 2026-10-07 裁定它们
 //       **不要保存按钮、点即生效** ⇒ 它们有结果行、但**有意**没有 `data-savepage`。
 //    ⇒ 都**不是**漏接线。
-const MSG_ONLY_OK = ['prompts', 'templates', ...Object.keys(EXPECT_INSTANT)]
+const MSG_ONLY_OK = ['prompts', 'templates', 'kinds', ...Object.keys(EXPECT_INSTANT)]
 const orphans = msgIds.filter((m) => !savepages.includes(m) && !MSG_ONLY_OK.includes(m))
 check('⭐ 反向：结果行都有归属（排除 prompts / templates 与两个即时开关）',
   orphans.length === 0, `孤儿：${orphans.join(',')}`)

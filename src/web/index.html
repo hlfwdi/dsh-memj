@@ -495,6 +495,12 @@
        ⚠️ **它只影响【新建项目】**——已有文档记着自己的节名，与模板已解耦
           ⇒ 改模板、删模板都**不影响任何已有文档**（这一点必须在页面上说明）。 -->
   <button type="button" class="subtab" data-setsub="templates"><span class="wide-only">模板</span><span class="narrow-only">模板</span></button>
+  <!-- ⭐⭐⭐ 决策 215：**知识类型**（`kind`）的可配置词表。
+       🔴 内置的那几条**不可删、不可改名**（存量几百条知识都在用它们）；
+          用户可以自己加类型，并为每种配置"什么时候用 + 书写规范"。
+       ⚠️ 与「模板」是**两个不同的东西**：模板管"交接文档有哪几节"，
+          这里管"知识分哪几类"。 -->
+  <button type="button" class="subtab" data-setsub="kinds"><span class="wide-only">知识类型</span><span class="narrow-only">类型</span></button>
 </div>
 
 <!-- ──────────────── 子页①：沉淀 ────────────────
@@ -1117,6 +1123,44 @@
       <h3 class="set-section-title">说明</h3>
       <p class="set-note">JEV 是 TypeSafe 的<b>决策模型</b>，协议与 OpenAI 兼容接口不同（请求 <code>{model,state,questions}</code>、响应 <code>{answers:{…:noul}}</code>），所以<b>不能</b>在 DSH 原生的「模型」设置页里声明（那页只支持 OpenAI/Anthropic 协议）。本页就是它的配置入口。跨 provider 的密钥互不干扰：每个 provider 一个派生名，改一条不影响别的。</p>
     </section>
+  </div>
+</div>
+
+<!-- ════════════════ 子页：知识类型（决策 215）════════════════
+     ⭐⭐⭐ `kind` 是知识的**形态分类**（fact/trap/howto/…）。它以前是**编译期写死的词表**，
+     现在用户可在这里增删改 —— 但**内置的那几条不可删、不可改名**（存量几百条知识在用它们）。
+     🔴 与「模板」的区别：模板管"交接文档有**哪几节**"，这里管"知识分**哪几类**"。 -->
+<div class="subpanel set-panel" id="setsub-kinds" hidden>
+  <div class="set-scroll">
+
+    <section class="set-section">
+      <h3 class="set-section-title">知识类型（`kind`）</h3>
+      <div class="set-item">
+        <p class="set-desc">
+          一条知识属于<b>哪一类形态</b>（事实 / 陷阱 / 流程 / 决策…）。
+          <b>什么时候用</b>与<b>书写规范</b>都会进提示词 —— 前者告诉模型<b>该选哪一种</b>，
+          后者告诉它<b>这种知识该怎么写</b>。
+        </p>
+        <p class="set-desc">
+          ⚠️ 带 <b>「内置」</b>标的<b>不可删、不可改名</b>（库里已有几百条知识在用它们，
+          改掉会让那些知识<b>当场变成非法值</b>）；带 <b>「保留」</b>标的<b>不给模型选</b>
+          （由工具自动生成，手工填会让那条知识<b>搜不到</b>）。
+          <b>有知识在用的类型也删不掉</b> —— 请先把那些知识改成别的类型。
+        </p>
+        <div id="kinds-list" class="kinds-list"></div>
+        <p class="set-note">
+          改完点下面的<b>保存</b>生效（<b>不用重启</b>）。加/删/改都会同时影响
+          模型能填哪些值、以及编辑知识时的下拉。
+        </p>
+      </div>
+      <div class="set-foot set-foot-inline">
+        <button type="button" id="kinds-add">+ 添加一种类型</button>
+        <button type="button" class="primary" id="kinds-save">保存</button>
+        <span class="dim set-msg" id="settings-msg-kinds"></span>
+      </div>
+      <div id="kinds-errors" class="tpl-errors" hidden></div>
+    </section>
+
   </div>
 </div>
 
