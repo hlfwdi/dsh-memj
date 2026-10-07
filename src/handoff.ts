@@ -987,11 +987,17 @@ export function mergeNarrative(
  *
  * ⚠️ **已经带规范块的节不动它**（幂等：重复调用结果相同）。
  * ⚠️ **模板里没有的节**：不补（宁可没有规范，也不贴错的）。
+ *
+ * ⭐⭐ **2026-10-05 导出（决策 216）**：以前它是**私有**的，于是"给老文档补规范块"
+ *   的迁移脚本只能在**自己那份**里重抄一遍 `insert()`（`migrate-docs-to-spec-blocks.mjs` 的注释
+ *   写着"那个是内部函数未导出"）。
+ *   🔴 **那就是第二份副本** —— 两份一旦漂移，"迁移补的块"与"建项目补的块"就不一样了。
+ *   ⇒ 导出它，让**建项目**与**存量迁移**走同一条路径（决策 214 的同一条纪律）。
  * @param text - 已有叙事（含正文）。
  * @param tpl - 模板（提供每节的 desc / truncate）。
  * @returns 插好规范块的叙事。
  */
-function insertSpecBlocks(text: string, tpl: Template): string {
+export function insertSpecBlocks(text: string, tpl: Template): string {
   const descOf = new Map(tpl.sections.map((s) => [s.name, s]))
   const lines = text.split(/\r?\n/)
   const out: string[] = []

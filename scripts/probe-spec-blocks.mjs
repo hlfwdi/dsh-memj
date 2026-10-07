@@ -75,16 +75,33 @@ for (const f of files) {
     legacyField.push(id)
     flags.push('⚠️ 封面里还残留已废弃的 `sections:` 行（跑 `drop-cover-sections-field.mjs` 清掉）')
   }
-  // ⚠️ **漂移**：frontmatter 明确写了 `truncateSections`、且与正文反解不同。
-  if (trunc.length > 0 && (hasBlock || legacySpec !== '') && JSON.stringify(fromBody) !== JSON.stringify(trunc)) {
+  // ⚠️ **漂移（两个方向都要查）**：2026-10-05 实测补上的第二个方向。
+  //
+  // 🔴 老写法只查「frontmatter 非空 且 与正文不同」⇒ **漏掉**了
+  //    「**正文反解非空、而 frontmatter 还是空的**」这一种。
+  //    而它恰好是**最要紧**的那一种：`defaultTruncateTitle()` **正文优先**，
+  //    所以**归档会照常发生**，但探针的标签读的是 frontmatter ⇒ **显示成"不截"，与真相相反**
+  //    （实测：给 `dsh-memj` 补完块后，本探针报"不截"，而正文反解是 `["当前进度"]`）。
+  // ⭐ 判据：**比较两份副本时，要问"哪一份说了算"** —— 然后**按说了算的那份去判**。
+  if ((hasBlock || legacySpec !== '') && JSON.stringify(fromBody) !== JSON.stringify(trunc)) {
     drift.push(id)
-    flags.push(`⚠️ 正文反解 ${JSON.stringify(fromBody)} ≠ frontmatter ${JSON.stringify(trunc)}`)
+    flags.push(
+      `⚠️ 正文反解 ${JSON.stringify(fromBody)} ≠ frontmatter ${JSON.stringify(trunc)}` +
+        (trunc.length === 0 && fromBody.length > 0
+          ? '（**正文优先** ⇒ 截断会照常发生；frontmatter 由**下一次 handoff** 刷新）'
+          : ''),
+    )
   }
-  if (secs.length > 0 && trunc.length === 0) noCut.push(id)
+  // ⭐⭐ **判定用【真正说了算的那一份】**（与 `defaultTruncateTitle` 的优先级一致）：
+  //    正文反解非空 ⇒ 用它；否则才看 frontmatter。
+  //    🔴 别直接用 `trunc`（那正是上面那个"显示与真相相反"的根因）。
+  const effective = fromBody.length > 0 ? fromBody : trunc
+  if (secs.length > 0 && effective.length === 0) noCut.push(id)
 
   const label = { block: '🆕 新形态', legacy: '📜 旧形态', none: '➖ 无规范' }[kind]
+  const src = fromBody.length > 0 && trunc.length === 0 ? '（据正文）' : ''
   console.log(
-    `${label}  ${id}（${secs.length} 节｜${trunc.length > 0 ? `截断 ${trunc.join('/')}` : '不截'}）`,
+    `${label}  ${id}（${secs.length} 节｜${effective.length > 0 ? `截断 ${effective.join('/')}${src}` : '不截'}）`,
   )
   for (const x of flags) console.log(`      ${x}`)
 }

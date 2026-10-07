@@ -658,6 +658,9 @@ export {
   //    所以它们必须可被测试直接验（`test-spec-block.mjs` 的 R1/R2 反证靠它）。
   mergeNarrative,
   normalizeNarrative,
+  // ⭐⭐⭐ 决策 216：把模板的规范块**插进已有叙事**（建项目与存量迁移共用这一条路径）。
+  //    🔴 导出它是为了**消灭第二份副本** —— 迁移脚本原先只能自己重抄一份 `insert()`。
+  insertSpecBlocks,
   // ⭐⭐⭐ 决策 156：挂靠依据核对（`themeWhy` 有没有逐字引所挂主题的 desc）——纯函数。
   quoteAppearsIn,
 } from './handoff.ts'
