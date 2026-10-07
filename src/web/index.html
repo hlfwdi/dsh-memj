@@ -63,15 +63,12 @@
           <div class="filter-body-inner">
             <input id="kb-filter" type="search" placeholder="搜索 id / 项目 / 主题 / desc / tags…">
             <div class="filter-row">
+              <!-- ⭐⭐⭐ 选项由 JS 从 `/kinds` 填入（2026-10-05 收敛）——
+                   这里以前**手写了一份**，而下面的 hot-kb-kind 又手写了**另一份**，
+                   两份还互不一致 —— 那正是"抄写多处"的必然结果。
+                   ⚠️ **别在这里加 <option>**：单一来源在服务端词表。 -->
               <select id="kb-kind" title="按形态分类筛选">
                 <option value="">全部类型</option>
-                <option value="fact">fact（事实/接口）</option>
-                <option value="trap">trap（陷阱/纠错）</option>
-                <option value="howto">howto（流程步骤）</option>
-                <option value="decision">decision（决策+理由）</option>
-                <!-- ⭐⭐ history（决策 137）：它是「当前进度」自动截断时归档的原文，
-                     **不是知识**，但**人侧要能浏览**（模型侧的检索看不到它）。 -->
-                <option value="history">history（历史归档）</option>
                 <option value="__none__">（未分类）</option>
               </select>
               <select id="kb-project" title="按项目筛选"><option value="">全部项目</option></select>
@@ -298,12 +295,9 @@
             <div class="filter-body" id="hot-kb-filter-body">
               <div class="filter-body-inner">
                 <input id="hot-kb-filter" type="search" placeholder="搜索 id / 项目 / 主题 / desc / tags…">
+                <!-- ⭐⭐⭐ 同 kb-kind：选项由 JS 从 `/kinds` 填入，别在这里手写。 -->
                 <select id="hot-kb-kind" title="按形态分类筛选">
                   <option value="">全部类型</option>
-                  <option value="fact">fact</option>
-                  <option value="trap">trap</option>
-                  <option value="howto">howto</option>
-                  <option value="decision">decision</option>
                   <option value="__none__">（未分类）</option>
                 </select>
                 <select id="hot-kb-project" title="按项目筛选"><option value="">全部项目</option></select>

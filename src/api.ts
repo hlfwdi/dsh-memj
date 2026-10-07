@@ -61,7 +61,7 @@ import {
 } from './store.ts'
 import { themeDocPath } from './paths.ts'
 import { isAbsolutePath, parseCovers } from './parse.ts'
-import { isEntryKind } from './schema.ts'
+import { ENTRY_KIND_DEFS, SELECTABLE_ENTRY_KINDS, isEntryKind } from './schema.ts'
 // ⭐⭐ 英文召回索引的「检查并补全」（判据与启动兜底**同源**，见 `en-index.ts`）。
 // ⭐⭐⭐ `pairingError` 是「模板 ↔ 模型」配对规则的**唯一出处**（用户 2026-10-07 要求）。
 import { checkAndRepair, pairingError } from './en-index.ts'
@@ -1779,6 +1779,52 @@ export async function handleApi(
         warnings: templateWarnings(t),
       }))
       return { status: 200, body: { ok: true, items, dir: templatesDir() } }
+    }
+
+    /**
+     * ⭐⭐⭐ **知识类型词表**（`kind`）—— **唯一读取入口**（2026-10-05 收敛）。
+     *
+     * 🔴 **为什么要有这个端点**：收敛之前，这套词表在**七处各写一遍**
+     * （`schema.ts` / `tools.ts` × 5 / 前端下拉 × 3 / placeholder × 2 / 提示词 × 2），
+     * 而其中**两处前端下拉还互相不一致**（一个带 `history` 不带"未分类"、
+     * 另一个反过来）—— 那正是"抄写多处"的必然结果。
+     * ⇒ 前端现在**从这里取**，不再自己写一份。
+     *
+     * ⚠️ 本步（第一步）只做**收敛**，词表仍来自编译期常量；
+     *    第二步会让它变成运行期可配（届时本端点**签名不变**，只是数据源变了）。
+     */
+    if (route === '/kinds') {
+      if (method !== 'GET') return { status: 405, body: { ok: false, error: '该接口只接受 GET' } }
+      /**
+       * ⭐ **数一遍每种 kind 各有多少条**（UI 显示 + 第二步的删除保护都要用它）。
+       * ⚠️ 走 `scanLibrary({ includeHistory: true })` —— 默认**排除** `history`，
+       *    不显式带上它的话，`history` 那一项会恒显示 0（**界面撒谎**）。
+       */
+      const scanned = await scanLibrary({ includeHistory: true })
+      const counts = new Map<string, number>()
+      for (const c of scanned.covers) {
+        const k = c.cover.kind
+        if (k !== '') counts.set(k, (counts.get(k) ?? 0) + 1)
+      }
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          items: ENTRY_KIND_DEFS.map((d) => ({
+            id: d.id,
+            label: d.label,
+            when: d.when,
+            /** 🔴 保留项（目前只有 `history`）：**不可作为模型的可选项**，UI 里只读。 */
+            reserved: d.reserved === true,
+            /** ⚠️ 第二步才用得上（内置不可删改）；现在全部是内置 ⇒ 恒 `true`。 */
+            builtin: true,
+            /** 当前库里有多少条用了它（UI 显示用；第二步的删除保护也要用它）。 */
+            count: counts.get(d.id) ?? 0,
+          })),
+          /** ⭐ 可给模型选的那些（不含保留项）—— 编辑表单的下拉用它。 */
+          selectable: [...SELECTABLE_ENTRY_KINDS],
+        },
+      }
     }
 
     // 保存一份模板（**校验在前，不过不写盘**）。

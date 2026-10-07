@@ -709,6 +709,17 @@ const state = {
   arcSub: 'entry',
     // ⭐⭐ 设置页当前子页（决策 169）。⚠️ 与 sub/arcSub 分开。
     setSub: 'sink',
+  /**
+   * ⭐⭐⭐ **知识类型词表**（2026-10-05 收敛）——从 `/kinds` 取，**前端不再自己写一份**。
+   *
+   * 🔴 收敛前这里是**硬编码的中文标签数组**，而 `index.html` 里还有**两个手写的下拉**
+   *    （且那两处**互相不一致**：一个带 `history` 不带"未分类"、另一个反过来）。
+   * ⇒ 现在三处**都从这里取**。
+   * ⚠️ 初始为空数组；`loadKinds()` 成功后填充。取不到时**下拉仍可用**（只有"未分类"），
+   *    不会把界面卡住 —— 但会 `console.warn`，便于排查。
+   */
+  kinds: [],
+  kindsLoaded: false,
   covers: [],
   projects: [],
   themes: [],
@@ -1433,19 +1444,22 @@ function renderEntryEditor(cover) {
   })
   const kindSel = h('select', { id: 'ef-kind' })
   if (isArchived) kindSel.disabled = true
-  for (const [v, label] of [
-    ['', '（未分类）'],
-    ['fact', 'fact（事实 / 接口）'],
-    ['trap', 'trap（陷阱 / 纠错）'],
-    ['howto', 'howto（流程步骤）'],
-    ['decision', 'decision（决策 + 理由）'],
-    // ⚠️ `history` **只读地列出来**：它是「当前进度」自动截断时归档的原文，
-    //    **不是知识**。列它出来是为了"详情页能说清这条是什么"，
-    //    ⚠️ 但**不该让人手工把一条知识改成 history**（那会让它从检索里消失）。
-    ['history', 'history（历史进展归档·不参与检索）'],
-  ]) {
-    const o = h('option', { value: v, text: label })
-    if (v === (cover.kind ?? '')) o.selected = true
+  /**
+   * ⭐⭐⭐ 下拉内容 = **（未分类）+ 全部词表项**，全部从 `state.kinds` 生成
+   *    （2026-10-05 收敛；以前是这里写死一份、`index.html` 里再写两份）。
+   * ⚠️ **保留项（`history`）也要列出来，但存在时置 `disabled`** ——
+   *    列它是为了"详情页能说清这条是什么"（否则一条 history 的 kind 会显示成空）；
+   *    **不给选**是因为它是**工具生成的**，手工把一条知识改成它会让那条**从检索里消失**。
+   *    🔴 `disabled` 只对**别的项**生效；当前值若正好是保留项，那一项仍可选中（否则回显会丢）。
+   */
+  kindSel.append(h('option', { value: '', text: '（未分类）' }))
+  for (const k of state.kinds) {
+    const o = h('option', { value: k.id, text: k.label })
+    if (k.reserved === true && (cover.kind ?? '') !== k.id) {
+      o.disabled = true
+      o.title = '由工具自动生成，不能手工指定'
+    }
+    if (k.id === (cover.kind ?? '')) o.selected = true
     kindSel.append(o)
   }
   const tagsField = fieldText('tags', (cover.tags ?? []).join(', '), {
@@ -2330,7 +2344,7 @@ function buildCoverForm(block, onDone) {
     id: h('input', { value: pickField(raw, 'id'), placeholder: 'UUID' }),
     project: h('input', { value: pickField(raw, 'project') }),
     theme: h('input', { value: pickArray(raw, 'theme').join(', '), placeholder: '逗号分隔' }),
-    kind: h('input', { value: pickField(raw, 'kind'), placeholder: 'fact / trap / howto / decision（可留空）' }),    tags: h('input', { value: pickArray(raw, 'tags').join(', '), placeholder: '逗号分隔' }),
+    kind: h('input', { value: pickField(raw, 'kind'), placeholder: `${kindIdsForPlaceholder()}（可留空）` }),    tags: h('input', { value: pickArray(raw, 'tags').join(', '), placeholder: '逗号分隔' }),
     // ⭐ `title` 是封面字段（决策 98）——修复表单必须带上它，
     //    否则"修好一个非法封面"会把标题丢掉、又被判缺 title。
     title: h('input', { value: pickField(raw, 'title'), placeholder: '2–48 字符' }),
@@ -2356,7 +2370,7 @@ function buildCoverForm(block, onDone) {
   // ⭐⭐ **人侧勾选 = 直接生效**（决策 116）——修复表单同样走人侧写入
   //    （`/fix-cover` 把 `global` 直接写进封面，见 `api.ts`）⇒ **不提"提名/批准"**。
   row('global', globalChk, '勾选 = 加入全局（直接生效）')
-  row('kind', f.kind, '受控四值，留空 = 未分类')
+  row('kind', f.kind, `受控词表（${state.kinds.filter((k) => k.reserved !== true).length || 4} 值），留空 = 未分类`)
   row('tags', f.tags, '至少 1 个，逗号分隔')
   row('title', f.title, '⭐ 必填，2–48 字符（标题的权威来源是封面）')
   row('desc', f.desc, '必填，≤200 字符')
@@ -3061,6 +3075,15 @@ async function load() {
       getJson('/archived?kind=entry'),
       getJson('/archived?kind=project'),
     ])
+    /**
+     * ⭐⭐⭐ **知识类型词表**（2026-10-05 收敛）——在前两个 `Promise.all` **之后**拉，
+     *    因为它**不参与首屏**：丢了也只是"下拉里少几个选项"，不该拖慢/拖垮首屏。
+     * ⚠️ 拉完**必须重填两个筛选下拉**（存量 <option> 是页面写死的占位）。
+     * 🔴 **不放进 `Promise.all`**：它失败不该让整页进 `catch`（那会弹 toast 说"加载失败"，
+     *    而其实别的数据都拿到了）。
+     */
+    await loadKinds()
+    fillKindFilters()
     const stat = document.getElementById('stat')
     if (stat) {
       // ⭐ 归档数**只在非零时才显示**：常态下不该让顶栏多两个恒为 0 的数字。
@@ -3186,6 +3209,90 @@ async function loadBackupStatus() {
     const info = document.getElementById('backup-info')
     if (info) info.textContent = `读取备份状态失败：${e.message}`
     return null
+  }
+}
+
+/**
+ * ⭐⭐⭐ **加载知识类型词表**（`/kinds`）—— 前端所有 kind 下拉的**唯一数据源**。
+ *
+ * 🔴🔴 **为什么要有它**（2026-10-05 收敛）：收敛之前，词表在前端**写了三份**
+ *   （编辑表单一个数组 + `index.html` 两个手写下拉），而**那两处下拉互相不一致**
+ *   （一个带 `history` 不带"未分类"、另一个反过来）—— 抄多处的必然结果。
+ *
+ * ⚠️ **失败不阻断界面**：取不到就留空数组，下拉仍可用（至少还有"（未分类）"）
+ *   —— **宁可少几个选项，也不要把面板卡死**。
+ * 🔴 失败**必须留下痕迹**（`console.warn`）：否则用户看到的是"下拉里没有我的类型"，
+ *   而**没有任何线索**指向"词表没加载成功"。
+ *
+ * 🔴🔴 **判据必须是"真的拿到了数组"，不能只看有没有抛错**（2026-10-05 实测踩到）：
+ *   本项目的 `getJson` 是这样写的 ——
+ *   ```js
+ *   const body = await res.json().catch(() => ({}))   // 解析失败 ⇒ 静默变 {}
+ *   if (!res.ok) throw ...
+ *   return body
+ *   ```
+ *   ⇒ **路由没注册时**（请求落到 SPA 兜底、返回 HTML 且 HTTP 200）
+ *     它**不抛错**、只返回 `{}` ⇒ 我第一版据此把 `kindsLoaded` 置成了 `true`，
+ *     而 `items` 根本不存在 —— **`kindsLoaded` 在撒谎**。
+ *   ⭐ 判据：**"没报错"不等于"拿到了东西"**；对象端点要校验**期待的那个字段**。
+ * @returns 词表数组（失败时为空数组）。
+ */
+async function loadKinds() {
+  try {
+    const r = await getJson('/kinds')
+    // ⭐ 校验**期待字段**（而不是"没抛错就算成功"）—— 理由见上。
+    if (!Array.isArray(r.items)) {
+      throw new Error('响应里没有 items 数组（多半是路由没注册：请求落到 SPA 兜底返回了 HTML）')
+    }
+    state.kinds = r.items
+    state.kindsLoaded = true
+    return state.kinds
+  } catch (e) {
+    state.kinds = []
+    state.kindsLoaded = false
+    console.warn('[memj] 知识类型词表（/kinds）加载失败，下拉将只剩「（未分类）」：', e.message)
+    return []
+  }
+}
+
+/**
+ * ⭐ **给输入框 placeholder 用的 kind id 串**（`fact / trap / howto / decision`）。
+ *
+ * ⚠️ 排除保留项（`history`）—— 它不该出现在"你能填什么"的提示里。
+ * @returns 形如 `fact / trap / howto / decision`；词表没加载出来时给一句提示。
+ */
+function kindIdsForPlaceholder() {
+  const ids = state.kinds.filter((k) => k.reserved !== true).map((k) => k.id)
+  return ids.length > 0 ? ids.join(' / ') : '（类型词表加载中）'
+}
+
+/**
+ * ⭐⭐ **把词表填进两个筛选下拉**（`#kb-kind` / `#hot-kb-kind`）。
+ *
+ * 🔴🔴 **为什么需要它**（收敛前那两个下拉是**手写死的**，而且**两份还不一致**：
+ *   一个带 `history` 却没有"未分类"、另一个反过来）——
+ *   现在两边**从同一个词表生成**，且都补上"（未分类）"。
+ *
+ * ⚠️ **必须保留原有选项**：`全部类型`（`value=""`）与 `（未分类）`（`value="__none__"`）
+ *   不是 kind，而是**筛选语义** ⇒ 先记住它们再重填，否则"未分类"筛选会消失。
+ * @returns 无。
+ */
+function fillKindFilters() {
+  for (const id of ['kb-kind', 'hot-kb-kind']) {
+    const sel = document.getElementById(id)
+    if (!sel) continue
+    const keep = sel.value  // ⚠️ 重填会丢当前选择 ⇒ 先记住、填完还原
+    // 只保留"非 kind"的两个语义选项，其余（旧的硬编码 kind）全清掉。
+    for (const o of [...sel.querySelectorAll('option')]) {
+      if (o.value !== '' && o.value !== '__none__') o.remove()
+    }
+    const noneOpt = [...sel.querySelectorAll('option')].find((o) => o.value === '__none__')
+    for (const k of state.kinds) {
+      const o = h('option', { value: k.id, text: k.label })
+      // ⚠️ 插在"（未分类）"**之前**（保持"类型在前、未分类在后"的阅读顺序）。
+      sel.insertBefore(o, noneOpt ?? null)
+    }
+    sel.value = keep
   }
 }
 

@@ -59,7 +59,13 @@ import { renderOutputText, renderParametersText } from './prompt-catalog.ts'
 import { bodySize, filterByContext, filterContextByTerms, normalizeQuery, scoreCover, sortHits } from './search.ts'
 import { resolveRef } from './paths.ts'
 // ⭐ `kind` 的受控词表判据（决策 114 的 `setFields.kind` 用）。
-import { isEntryKind, type EntryKind } from './schema.ts'
+import {
+  SELECTABLE_ENTRY_KINDS,
+  isEntryKind,
+  kindsInline,
+  selectableKindList,
+  type EntryKind,
+} from './schema.ts'
 import {
   MEMJ_HANDOFF_DESCRIPTION,
   MEMJ_INFO_DESCRIPTION,
@@ -346,9 +352,11 @@ export function registerTools(deps: ToolDeps): void {
           theme: { type: 'string', description: '按命中主题筛，给主题 id。' },
           kind: {
             type: 'string',
-            enum: ['fact', 'trap', 'howto', 'decision'],
+            // ⭐ 2026-10-05 收敛：取值与含义都从 `schema.ts` 的唯一词表取 ——
+            //    收敛前这里**抄了一遍**，加类型时漏改就会"工具不认、UI 能选"。
+            enum: [...SELECTABLE_ENTRY_KINDS],
             description:
-              '按**形态分类**筛（决策 81）：fact 事实/接口｜trap 陷阱/纠错｜howto 流程步骤｜decision 决策+理由。' +
+              `按**形态分类**筛（决策 81）：${kindsInline()}。` +
               '与 project/theme 正交，可并用。',
           },
           query: {
@@ -1128,9 +1136,9 @@ export function registerTools(deps: ToolDeps): void {
                 },
                 kind: {
                   type: 'string',
-                  enum: ['fact', 'trap', 'howto', 'decision'],
+                  enum: [...SELECTABLE_ENTRY_KINDS],
                   description:
-                    '形态分类（**可选**）：fact 事实/接口｜trap 陷阱/纠错｜howto 流程步骤｜decision 决策+理由。' +
+                    `形态分类（**可选**）：${kindsInline()}。` +
                     '**只能填这 4 个值**，留空合法。它决定正文用哪种骨架，也便于按类型筛选。' +
                     '⚠️ 与 theme 无关：theme 是"属于谁"，kind 是"本身是什么形态"。',
                 },
@@ -1206,8 +1214,8 @@ export function registerTools(deps: ToolDeps): void {
                 desc: { type: 'string', required: true },
                 kind: {
                   type: 'string',
-                  enum: ['fact', 'trap', 'howto', 'decision'],
-                  description: '形态分类（可选），同 entries[].kind。',
+                  enum: [...SELECTABLE_ENTRY_KINDS],
+                  description: `形态分类（可选），同 entries[].kind。可选：${selectableKindList('、')}。`,
                 },
                 tags: { type: 'array', required: true, items: { type: 'string' } },
                 theme: { type: 'array', items: { type: 'string' } },
@@ -1357,10 +1365,10 @@ export function registerTools(deps: ToolDeps): void {
               tags: { type: 'array', items: { type: 'string' }, description: '新标签（至少 1 个）。' },
               kind: {
                 type: 'string',
-                enum: ['fact', 'trap', 'howto', 'decision'],
+                enum: [...SELECTABLE_ENTRY_KINDS],
                 description:
-                  '形态分类（4 值受控词表）。⚠️ **这是 `kind` 的修改通道**' +
-                  '（以前写完只能手工改库文件）。',
+                  `形态分类（受控词表：${selectableKindList('、')}）。` +
+                  '⚠️ **这是 `kind` 的修改通道**（以前写完只能手工改库文件）。',
               },
             },
           },
@@ -1623,8 +1631,8 @@ export function registerTools(deps: ToolDeps): void {
               tags: { type: 'array', items: { type: 'string' }, description: '新标签（至少 1 个）。' },
               kind: {
                 type: 'string',
-                enum: ['fact', 'trap', 'howto', 'decision'],
-                description: '形态分类（4 值受控词表）。',
+                enum: [...SELECTABLE_ENTRY_KINDS],
+                description: `形态分类（受控词表：${selectableKindList('、')}）。`,
               },
             },
           },

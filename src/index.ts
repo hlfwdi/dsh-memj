@@ -503,6 +503,11 @@ export function apply(ctx: Context, config: MemjConfig = DEFAULT_CONFIG): void {
       `${API_BASE}/templates`,
       `${API_BASE}/template/save`,
       `${API_BASE}/template/delete`,
+      // ⭐⭐⭐【知识类型词表】（2026-10-05 收敛）——**前端所有 kind 下拉的唯一数据源**。
+      //    🔴 **实测：漏注册当场被既有断言抓到**（`test-web-api` 的"路由注册一致性"报
+      //      `⚠️ 未注册：/kinds —— 这些请求会落到 SPA 兜底、返回 HTML 而不是 JSON！`）。
+      //    ⭐ 这正是本条注释开头说的那类事故 —— **不是靠记性，是靠那条断言**。
+      `${API_BASE}/kinds`,
       // ⚠️ 探针路由**不在这里**注册——它有自己的 handler，见下面单独的
       //    `webServer.register`。🔴 我第一版**两处都注册了** ⇒
       //    `duplicate exact route` ⇒ **整个插件 apply 抛错、实例起不来**

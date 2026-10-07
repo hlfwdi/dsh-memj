@@ -14,13 +14,23 @@
  */
 
 /**
- * 知识的**形态分类**（决策 81）。
+ * ⭐⭐⭐ **知识类型（`kind`）的【唯一定义源】**（2026-10-05 收敛）。
  *
- * ⭐ **必须是受控词表**：若允许自由取值，LLM 会自行发明命名
- * （`bug`/`pitfall`/`gotcha`/`陷阱` 各写各的），分类就失去聚合能力。
- * 这正是 ETH Zurich 实测到的失效模式——没有受控词表时，
+ * ── 为什么必须是**受控词表**（决策 81）────────────────────────────────────
+ * 若允许自由取值，LLM 会自行发明命名（`bug`/`pitfall`/`gotcha`/`陷阱` 各写各的），
+ * 分类就失去聚合能力。这正是 ETH Zurich 实测到的失效模式 —— 没有受控词表时，
  * LLM 会自己发明 schema 与标签格式，使知识层反而拖累 agent 表现。
  * `tags` 继续承担**自由补充**的角色，两者分工不同。
+ *
+ * ── 🔴 为什么要收敛成"一张带含义的表"，而不是一个字符串数组 ──────────────────
+ * 收敛之前，这套词表在**七个地方各写了一遍**：
+ * `schema.ts` 的数组 / `tools.ts` 的 **5 处 `enum`** / `app.js` 的**中文标签数组** /
+ * 两处 placeholder / 两处提示词文案。
+ * ⇒ ⭐ **一处定义、六处抄写** ⇒ 想加一个类型要同时改七处，**漏一处就是"某处不认它"**
+ *   （最典型：工具 schema 不认 ⇒ 模型填了被拒，而 UI 里却能选 —— **两边打架**）。
+ *
+ * ⇒ 收敛成**一张表**：`id`（机器用）+ `label`（显示）+ `when`（什么时候用）。
+ *   `ENTRY_KINDS` 由它派生 ⇒ **不存在"数组与含义不一致"的可能**。
  *
  * ⚠️ **与 `theme` 正交、不是二选一**：`theme` 回答"这条属于谁"（横向聚合、需证据），
  * `kind` 回答"这条本身是什么形态"（纵向属性、无门槛）。
@@ -29,19 +39,109 @@
  *    「当前进度」被自动截断时、**被截走的原文**的归档（详见 `history.ts`）。
  *    ⇒ 它**不参与检索**（`scanLibrary` 默认排除），但**能按 id 读回**
  *      （「历史进展」小节里留了完整 UUID 指针）。
+ *    🔴 **因此它不给模型当选项**（见 `SELECTABLE_ENTRY_KINDS`）——
+ *      让人手工把一条知识改成 `history` 会让它**从检索里消失**。
+ *
+ * ── 第二步（未做）会把它变成**运行期可配**──────────────────────────────────
+ * 用户已裁定：设置页可配置知识类型，**内置的不可删改**、可另增删改。
+ * 那一步会把"读词表"从**编译期常量**改成**运行期读取**。
+ * ⚠️ **本表届时降级为"内置默认值"** —— 仍不可删，但不再是被引用的唯一来源。
  */
-export const ENTRY_KINDS = ['fact', 'trap', 'howto', 'decision', 'history'] as const
 
-/** `kind` 的取值类型。 */
-export type EntryKind = (typeof ENTRY_KINDS)[number]
+/** 表里的一项：id + 显示名 + "什么时候用它"。 */
+export interface EntryKindDef {
+  /** 机器用的 id（小写英文；**它就是写进封面 `kind:` 的那个值**）。 */
+  id: string
+  /** 给人看的短名（UI 下拉、报错文案里用）。 */
+  label: string
+  /** ⭐ "**什么时候用这一种**" —— 一句话，会进提示词。 */
+  when: string
+  /**
+   * 🔴 **保留项**：不可删、不可改名、**不作为模型的可选项**（目前只有 `history`）。
+   * @default false
+   */
+  reserved?: boolean
+}
+
+/**
+ * ⭐⭐ **内置知识类型表**（顺序即 UI 下拉顺序）。
+ *
+ * ⚠️ **改动这一张表就够** —— 工具 schema、UI 下拉、报错文案、提示词都从这里取。
+ */
+export const ENTRY_KIND_DEFS: readonly EntryKindDef[] = [
+  { id: 'fact', label: 'fact（事实 / 接口）', when: '是什么 + 出处/依据' },
+  { id: 'trap', label: 'trap（陷阱 / 纠错）', when: '现象 → 根因 → 正确做法' },
+  { id: 'howto', label: 'howto（流程步骤）', when: '步骤清单' },
+  { id: 'decision', label: 'decision（决策 + 理由）', when: '结论 + 理由 + 边界' },
+  {
+    id: 'history',
+    label: 'history（历史进展归档·不参与检索）',
+    when: '（工具自动生成，不手工填写）',
+    reserved: true,
+  },
+]
+
+/** `kind` 的全部取值（含保留项）。 */
+export const ENTRY_KINDS: readonly string[] = ENTRY_KIND_DEFS.map((d) => d.id)
+
+/**
+ * ⭐⭐ **可以给模型选的**取值（**排除保留项**）—— 工具 schema 的 `enum` 用它。
+ *
+ * 🔴 为什么必须与 `ENTRY_KINDS` 分开：`history` 是**工具生成的**，
+ *    列进工具 schema 等于**邀请模型手工造一条**，而那种条目**不参与检索**。
+ */
+export const SELECTABLE_ENTRY_KINDS: readonly string[] = ENTRY_KIND_DEFS.filter(
+  (d) => d.reserved !== true,
+).map((d) => d.id)
+
+/** `kind` 的取值类型（⚠️ 收敛后仍是**编译期字面量联合**；第二步开放配置时会放宽成 `string`）。 */
+export type EntryKind = (typeof ENTRY_KIND_DEFS)[number]['id']
 
 /**
  * 判断一个值是否是合法的 `kind`。
+ *
+ * ⚠️ **第二步（词表运行期可配）时，本函数要能接受一份外部词表** ——
+ *    现在只读内置表，届时会加一个可选参数（调用点共 18 处，见 `kinds.ts` 的规划）。
  * @param value - 待判断的值。
  * @returns 是否为合法 kind。
  */
 export function isEntryKind(value: unknown): value is EntryKind {
-  return typeof value === 'string' && (ENTRY_KINDS as readonly string[]).includes(value)
+  return typeof value === 'string' && ENTRY_KINDS.includes(value)
+}
+
+/**
+ * ⭐ **取一种 kind 的"什么时候用它"**（提示词与报错文案共用一处）。
+ * @param id - kind 的 id。
+ * @returns 那句话；id 不认识 ⇒ 空串。
+ */
+export function entryKindWhen(id: string): string {
+  return ENTRY_KIND_DEFS.find((d) => d.id === id)?.when ?? ''
+}
+
+/**
+ * ⭐⭐ **一句话列出所有可选的 kind**（报错文案 / 工具描述共用）。
+ *
+ * ⚠️ 收敛前这句在 `handoff.ts` / `parse.ts` / `tools.ts` 里**各写了一遍**，
+ *    且**四处文案不一致**（有的带含义、有的只列 id）。
+ * @param sep - 分隔符（默认 ` / `）。
+ * @returns 形如 `fact / trap / howto / decision`。
+ */
+export function selectableKindList(sep = ' / '): string {
+  return SELECTABLE_ENTRY_KINDS.join(sep)
+}
+
+/**
+ * ⭐⭐ **`id 含义｜id 含义` 形式的一句话**（工具描述里给模型看的那种）。
+ *
+ * 收敛前这段串在 `tools.ts` 里**抄了三遍**（长得一模一样），
+ * 而那正是"加一个类型要改七处"里最容易漏的三处。
+ * @param sep - 条目之间的分隔符（默认 `｜`）。
+ * @returns 形如 `fact 是什么 + 出处/依据｜trap 现象 → 根因 → 正确做法｜…`。
+ */
+export function kindsInline(sep = '｜'): string {
+  return ENTRY_KIND_DEFS.filter((d) => d.reserved !== true)
+    .map((d) => `${d.id} ${d.when}`)
+    .join(sep)
 }
 
 /**
