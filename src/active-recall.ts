@@ -31,7 +31,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { loadEnIndex } from './en-index.ts'
 import type { EnIndex, EnIndexEntry } from './en-index.ts'
 import type { MemjConfig } from './config.ts'
-import { itemMinOf, needMinOf } from './config.ts'
+import { activeDecisionOf, itemMinOf, needMinOf } from './config.ts'
 // ⭐⭐⭐ 提示词运行期覆盖（本次新增）：登记默认值 + 取值。
 import { promptText, registerPromptDefault } from './prompts.ts'
 // ⭐⭐ 上下文组装 + 预算拆批（用户 2026-09-26 定稿方案）：
@@ -752,8 +752,16 @@ export async function callJev(opts: {
   sufficientGate: boolean
   searchIntentGate: boolean
   model: string
+  /**
+   * ⭐⭐ **本次要用的端点与凭据名**（2026-10-07 多 provider 化）。
+   * ⚠️ 由调用方从 `activeDecisionOf(config)` 解出来传进来 —— **不在这里自己读
+   *    `config.activeInjectJevEndpoint`**：那是旧单 provider 的键，
+   *    多 provider 下会指向错的端点（同族坑：`4a7b1931` 记过"走错端点"）。
+   */
+  endpoint: string
+  keyRef: string
 }): Promise<JevCallResult | undefined> {
-  const key = await resolveJevKey(opts.ctx, opts.config)
+  const key = await resolveJevKey(opts.ctx, opts.config, opts.keyRef)
   if (key === undefined) return undefined
   const state: Record<string, unknown> = {
     candidates: opts.pool.map((c, i) => ({
@@ -787,7 +795,7 @@ export async function callJev(opts: {
   const questionKeys = Object.keys(questions)
   const guard = deadline(undefined, opts.config.activeInjectTimeoutMs, 'MEMJ_ACTIVE_JEV_TIMEOUT')
   try {
-    const res = await fetch(opts.config.activeInjectJevEndpoint, {
+    const res = await fetch(opts.endpoint, {
       method: 'POST',
       headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: opts.model, state, questions }),
@@ -812,9 +820,17 @@ export async function callJev(opts: {
  *    ② `process.env[名字]`（⚠️ 隔离实例就是靠这条路 —— 用户裁定 A：
  *       **用环境变量注入，不把凭据文件复制进测试目录**）
  * ⚠️ **绝不把 key 写进日志/回执**（本项目已发生过密钥明文外泄）。
+ * @param keyRefOverride - ⭐⭐ **本次要用哪个凭据名**（2026-10-07 多 provider 化）。
+ *   由调用方从 `activeDecisionOf(config)` / `scoreDecisionOf(config)` 解出来传进来
+ *   —— 每条 provider **各用自己的派生名**（`deriveDecisionKeyRef`）。
+ *   ⚠️ 不传时回落到旧键 `activeInjectJevApiKeyEnv`（兼容老调用点与测试）。
  */
-export async function resolveJevKey(ctx: Context, config: MemjConfig): Promise<string | undefined> {
-  const name = config.activeInjectJevApiKeyEnv
+export async function resolveJevKey(
+  ctx: Context,
+  config: MemjConfig,
+  keyRefOverride?: string,
+): Promise<string | undefined> {
+  const name = (keyRefOverride ?? config.activeInjectJevApiKeyEnv ?? '').trim()
   if (name === '') return undefined
   try {
     const creds = ctx.get('credentials') as
@@ -1061,6 +1077,16 @@ async function recallViaJev(opts: {
 }): Promise<RecallOutcome> {
   const { ctx, config } = opts
   const batches = opts.plan.batches
+  // ⭐⭐ **本次要用哪条 provider**（端点 + 模型 + 派生凭据名）——**解一次、全程复用**。
+  //    ⚠️ 取值口径见 `activeDecisionOf`（选集优先、回落旧键）——
+  //       别在这里自己拼 `config.activeInjectJevEndpoint`（那是旧单 provider 的键）。
+  const pick = activeDecisionOf(config)
+  if (pick.endpoint === '' || pick.model === '') {
+    // ⚠️ 没配 provider 或没选模型 ⇒ **如实说清该去哪配**（别静默不注入）。
+    return emptyOutcome({
+      skipped: '未配置决策模型（或该 provider 下没有模型）⇒ 去「设置 → 决策模型配置」里加一个 provider 并选模型。',
+    })
+  }
   /**
    * ⭐⭐ **并发发出全部批次**（实测：拆两批的墙钟 ≈ 单批，因为瓶颈是网关排队而不是模型计算 ——
    *    实测 96 条单批 2013ms vs 拆两批并发 1958ms，比值 0.97×）。
@@ -1084,7 +1110,12 @@ async function recallViaJev(opts: {
         pool: batch,
         sufficientGate: config.activeInjectSufficientGate,
         searchIntentGate: config.activeInjectSearchIntentGate,
-        model: config.activeInjectModel,
+        // ⭐⭐⭐ 多 provider：模型 / 端点 / 凭据名**都来自本次选中的那条 provider**。
+        //    ⚠️ 取值口径见 `activeDecisionOf`（选集优先、旧键回落）——
+        //       别在这里自己拼，也别读旧的 `activeInjectJevEndpoint`（那是单 provider 时代的键）。
+        model: pick.model,
+        endpoint: pick.endpoint,
+        keyRef: pick.keyRef,
       })
       batchMs[bi] = Date.now() - t0
       // ⭐ B 档：只有**开了开关**才留快照（默认关 —— 每步数十 KB，几轮就能写爆磁盘）。

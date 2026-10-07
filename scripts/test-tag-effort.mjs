@@ -164,7 +164,14 @@ console.log('\n【6】⭐ 面板与接口接线（漏一个就静默失效）')
   check('  HTML 选项含空串（不传）', /id="tag-effort"[\s\S]{0,600}value=""/.test(html))
   check('  app.js **回填**（读到面板）', js.includes(`getElementById('tag-effort')`))
   check('  app.js **提交**该键', js.includes('tagNormalizeReasoningEffort:'))
-  check('  api.ts GET 回读该键', api.includes('tagNormalizeReasoningEffort: r.config.tagNormalizeReasoningEffort'))
+  // ⚠️ 2026-10-07：GET 回显改成**磁盘优先**（`cfg` = `effectiveConfig(r)`）——
+  //    原来是写死 `r.config.`，那正是"存完弹回旧值"的病根。
+  //    ⇒ 断言认**两种**来源都行（否则每次调回显口径都要改测试），
+  //      真正要钉住的是"这个键被回读了"，见下一条。
+  check('  api.ts GET 回读该键',
+    /tagNormalizeReasoningEffort:\s*(cfg|r\.config)\.tagNormalizeReasoningEffort/.test(api))
+  check('  ⭐⭐ GET /settings 走**磁盘优先**的回显口径（`effectiveConfig`）',
+    api.includes('const cfg = effectiveConfig(r)'))
   check('  api.ts POST 校验该键（受控枚举）', api.includes(`['', 'off', 'low', 'medium', 'high'].includes`))
   check('  ⭐⭐ 该键进了"至少给一个"的条件（上一批漏过这个，返 400）',
     api.includes('!wantsTagEffort'))

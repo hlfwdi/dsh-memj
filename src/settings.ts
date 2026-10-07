@@ -55,8 +55,22 @@ export type PatchReload = 'live' | 'startup' | 'unknown'
 
 /** 设置的读取结果。 */
 export interface SettingsReadResult {
-  /** 当前生效的完整配置（已含默认值）。 */
+  /**
+   * ⚠️ **进程内那一刻的生效配置**（`apply()` 拿到的第二参，已含默认值）。
+   *
+   * 🔴 **它不等于"磁盘上写着什么"**：写盘（`writeSetting`）不会回头更新它，
+   *    要等下一次**热重载/重启**才变。⇒ **面板要显示"刚存下的值"就必须用
+   *    `explicit`**（见 `effectiveConfig`），否则会出现"存完立刻弹回旧值"。
+   */
   config: MemjConfig
+  /**
+   * ⭐⭐ **磁盘上显式写了**的键值（`- id: dsh-memj` 那条的 `config` 原样）。
+   *
+   * ⚠️ 只含**显式写了**的键 —— 没写的键不在这里（它们走 `config` 的默认/回落值）。
+   * 🔴 **判断"写没写"必须用 `Object.hasOwn`，不能用取值真伪**：
+   *    `false` / `0` / `''` 都是**合法且显式**的值（本项目同族坑）。
+   */
+  explicit: Record<string, unknown>
   /** ⭐ patch 文件的绝对路径；拿不到时为 `''`。 */
   patchPath: string
   /** 该文件当前是否存在。 */
@@ -107,20 +121,42 @@ export function patchPathFrom(baseUrl: unknown): string {
 
 /**
  * 读 profile 的 `patchReload` 设置（决定改完要不要重启）。
+ *
+ * ── 🔴🔴 为什么"没写"必须回 `live` 而不是 `unknown`（2026-10-07 实测纠正）──────
+ * 这条以前回 `unknown`，理由是"不猜"。**那是错的**，两代 DSH 都明确说"没写 = 热重载"：
+ *
+ * | 版本 | `patchReload` 字段 | 没写时的语义 |
+ * |---|---|---|
+ * | 0.1.5 | 存在，**可选**（`'live' \| 'startup'`） | 类型注释原文：*"omitted means `live` for custom profiles"*，且 `DEFAULT_PROFILE_PATCH_RELOAD = 'live'` |
+ * | 0.2.0-rc.2 | **该字段已被整个删除** | patch 文件由 `dsh-hmr` **无条件**监听（`watchConfig()` 没有任何开关判断）⇒ **恒为 live** |
+ *
+ * ⇒ ⭐ **两代里"没写"都等于 `live`**，所以这里没有可"猜"的余地。
+ *
+ * 🔴 **误报的实际后果**（用户 2026-10-07 问出来的）：面板把 `unknown` 渲染成
+ *    「读不到本 profile 的热重载策略：保存后可能需要重启才生效」，
+ *    而**实测 10/10 项设置都在 ~0.5–2.5 秒内热生效**（探针见
+ *    `scripts/probe-hotreload-matrix.mjs`）⇒ **界面在说谎**，用户会去白重启。
+ *    ⚠️ 这与本项目既有那条教训同族："**默认值必须通过它自己的校验**"——
+ *      这里的形态是"**默认值必须是真实的默认值**"，把"文档写明的默认"报成
+ *      "读不到"，等于让界面永远给出错误的保守建议。
+ *
+ * ⚠️ 显式写了的 `'startup'` **仍然照实回**（0.1.5 上是用户刻意的选择）。
  * @param profileDir - profile 目录。
- * @returns `'live'` / `'startup'` / `'unknown'`。
+ * @returns `'live'` / `'startup'`。
  */
 async function readPatchReload(profileDir: string): Promise<PatchReload> {
+  // ⚠️ 路径拿不到时才回 `unknown` —— 那种情况下我们**确实**无从判断，
+  //    而"无从判断"与"文档写明是 live"是两件事，不能混为一谈。
   if (profileDir === '') return 'unknown'
   try {
     const text = await readFile(`${profileDir}package.json`, 'utf8')
     const pkg = JSON.parse(text) as { dsh?: { profile?: { patchReload?: unknown } } }
     const raw = pkg.dsh?.profile?.patchReload
     if (raw === 'live' || raw === 'startup') return raw
-    // 未显式声明时，自定义 profile 默认 live（`DEFAULT_PROFILE_PATCH_RELOAD`）；
-    // 但**不猜**——回 unknown 让人知道"没读到"。
-    return 'unknown'
+    // ⭐ 没写 / 值不认识 ⇒ **`live`**（理由见上方表格：两代都如此）。
+    return 'live'
   } catch {
+    // ⚠️ 读不到文件 = 无从判断（与"没写这个键"不同）⇒ 如实回 unknown。
     return 'unknown'
   }
 }
@@ -176,6 +212,7 @@ export async function readSettings(
   const patchReload = await readPatchReload(dir)
 
   let explicitKeys: string[] = []
+  let explicit: Record<string, unknown> = {}
   let exists = false
   let error = ''
 
@@ -194,7 +231,10 @@ export async function readSettings(
         const toJSON = (cfg as { toJSON?: () => unknown } | undefined)?.toJSON
         if (typeof toJSON === 'function') {
           const obj = toJSON.call(cfg)
-          if (obj !== null && typeof obj === 'object') explicitKeys = Object.keys(obj as object)
+          if (obj !== null && typeof obj === 'object') {
+            explicit = obj as Record<string, unknown>
+            explicitKeys = Object.keys(explicit)
+          }
         }
       }
     } catch (err) {
@@ -206,12 +246,53 @@ export async function readSettings(
 
   return {
     config,
+    explicit,
     patchPath,
     patchExists: exists,
     explicitKeys,
     patchReload,
     error,
   }
+}
+
+/**
+ * ⭐⭐⭐ **"磁盘上写了就按磁盘"** 的生效配置（供设置面板回显）。
+ *
+ * 🔴🔴 **为什么必须有这一步**（2026-10-07 实测复现的真 bug）：
+ *   `readSettings` 回显的是 `deps.config` —— 那是 **`apply()` 那一刻解析出来的**
+ *   进程内配置。而 `writeSetting` 只改文件，**不会**回头更新它；要等下一次
+ *   **热重载/重启**才变。
+ *   ⇒ 用户在面板上选好「裁决模型」→ 点保存（**写盘成功了**）→ 面板**立刻**
+ *     重新拉 `/settings` → 拿到**旧值** → 把下拉框重新填回旧值
+ *      ⇒ 用户看到的正是「**存完就弹回默认**」。
+ *   ⚠️ 而且它会**真的丢数据**：控件被填回旧值后，用户再点一次保存（或保存别的项
+ *      时把这一项一起带上）⇒ **旧值被写回磁盘**，用户的选择被静默抹掉。
+ *      （实测：`user-pick` → 面板回显旧值 → 再存一次 ⇒ 磁盘变回旧值。）
+ *
+ * ⭐ **口径 = 磁盘显式值优先、进程配置兜底**：
+ *   · 磁盘**显式写了**这个键 ⇒ 用磁盘那份（那正是用户刚存下的值）；
+ *   · 没写 ⇒ 用 `config` 里的值（含默认值与"旧键回落"的生效值）。
+ *   ⚠️ **兜底那一半不能省**：本项目多处键有"回显**生效值**"的约定
+ *      （如 `activeInjectNeedMin` 由旧键 `activeInjectBand` 回落而来）——
+ *      一律只认磁盘会让那些键显示成空白/默认。
+ * ⭐ **做成"合并出一份配置"而不是"逐键取值"**（本项目铁律：实现只留一份）：
+ *   调用方拿到的是一份**普通 `MemjConfig`**，于是既有的回落函数
+ *   （`needMinOf` / `itemMinOf` / `maxInjectionsPerTurn`）**原样可用**、
+ *   也不必在 40 个键上各写一遍（漏一个就留一个"存完弹回"的键）。
+ *
+ * 🔴 **"写没写"必须用 `Object.hasOwn` 判**，不能用取值真伪：
+ *    `false` / `0` / `''` 都是**合法且显式**的值（本项目同族坑，
+ *    见 `api.ts` 里"布尔键必须用 `!== undefined` 判存在性"的注释）。
+ * @param r - `readSettings` 的结果。
+ * @returns 面板应当显示的配置（磁盘显式值覆盖进程内那份）。
+ */
+export function effectiveConfig(r: SettingsReadResult): MemjConfig {
+  if (r.explicitKeys.length === 0) return r.config
+  // ⚠️ 只覆盖**磁盘上显式写了**的键 —— 不能整份 `{ ...explicit }` 替换：
+  //    `explicit` 里没有的键（走默认/回落值的）必须继续由 `config` 提供。
+  const merged: Record<string, unknown> = { ...(r.config as unknown as Record<string, unknown>) }
+  for (const k of r.explicitKeys) merged[k] = r.explicit[k]
+  return merged as unknown as MemjConfig
 }
 
 /** 写入结果。 */
@@ -309,6 +390,11 @@ export async function writeSetting(
     | 'activeInjectModel'
     | 'activeInjectScope'
     | 'activeInjectJevNarrowScope'
+    // ⭐⭐⭐ 决策模型（JEV）配置（用户 2026-10-07）：端点 / 凭据名 / 两条 jev 通路共用的模型名。
+    //    ⚠️ **密钥不在这个白名单里** —— 它走凭据 seam（`/jev/key`），**不进 patch 文件**。
+    | 'activeInjectJevEndpoint'
+    | 'activeInjectJevApiKeyEnv'
+    | 'jevModel'
     | 'activeInjectStrict'
     | 'activeInjectTopK'
     // ⭐⭐ 2026-09-29：`activeInjectBand` 拆成两个键（它原来一个键兼两个语义）。
@@ -341,8 +427,19 @@ export async function writeSetting(
     // ⚠️ 已作废（召回路径不再读它）—— 保留字段，避免已写进 patch 的值变成未知键
     | 'activeInjectPoolMin'
     // ⭐⭐ 召回日志的"请求快照"档（B 档；2026-09-27）—— 默认关，要复现问题时临时打开。
-    | 'activeRecallLogRequest',
-  value: string | number | boolean,
+    | 'activeRecallLogRequest'
+    // ⭐⭐⭐ 决策模型（2026-10-07 多 provider 化，用户要求）：provider 列表 + 两处选集。
+    | 'decisionProviders'
+    | 'activeInjectDecisionPick'
+    | 'hotScoreDecisionPick',
+  /**
+   * 新值。
+   * ⭐⭐ **2026-10-07 放宽到也收数组/对象**：`decisionProviders` 是
+   *    `Array<{id, displayName, endpoint, models}>`（用户要求"多 provider"）。
+   *    ⚠️ 放宽的只是**这个入口的类型**，**逐键校验仍在 `api.ts`**（那里才是契约）——
+   *    别以为这里不校验就可以随便传。
+   */
+  value: string | number | boolean | unknown[] | Record<string, unknown>,
   entryId: string = DEFAULT_ENTRY_ID,
 ): Promise<SettingsWriteResult> {
   const dir = profileDirFrom(baseUrl)

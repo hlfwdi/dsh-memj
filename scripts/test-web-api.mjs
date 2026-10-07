@@ -500,6 +500,60 @@ check('  非字符串也拒绝',
 check('DELETE /settings ⇒ 405', (await callWithBase('DELETE', '/plugins/dsh-memj/api/settings')).status === 405)
 
 // ══════════════════════════════════════════════════════════════════════
+console.log('\n【8.1】⭐⭐⭐ 回显必须"磁盘优先"（2026-10-07 用户报的真 bug）')
+// ══════════════════════════════════════════════════════════════════════
+// 🔴🔴 **这条钉住的是什么**（用户在设置页上看到的原话："裁决模型我设定完，
+//    然后保存的时候又变成默认的了"）：
+//    `GET /settings` 原来回的是 **`deps.config`** —— 即 `apply()` 那一刻解析出来的
+//    **进程内**配置。而 `writeSetting` **只改文件**、不回头更新它，
+//    要等热重载/重启才变。
+//    ⇒ 面板保存后**立刻**重新拉 `/settings`（`openSettingsPage` 就在做这件事）
+//      ⇒ 拿到**旧值** ⇒ 控件被填回旧值 ⇒ 用户看到"存完就弹回默认"。
+//    ⚠️ 更坏的是它**真的丢数据**：控件填回旧值后，用户再点一次保存
+//      ⇒ **旧值被写回磁盘**，用户的选择被静默抹掉。
+//
+// ⭐ 判据（**这是本次修复的核心**）：
+//    POST 一个值 ⇒ **同一进程、立刻** GET ⇒ 必须回**刚写进去的那个值**。
+//    🔴 它在旧实现下**必然失败**（回的是 `DEFAULT_CONFIG` 里的空串），
+//      所以这条测试是**真的能抓住回归**的，不是形式主义。
+{
+  // 前置：确认进程内那份配置里**没有**这个值（否则测不出"磁盘优先"）
+  check('  前置：进程内配置的 tagNormalizeProvider 是默认值（空串）',
+    mod.DEFAULT_CONFIG.tagNormalizeProvider === '', String(mod.DEFAULT_CONFIG.tagNormalizeProvider))
+
+  const wr = await callWithBase('POST', '/plugins/dsh-memj/api/settings', {
+    tagNormalizeProvider: 'disk-prov',
+    tagNormalizeModel: 'disk-model',
+  })
+  check('  POST 裁决模型 ⇒ 200', wr.status === 200, `实际 ${wr.status}`)
+  check('  ⭐ 值已写进文件', /tagNormalizeProvider:\s*"?disk-prov"?/.test(readFileSync(patchFile, 'utf8')))
+
+  // 🔴 核心断言：**立刻** GET，必须回刚写的值（进程内那份还是旧的）
+  const immediately = await callWithBase('GET', '/plugins/dsh-memj/api/settings')
+  check('⭐⭐⭐ POST 后**立刻** GET ⇒ 回的是**刚写进去的值**（不是进程内的旧值）',
+    immediately.body.tagNormalizeProvider === 'disk-prov'
+      && immediately.body.tagNormalizeModel === 'disk-model',
+    `实际 ${immediately.body.tagNormalizeProvider}/${immediately.body.tagNormalizeModel}`)
+
+  // ⭐ 反证：**没写过的**键仍走进程内配置（保住"旧键回落生效值"那类回显）
+  //    ⚠️ 少了这半边，"磁盘优先"会退化成"只认磁盘" —— 那些靠回落算出来的键会变空。
+  check('⭐⭐ 反证：磁盘上没写的键**仍回进程内配置**（回落值不能丢）',
+    immediately.body.hotSessionKeep === mod.DEFAULT_CONFIG.hotSessionKeep,
+    `${immediately.body.hotSessionKeep} vs ${mod.DEFAULT_CONFIG.hotSessionKeep}`)
+
+  // ⭐⭐ 布尔 `false` 也必须能"磁盘优先"读到（同族坑：别用取值真伪判"写没写"）
+  await callWithBase('POST', '/plugins/dsh-memj/api/settings', { tagNormalizeOnHandoff: false })
+  const boolBack = await callWithBase('GET', '/plugins/dsh-memj/api/settings')
+  check('⭐⭐ 显式 false 也走磁盘优先（不能因"假值"而回落）',
+    boolBack.body.tagNormalizeOnHandoff === false, String(boolBack.body.tagNormalizeOnHandoff))
+
+  // 收尾：恢复成默认，别把状态留给后面的用例
+  await callWithBase('POST', '/plugins/dsh-memj/api/settings', {
+    tagNormalizeProvider: '', tagNormalizeModel: '', tagNormalizeOnHandoff: true,
+  })
+}
+
+// ══════════════════════════════════════════════════════════════════════
 console.log('\n【9】⭐⭐ 备份两个开关（决策 135）')
 // ══════════════════════════════════════════════════════════════════════
 // 🔴 本段的重点是那条**布尔值最容易踩的坑**：

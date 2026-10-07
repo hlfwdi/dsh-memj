@@ -12,6 +12,40 @@
  */
 
 import z from '@deepseek-ai/schemastery'
+// ⭐⭐⭐ 类型也要 import（**只为给下面那个具名子 schema 加注解**）——
+//    🔴 不加注解时 `Config` 的推断类型**无法被命名**（TS2742），
+//       `tsdown` 生成 `.d.ts` 会**直接构建失败**。⚠️ 详见 `DecisionProviderSchema` 的注释。
+import type Schemastery from '@deepseek-ai/schemastery'
+
+/**
+ * ⭐⭐⭐ **一个决策模型 provider 的 schema**（2026-10-07 多 provider 化）。
+ *
+ * 🔴🔴 **为什么既要抽成具名常量、又要显式标注类型**（两步都必需，已实测）：
+ *    · **内联**在 `Config` 里 ⇒ 推断类型**无法被命名**（TS2742）；
+ *    · 只抽成具名常量、**不加类型注解** ⇒ **仍然报 TS2742**（实测）；
+ *    · 抽出来 + `: Schemastery<{...}>` 注解 ⇒ 通过（实测）。
+ *    不加注解时 `tsdown` 生成 `.d.ts` 会**直接构建失败**，报：
+ *    *"The inferred type of 'Config' cannot be named without a reference to
+ *    `.pnpm/@deepseek-ai+cosmokit@…`. This is likely not portable."*
+ *    ⭐ 判据：**嵌套 schema 要具名 + 标注类型**（`z.array(z.object(...))` 在本项目是首次）。
+ *    ⚠️ 根因是 schemastery 的 `Schema<S, T>` 有两个泛型参数，内联时其中一个
+ *       （`S`，来自 cosmokit）落到声明文件里就**成了不可移植的引用**。
+ */
+const DecisionProviderSchema: Schemastery<{
+  id: string
+  displayName: string
+  endpoint: string
+  models: string[]
+}> = z.object({
+  /** 路由标识（同一份配置里不得重名）。 */
+  id: z.string(),
+  /** 显示名（空 ⇒ 显示 id）。 */
+  displayName: z.string().default(''),
+  /** 该 provider 的端点。 */
+  endpoint: z.string(),
+  /** 该 provider 下的模型名列表。 */
+  models: z.array(z.string()).default([]),
+})
 
 /** 插件配置。 */
 export const Config = z.object({
@@ -727,11 +761,69 @@ export const Config = z.object({
    *    （`settings.yaml` 里把 `jev-latest` 声明成普通 chat 模型，选它会 400
    *    —— `README-JEV-RECALL.md` 踩坑 2/3）⇒ 只能**直连**。
    * ⭐ 而直连**天然不经过 `llm/stream`** ⇒ 不会触发自己的监听器（无递归风险）。
+   *
+   * 🔴🔴 **2026-10-07：这两个键已被 `decisionProviders` 取代**（用户要求
+   *    "可以配置多个决策型模型，有不同的 provider 和对应的模型"）。
+   *    ⚠️ **仍然保留**：一是旧 patch 里可能有值（删了会变未知键），
+   *    二是 `decisionProviders` 为空时**回落到它们**（"改名不丢旧值"的既有纪律）。
+   *    ⇒ 新代码**不要**直接读它们，走 `decisionProviderOf()`。
    */
   activeInjectJevEndpoint: z.string().default('https://api.knox.chat/v1/systemone'),
 
   /** JEV 凭据的**环境变量名**（用 `ctx.credentials.resolve()` 取，**不落盘、不打日志**）。 */
   activeInjectJevApiKeyEnv: z.string().default('KNOX_API_KEY'),
+
+  /**
+   * ⭐⭐⭐ **JEV 决策模型的模型名**（用户 2026-10-07 要求"统一配置的地方"）。
+   *
+   * ⚠️ **取值口径（新键优先、旧键回落）**：本键为空时回落到各功能自己的键
+   *    —— 免得已写在 `cordis.patch.yml` 里的旧值被静默丢弃。
+   * ⚠️ **形态是【纯模型名】**（网关下的名字，如 `jev-latest`），**不是** `provider/model`。
+   * 🔴 **2026-10-07 晚：已被 `decisionProviders` 取代**（同上面那两个键的处置）。
+   */
+  jevModel: z.string().default('jev-latest'),
+
+  /**
+   * ⭐⭐⭐ **决策模型提供商**（用户 2026-10-07 要求，照 DSH 官方「模型」页同构）。
+   *
+   * ── 用户原话 ─────────────────────────────────────────────────────────
+   * > *"就也应该像 dsh 官方的模型设置一样，而且可以配置多个决策型模型。
+   * >   有不同的 provider，和对应的模型才对啊。"*
+   * > *"就跟翻译模型这个类似。"*（指那个按 provider 分组的 optgroup 下拉）
+   *
+   * ── 形态（照官方 `llm-pi-ai` 的 provider profile 同构）────────────────
+   * 每个 provider 一条：
+   * | 字段 | 说明 |
+   * |---|---|
+   * | `id` | 路由标识（如 `knox`）—— 🔴 **凭据名由它派生**（`knox` → `KNOX_API_KEY`） |
+   * | `displayName` | 给人看的名字（空则显示 id） |
+   * | `endpoint` | 该 provider 的端点（如 `https://api.knox.chat/v1/systemone`） |
+   * | `models` | **该 provider 下的模型名列表**（决策模型的"目录"） |
+   *
+   * 🔴 **为什么不做成"协议"字段**：官方那页要 `protocol` 是因为它通用
+   *    （OpenAI/Anthropic/Responses 都得声明）。而本页**只服务决策模型**这一种
+   *    形态（`{model,state,questions}` → `{answers:{…:noul}}`）⇒ 协议是**固定的**，
+   *    给用户一个只有一个选项的下拉框是**假选择**。
+   *    ⚠️ 将来真接第二种决策协议时再加（那时加才是有意义的）。
+   *
+   * ⭐ **凭据名派生规则与官方一致**（`deriveDecisionKeyRef`）：`<ID>_API_KEY`
+   *    （大写、非字母数字换下划线）⇒ `knox` → **`KNOX_API_KEY`**
+   *    （与旧键 `activeInjectJevApiKeyEnv` 的默认值**恰好相同** ⇒ 无缝迁移）。
+   *    ⭐ 官方文档原话：*"页面从不询问环境变量名"* —— 本页照做。
+   */
+  decisionProviders: z.array(DecisionProviderSchema).default([]),
+
+  /**
+   * ⭐⭐ **两条决策通路各自选中的"provider/model"**（用户 2026-10-07 要求）。
+   *
+   * 用户原话：*"和现在的 dsh 模型一样放在一起去选。就不要通路筛选了，
+   *   就选决策型通路的时候，也给全列表。让用户判断是否是决策性模型，是否匹配通路。"*
+   * ⇒ 这两个键存 **`<providerId>/<modelName>`**，与 chat 通路的
+   *    `activeInjectModel` / `hotScoreModel` **同形**（都是 `provider/model`）。
+   * ⚠️ 空 = 未选（该通路不生效）。回落顺序见 `decisionPickOf()`。
+   */
+  activeInjectDecisionPick: z.string().default(''),
+  hotScoreDecisionPick: z.string().default(''),
 })
 
 /** 解析后的配置类型（schemastery 用 `TypeT`，**没有** `z.infer`）。 */
@@ -936,4 +1028,137 @@ export const DEFAULT_CONFIG: MemjConfig = {
   activeInjectPoolMin: 10,
   activeInjectJevEndpoint: 'https://api.knox.chat/v1/systemone',
   activeInjectJevApiKeyEnv: 'KNOX_API_KEY',
+  // ⭐ 两条 jev 通路共用的模型名（空则回落到各功能自己的键）。
+  jevModel: 'jev-latest',
+  decisionProviders: [],
+  activeInjectDecisionPick: '',
+  hotScoreDecisionPick: '',
+}
+
+/** 一个决策模型 provider（= `decisionProviders` 的元素）。 */
+export interface DecisionProvider {
+  id: string
+  displayName: string
+  endpoint: string
+  models: string[]
+}
+
+/**
+ * ⭐⭐⭐ **由 provider id 派生凭据名**（**与 DSH 官方同一条规则**）。
+ *
+ * 官方文档原话：*"页面从不询问环境变量名"* —— 它把 typed key 存到
+ * `<ROUTE>_API_KEY` 这个**派生**出来的引用下。本页照做。
+ * ⚠️ 好处是 `knox` → **`KNOX_API_KEY`**，与本插件旧键
+ *    `activeInjectJevApiKeyEnv` 的**默认值恰好相同** ⇒ 无缝迁移。
+ * @param providerId - provider 路由 id（如 `knox`、`my-gw`）。
+ * @returns 凭据名（POSIX 环境变量名形态）。
+ */
+export function deriveDecisionKeyRef(providerId: string): string {
+  const stem = providerId.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+  return `${stem === '' ? 'DECISION' : stem}_API_KEY`
+}
+
+/**
+ * ⭐⭐ **决策模型 provider 的"生效列表"**（**唯一出处**）。
+ *
+ * 取值口径（**别改顺序**）：
+ *   ① `decisionProviders`（**新键**，用户在页面上配的多 provider 列表）；
+ *   ② 为空时 ⇒ **回落成单条旧配置**（`activeInjectJevEndpoint` +
+ *      `activeInjectJevApiKeyEnv` + `jevModel`）—— 免得旧 patch 里的值被静默丢弃。
+ *      ⭐ 回落出来的那条 `id` 取 `knox`（于是派生名正好是 `KNOX_API_KEY`）。
+ * ⚠️ **做成一个函数**而不是让两处各自拼：本项目铁律"判据只写一份"。
+ * @param config - 生效配置。
+ * @returns provider 列表（**永远非空**；至少回落到那一条旧配置）。
+ */
+export function decisionProvidersOf(config: {
+  decisionProviders?: DecisionProvider[]
+  activeInjectJevEndpoint?: string
+  activeInjectJevApiKeyEnv?: string
+  jevModel?: string
+}): DecisionProvider[] {
+  const list = (config.decisionProviders ?? []).filter((p) => p.id.trim() !== '')
+  if (list.length > 0) return list
+  // ── 回落：把三条旧键拼成一条 provider ──
+  const endpoint = (config.activeInjectJevEndpoint ?? '').trim()
+  const model = (config.jevModel ?? '').trim()
+  // ⚠️ 端点与模型都空 ⇒ 真的没配，回空列表（别再编一条出来）。
+  if (endpoint === '' || model === '') return []
+  // ⚠️ 旧键的凭据名可能是别的（用户手工改过）⇒ **照实带着它**，不强行派生
+  //    （否则会去一个不存在的名字下找密钥 ⇒ 静默取不到值）。
+  return [{ id: 'knox', displayName: '', endpoint, models: [model] }]
+}
+
+/**
+ * ⭐⭐ **某一列 provider 里，某个"选集"指向哪一条**（消费者侧的唯一解析入口）。
+ *
+ * 选集形态 = `<providerId>/<modelName>`（与 chat 通路的 `provider/model` **同形**）。
+ * ⚠️ 回落顺序：选集本身 → 该 provider 的**第一个模型** → 空字符串（= 未选）。
+ * @param providers - `decisionProvidersOf()` 的结果。
+ * @param pick - 选集字符串（`<providerId>/<modelName>`）。
+ * @param fallbackProviderId - 选集为空时用哪个 provider 兜底（`'knox'` 等）。
+ * @returns `{provider, model, endpoint, keyRef}`；选不出时 `provider/model` 为空。
+ */
+export function resolveDecisionPick(
+  providers: DecisionProvider[],
+  pick: string,
+  fallbackProviderId = 'knox',
+): { provider: string; model: string; endpoint: string; keyRef: string } {
+  const raw = (pick ?? '').trim()
+  let pid = ''
+  let model = ''
+  if (raw !== '') {
+    const i = raw.indexOf('/')
+    // ⚠️ 用**首个 `/`** 拆（模型名本身可能含 `/`，如 `tencent/Hunyuan-MT-7B`）。
+    if (i > 0 && i < raw.length - 1) {
+      pid = raw.slice(0, i)
+      model = raw.slice(i + 1)
+    } else {
+      // 没有 `/` ⇒ 当作"裸模型名"，在 providers 里找它属于谁（兼容旧形态）。
+      const hit = providers.find((p) => p.models.includes(raw))
+      if (hit !== undefined) {
+        pid = hit.id
+        model = raw
+      }
+    }
+  }
+  // 找不到指定的 provider ⇒ 回落到兜底那条（或第一条）。
+  const prov = providers.find((p) => p.id === pid)
+    ?? providers.find((p) => p.id === fallbackProviderId)
+    ?? providers[0]
+  if (prov === undefined) return { provider: '', model: '', endpoint: '', keyRef: '' }
+  const m = model !== '' && prov.models.includes(model)
+    ? model
+    : (prov.models[0] ?? '')
+  return {
+    provider: prov.id,
+    model: m,
+    endpoint: prov.endpoint,
+    keyRef: deriveDecisionKeyRef(prov.id),
+  }
+}
+
+/**
+ * ⭐ **主动注入（召回）那条通路当前选中的决策模型**。
+ *
+ * 回落：`activeInjectDecisionPick`（新）→ `activeInjectModel`（旧，可能是裸模型名）。
+ */
+export function activeDecisionOf(config: MemjConfig): {
+  provider: string; model: string; endpoint: string; keyRef: string
+} {
+  const providers = decisionProvidersOf(config)
+  const pick = (config.activeInjectDecisionPick ?? '').trim() !== ''
+    ? config.activeInjectDecisionPick
+    : (config.activeInjectModel ?? '').trim()
+  return resolveDecisionPick(providers, pick, 'knox')
+}
+
+/** ⭐ **轮末评分那条通路当前选中的决策模型**（回落：`hotScoreModel`）。 */
+export function scoreDecisionOf(config: MemjConfig): {
+  provider: string; model: string; endpoint: string; keyRef: string
+} {
+  const providers = decisionProvidersOf(config)
+  const pick = (config.hotScoreDecisionPick ?? '').trim() !== ''
+    ? config.hotScoreDecisionPick
+    : (config.hotScoreModel ?? '').trim()
+  return resolveDecisionPick(providers, pick, 'knox')
 }

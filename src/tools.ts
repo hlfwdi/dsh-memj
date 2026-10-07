@@ -1024,6 +1024,34 @@ export function registerTools(deps: ToolDeps): void {
               '会被**直接拒绝**，而不是静默忽略。',
           },
           projectDesc: { type: 'string', description: '项目描述（新建该项目时必填，≤200 字符）。' },
+          // ⭐⭐ **2026-10-07 补暴露**：`template` 在 `HandoffRequest`（handoff.ts）里
+          //    与 `runHandoff` 的实现里**一直都在**，但**从没进过这份 schema** ⇒
+          //    模型看不到它、也就无从在"新建项目"时挑模板。
+          //    实测后果：库里明明有 `company-deep-research` 这类自定义模板，
+          //    新建项目却**只能**落到默认六节，且没有任何环节会问一句 ——
+          //    用户 2026-10-07 就是照这个现象问上来的。
+          //    ⚠️ 之所以现在才发现：`memj_template` 的说明里写着"在 `memj_handoff` 里传
+          //    `template`"，两边对不上，而**没有任何机制校验"文档说要传的参数真的存在"**
+          //    （`scripts/shared/prompt-ledger.mjs` 只对账**工具名**，不对账参数）。
+          //
+          // ⚠️ **本字段属于"参数说明"** ⇒ 按决策 124「能搬就必须搬」，说明写在这里，
+          //    **不占 `MEMJ_HANDOFF_DESCRIPTION` 的 5200 预算**（那条判据见
+          //    `scripts/test-prompt-split.mjs`：它是**软阈值**，不是保存硬校验）。
+          //
+          // ⚠️ 行为**只在新建项目那一刻有效**：项目已存在 ⇒ 本参数**被忽略**
+          //    （`handoff.ts:399-403`，用户 2026-09-30 裁定"模板绝不回溯已有文档"）。
+          template: {
+            type: 'string',
+            description:
+              '⭐ **新建项目时用哪份交接文档模板**（决定建档的节名与节数）；**缺省 = `default`**。\n' +
+              '🔴 **只在「新建项目」那一刻有效**：项目**已存在** ⇒ 本参数**被忽略** ⇒\n' +
+              '   **模板绝不回溯已有文档**（要换结构只能新建项目，这是有意的）。\n' +
+              '📋 **有哪些可选**：用 `memj_template({ action: \'list\' })` 查（每份都有 id 与节清单）。\n' +
+              '⚠️ 传了不存在的 id ⇒ 工具会报错并列出可用模板，**不会静默回落**。\n' +
+              '💡 **什么时候该挑**：当本次要建的项目明显属于某类已有专门模板时\n' +
+              '   （例如公司深度研究用 `company-deep-research`）⇒ **先 list 再挑**，\n' +
+              '   或**问用户**要用哪份；别默认套六节。',
+          },
           doc: {
             type: 'string',
             description:

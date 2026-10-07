@@ -1771,6 +1771,18 @@ footer {
   padding-top: 14px;
   border-top: 1px solid var(--border);
 }
+/* ⭐⭐ **版块内的保存区**（2026-10-07：沉淀页拆成按版块保存）。
+ * 🔴 与页面级 `.set-foot` 的区别：它**紧跟在某一个小节的内容后面**，
+ *    所以上边距更小、分隔线更淡 —— 否则一节里有 2~3 个 `.set-item` 时，
+ *    这条线和节与节之间的线**一样重**，看起来像"又开了一节"（实测截图踩到）。
+ * ⚠️ 它是 `.set-foot` 的**修饰类**（同时带两个类），不另造一套 —— 本项目铁律"实现只留一份"。 */
+.set-foot-inline {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+/* 版块内的保存按钮**小一号**：一屏里会出现 4 个，等大按钮会喧宾夺主。 */
+.set-foot-inline .set-save { font-size: 12.5px; padding: 4px 12px; }
 .set-msg { font-size: 12.5px; }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -2495,6 +2507,79 @@ dialog.prompt-dlg:not([open]) { display: none; }
   color: var(--dsw-alias-state-warning-primary, #b8860b); font-size: 13px;
 }
 .tpl-warnings ul { margin: 0; padding-left: 18px; }
+
+/* ⭐⭐⭐ 「你配的这个模型已经不在可用清单里了」告警（2026-10-07 用户裁定）。
+ * 🔴 **它取代了旧做法**：过去把失效模型**当成一个 option 插进下拉框**，
+ *    那等于把一个错误状态伪装成合法选项 —— 用户以为能用，实际跑不通
+ *    （实测：翻译模型 `sf/…` 已消失，**155 条知识全部翻译失败**而界面极不显眼）。
+ * ⭐ 用 `.notice.warn`（既有的告警条）**再压一压尺寸** ——
+ *    它紧跟在某个 `<select>` 后面，不该像页面级通知那么大。
+ * ⚠️ 只改**尺寸与间距**，颜色一律沿用 `.notice.warn` 的令牌（暗色主题要自动适配）。 */
+.model-warn {
+  margin: 6px 0 0;
+  padding: 7px 10px;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   【决策模型配置】页（2026-10-07）：provider 列表 + 展开编辑卡片
+   ⚠️ 形态**照 DSH 官方「模型」设置页**（一行一个 provider，点开才编辑）
+      —— 用户原话：*"就也应该像 dsh 官方的模型设置一样"*。
+   全部走既有设计令牌（`--fg` / `--fg-dim` / `--border` / `--bg-2`），
+   不写死颜色（暗色主题要自动适配 —— 本项目样式约定）。
+   ====================================================================== */
+
+/* 一行一个 provider：点「编辑」展开那张卡片。 */
+.jev-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-2);
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+/* 密钥状态点：实心 = 已配置。⚠️ 只表示"有密钥"，**不代表连通**
+   （"配了"与"真能调通"是两件事 —— 后者由卡片里的「测试连接」回答）。 */
+.jev-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.jev-dot.ok { background: var(--fg); }
+.jev-dot.bad { background: transparent; border: 1px solid var(--fg-dim); }
+.jev-name { font-weight: 650; }
+/* ⚠️ `min-width: 0` + 省略号：端点可能很长，不让它把按钮挤出屏幕
+   （本项目踩过"长内容把行内其它元素挤走"的同族坑）。 */
+.jev-meta { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 展开的编辑卡片：**缩进一点**，表明"它属于上面那一行"。 */
+.jev-card {
+  margin: 0 0 12px 18px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+}
+
+/* 模型列表：一行一个输入框 + 删除。 */
+.jev-models { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.jev-model-line { display: flex; align-items: center; gap: 8px; }
+.jev-model-line input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+
+/* ⚠️ 窄屏：卡片左缩进在小屏上很浪费横向空间 ⇒ 收掉。 */
+@media (max-width: 900px) {
+  .jev-card { margin-left: 0; }
+  .jev-row { flex-wrap: wrap; }
+}
 
 /* ⚠️ 窄屏：节行本来就已是"第 1 行 = 节名 + 可截断 + 删除、第 2 行 = 规范通栏"
    （2026-10-05 把规范改成 textarea 时一并调成了这个形态）⇒

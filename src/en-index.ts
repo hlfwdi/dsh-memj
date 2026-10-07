@@ -33,7 +33,6 @@
  *
  * @module dsh-memj/en-index
  */
-
 import { mkdir, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { createHash } from 'node:crypto'
@@ -77,6 +76,69 @@ export interface EnIndex {
   /** ⭐ 项目 → 主题映射（`project+themes` 范围要用；**不在封面里**）。 */
   projects: Record<string, { themes: string[] }>
   entries: Record<string, EnIndexEntry>
+}
+
+/**
+ * ⭐⭐⭐ **「模型 ↔ 模板」配对规则**（用户 2026-10-07 要求）——
+ * **唯一出处**：服务端保存校验与前端告警**都**从这里取，不许各写一份。
+ *
+ * ── 为什么要这条规则 ─────────────────────────────────────────────────
+ * `translateTemplate` 是"提示词 + 解析器"的**配对开关**：
+ * · `instruct` ⇒ 要 JSON、用 `JSON.parse`；
+ * · `mt` ⇒ **要求模型是翻译专用模型**（编号 + 空行、无标签），解析器按空行/换行切。
+ * 🔴 用户实测踩到：选了 `deepseek-v4.1-flash`（普通对话模型）**却把模板留成 `mt`**
+ *    ⇒ 面板**毫无阻拦地存下去了**，而这两半错配就是**静默失败**。
+ * ⇒ ⭐ 判据（用户原话）：*"如果选对应比如 mt 模版，但是没有响应的 mt 模型就要警告，
+ *    并且保存时报错。"*
+ *
+ * ⚠️ **`instruct` 那一侧不设限制**：普通对话模型就该配 `instruct`，
+ *    而翻译专用模型配 `instruct` 也能跑（库内实测：提示词那一半容错性高）。
+ *    ⇒ **只拦"mt 模板 + 非 MT 模型"这一种错配**，别把合法的组合一起拦死。
+ */
+
+/**
+ * ⭐ **判断一个 model id 是不是"翻译专用模型"**（`mt` 模板只对它成立）。
+ *
+ * 🔴 **为什么用名字判、而不是查"模型能力"**：DSH 的模型清单里**没有**
+ *    "这是不是一个翻译专用模型"这个字段（`GET /models` 只回 id 与显示名）。
+ *    ⇒ 只能按**命名**认。⚠️ 所以这条判据是**启发式**，不是权威 ——
+ *      因此它只用来**拦明显错的组合**，措辞也要留余地（见 `pairingError` 的文案）。
+ *
+ * ⭐ 认得的形态（大小写不敏感）：
+ * · 名字里含 `mt`**作为独立词**（`Hunyuan-MT-7B` / `xxx-MT` / `mt-7b`）；
+ * · 或属于已知的翻译专用模型家族（`hunyuan-mt` / `opus-mt` / `nllb` / `m2m100`）。
+ * ⚠️ **不把** `gpt` / `deepseek` / `claude` 这类**通用对话模型**误判成 MT ——
+ *    它们名字里没有 `mt` 词，自然落选。
+ * ⚠️ 也别把 `mt` 当**子串**乱匹配（那会误伤 `mtt`、`fmt` 之类）⇒ 用词边界。
+ * @param provider - provider id（当前不参与判断，留给将来按 provider 收紧）。
+ * @param model - model id（**可能含 `/`**，如 `tencent/Hunyuan-MT-7B`）。
+ */
+export function isMtModel(provider: string, model: string): boolean {
+  const m = `${provider}/${model}`.toLowerCase()
+  // ① 名字里含独立的 `mt` 词（`-mt` / `mt-` / `_mt` / `/mt` / 结尾 mt）
+  if (/(^|[\W_])mt([\W_]|$)/.test(m)) return true
+  // ② 已知的翻译专用模型家族（它们名字里未必有独立的 mt 词）
+  return /hunyuan-mt|opus-mt|nllb|m2m100|seamless-m4t/.test(m)
+}
+
+/**
+ * ⭐⭐ **校验「模板 ↔ 模型」是否配对**（不配对时回一条**给人看的中文错误**，否则回 `''`）。
+ *
+ * 判据（**只有这一条**）：**模板选 `mt` ⇒ 模型必须是翻译专用模型**。
+ * ⚠️ 模型为空（= 跟随主会话）时**不拦** —— 那种情况由"主会话模型是什么"决定，
+ *    面板此刻无从判断，**不该假装知道**（本项目一贯：不知道就别说）。
+ * @param template - `'instruct'` / `'mt'`。
+ * @param provider - `translateProvider`。
+ * @param model - `translateModel`。
+ * @returns 错误文案；`''` = 配对没问题。
+ */
+export function pairingError(template: string, provider: string, model: string): string {
+  if (template !== 'mt') return ''
+  if (model.trim() === '') return '' // 跟随主会话：无从判断，不拦
+  if (isMtModel(provider, model)) return ''
+  return `「${provider}/${model}」看起来不是翻译专用模型，但翻译模板选了 mt`
+    + `（mt 要求模型按"编号 + 空行"输出，两者必须配对，否则会静默解析失败）。`
+    + `请把模板改成 instruct，或换一个翻译专用模型（如 Hunyuan-MT 系列）。`
 }
 
 /** 一次重建的结果（回执/日志用）。 */
@@ -664,15 +726,39 @@ export async function checkIndex(opts: { ctx: Context; config: MemjConfig }): Pr
       if (e.project !== c.project || !sameTheme) metaDrift++
     }
     // ⭐ 项目 → 主题映射也要比（它不在封面里，手工改动同样发现不了）
+    //
+    // 🔴🔴 **2026-10-07 修一个真 bug：这里必须与【写入侧】用同一份口径**
+    //    （`scanLibrary({ includeArchived: true })`）。
+    //
+    //    **病症**：索引的 `projects` 映射里**恒有 2 条"漂移"**，**重建也修不掉**
+    //    ⇒ `needsRepair` **永远为 true** ⇒ 用户每次打开英文索引页都触发一次**整轮重建**
+    //    （实测：每次点检查跑满约 75 秒、155 条翻译全部白试一遍）。
+    //
+    //    **根因**：两侧口径不一致 ——
+    //      · **写入侧**（`rebuildEnIndex`，见上面那段注释）：**有意**把**归档项目**
+    //        也写进 `projects` 映射（因为归档项目旗下的封面**仍在** `entries` 里，
+    //        少了映射会让 `project+themes` 范围**静默缩成单项目**）；
+    //      · **检查侧**（原代码）：拿 `snap.projects` 比，而默认的 `scanLibrary()`
+    //        **不含归档项目** ⇒ 把索引里那两条**正确**记录判成"漂移"。
+    //    ⇒ 实测：`hindsight-research` / `qoder2api` 两个**已归档**项目，
+    //      重建完（`builtAt` 就是刚写的）仍然是 `projectDrift = 2`。
+    //
+    //    ⭐⭐ **判据（可迁移）："检查"与"生成"必须共用同一份口径** ——
+    //      判据里写一句"应该是什么样"，就等于把生成逻辑抄了第二遍；
+    //      两份一旦不同步，症状是**"修不掉的红"**（比不报更糟：它让体检结果不可信，
+    //      还会每次白跑一整轮重建）。
+    //    ⚠️ 本项目已多次记过同族（"同一语义两条实现，修一条不等于修了它"）。
+    const snapForProjects = await scanLibrary({ includeArchived: true })
     const idxThemes = idx.projects
     let projectDrift = 0
-    for (const p of snap.projects) {
+    for (const p of snapForProjects.projects) {
       const a = idxThemes[p.id]?.themes ?? []
       const b = [...p.frontmatter.themes]
       if (a.length !== b.length || a.some((t, i) => t !== b[i])) projectDrift++
     }
     for (const id of Object.keys(idxThemes)) {
-      if (!snap.projects.some((p) => p.id === id)) projectDrift++
+      // ⚠️ 同一份口径：**归档项目也算"存在"**（写入侧把它们写进了映射）。
+      if (!snapForProjects.projects.some((p) => p.id === id)) projectDrift++
     }
 
     const problems: string[] = []

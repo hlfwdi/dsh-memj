@@ -244,10 +244,21 @@ console.log('\n【9】配置键三处对称（⚠️ 本项目的经典事故点
       const m = new RegExp(`${nm}\\s*=\\s*\\[([\\s\\S]*?)\\]`, 'm').exec(apiSrc)
       return m === null ? [] : [...m[1].matchAll(/'([A-Za-z]+)'/g)].map((x) => x[1])
     })
-  const apiCovered = [...apiTables.flat(), 'hotScoreTimeoutMs']
+  // ⭐⭐⭐ 2026-10-07 多 provider 化新增的键**不在上面那三张表里**（它有自己的分支 +
+  //    自己的"至少给一个"条件）⇒ 这里单独列出。
+  //    ⚠️ 判据不变：**每个 `hotScore*` 键都必须有一条能被单独保存的写通路**
+  //       （漏了 ⇒ 单独保存它会被判"什么都没给" ⇒ **400**）。
+  const extraCovered = ['hotScoreTimeoutMs', 'hotScoreDecisionPick']
+  const apiCovered = [...apiTables.flat(), ...extraCovered]
   const missing = uniqSetKeys.filter((k) => !apiCovered.includes(k))
-  check('🔴🔴 **每个 `hotScore*` 键都进了 api.ts 的表驱动清单**（漏一个 ⇒ 该键单独保存 400）',
+  check('🔴🔴 **每个 `hotScore*` 键都进了 api.ts 的写通路清单**（漏一个 ⇒ 该键单独保存 400）',
     missing.length === 0, missing.length > 0 ? `漏了：${missing.join(', ')}` : `${apiCovered.length} 个键全覆盖`)
+  // ⚠️ 上面那条是"清单对清单"，**可能随代码结构调整而失效** ⇒ 再核一次**真凭据**：
+  //    `hotScoreDecisionPick` 必须真的进了那条"至少给一个"的条件（否则单独提交即 400）。
+  check('⭐⭐⭐ `hotScoreDecisionPick` 进了"至少给一个"的条件（真判据，不是清单比对）',
+    /wantsHotScoreDecisionPick/.test(apiSrc)
+    && /&&\s*!wantsHotScoreDecisionPick/.test(apiSrc)
+    && /wantsHotScoreDecisionPick \? \{ hotScoreDecisionPick: payload\.hotScoreDecisionPick \}/.test(apiSrc))
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -498,8 +509,13 @@ console.log('\n【12】⭐⭐⭐ 每轮最多选几条（决策 180）')
   const htmlSrc2 = readFileSync(join(SRC, 'web', 'index.html'), 'utf8')
   const webSrc2 = readFileSync(join(SRC, 'web', 'app.js'), 'utf8')
   check('⭐⭐ 面板上有 `hs-maxpicks` 控件', /id="hs-maxpicks"/.test(htmlSrc2))
-  check('⭐⭐ 前端会提交它', /hotScoreMaxPicks:\s*hsMaxPicksR\.value/.test(webSrc2))
-  check('⭐ 前端按整数校验（1–200）', /num\('hs-maxpicks', '每轮最多选几条', 1, 200, true\)/.test(webSrc2))
+  // ⭐⭐ 2026-10-07：**按版块保存**之后，这个键由 `NUM_KEYS` 的一条表项驱动
+  //     （同一份表**既管校验又管提交**），并由 `hot-score` 单元的 `...nums` 展开提交。
+  //     ⇒ 断言同步成新形态。🔴 **不是放宽**：三项意图（控件在、按整数校验、会被提交）都还在。
+  check('⭐⭐ 前端会提交它（`hot-score` 单元靠 `nums` 展开）',
+    /case 'hot-score':[\s\S]{0,300}?\.\.\.nums/.test(webSrc2))
+  check('⭐ 前端按整数校验（1–200）',
+    /\['hs-maxpicks',\s*'hotScoreMaxPicks',\s*'[^']*',\s*1,\s*200,\s*true\]/.test(webSrc2))
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -678,8 +694,10 @@ console.log('\n【15】🔴🔴 硬校验：引文必须逐字出现在上下文
   }
   check('⭐⭐ 面板上有「入围门槛：至少几分」控件', /id="hs-gate-min"/.test(htmlS))
   check('⭐⭐ 面板上有「放行上一轮刚加入的」开关', /id="hs-gate-last"/.test(htmlS))
-  check('⭐⭐ 前端提交这两个键', /hotScoreGateMinScore:\s*hsGateMinR\.value/.test(webS)
-    && /hotScoreGateLastTurn:\s*!!\(document\.getElementById\('hs-gate-last'\)/.test(webS))
+  // ⭐⭐ 2026-10-07：同 `【12】` —— 分数键走 `NUM_KEYS` 表、布尔键在 `hot-score` 单元里直写。
+  check('⭐⭐ 前端提交这两个键',
+    /\['hs-gate-min',\s*'hotScoreGateMinScore',\s*'[^']*',\s*1,\s*1000,\s*true\]/.test(webS)
+    && /hotScoreGateLastTurn:\s*chk\('hs-gate-last'\)/.test(webS))
   // 🔴 **门槛值必须与注入侧同值**（否则页面与实际注入又是两个集合 —— 决策 181 的教训）。
   //    ⚠️ 窗口要**够宽**：这段调用里夹着一段 6 行的注释（我第一版给 400 字符 ⇒ **假失败**）。
   check('🔴🔴 `api.ts` 把门槛也传给 `previewForSession`（与注入侧同值）',

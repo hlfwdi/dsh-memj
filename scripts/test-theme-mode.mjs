@@ -87,8 +87,44 @@ let r = await readSettings(baseHref, mod.DEFAULT_CONFIG)
 check('patchPath 正确', r.patchPath.endsWith('cordis.patch.yml'), r.patchPath)
 check('⭐ 文件不存在 ⇒ patchExists=false（不是错误）', r.patchExists === false)
 check('  explicitKeys 为空', r.explicitKeys.length === 0, JSON.stringify(r.explicitKeys))
-check('⭐ 没有 profile/package.json ⇒ patchReload=unknown（不猜 live）',
+check('⭐ 没有 profile/package.json ⇒ patchReload=unknown（**无从判断**，如实报）',
   r.patchReload === 'unknown', r.patchReload)
+
+// ⭐⭐⭐ **2026-10-07：`package.json` 在、但**没写** `patchReload` ⇒ 必须是 `live`**
+//
+// 🔴🔴 这条钉住的是一个**真实误报**（用户问"是不是都热加载"时查出来的）：
+//    两代 DSH 都规定"没写 = live"——
+//      · 0.1.5：该字段**可选**，类型注释原文 *"omitted means `live` for custom profiles"*，
+//               且 `DEFAULT_PROFILE_PATCH_RELOAD = 'live'`；
+//      · 0.2.0-rc.2：**该字段已被整个删除**，patch 文件由 `dsh-hmr` **无条件**监听
+//               （`watchConfig()` 里没有任何开关判断）⇒ 恒为 live。
+//    ⚠️ 本插件原来把"没写"也报成 `unknown`，于是页头**常年**挂着
+//       「读不到…可能需要重启才生效」——而实测 **10/10 项设置都在 ~0.5–2.5 秒内
+//       热生效**（`scripts/probe-hotreload-matrix.mjs`）⇒ **界面在说谎**，用户会去白重启。
+//    ⇒ ⭐ 判据：**"无从判断"（拿不到文件）与"文档写明的默认值"是两件事**，
+//       不能都塞进 `unknown`。把后者报成前者，等于让界面永远给出错误的保守建议。
+{
+  writeFileSync(join(fakeProfile, 'package.json'),
+    JSON.stringify({ name: 'dsh-profile-no-reload-key', dsh: { profile: { bundles: [] } } }), 'utf8')
+  const r2 = await readSettings(baseHref, mod.DEFAULT_CONFIG)
+  check('⭐⭐⭐ package.json 在、但没写 patchReload ⇒ **live**（两代 DSH 的默认都是 live）',
+    r2.patchReload === 'live', r2.patchReload)
+
+  // ⚠️ 反证：**`startup` 仍必须照实回**——0.1.5 上那是用户刻意的选择，
+  //    不能因为"默认是 live"就把显式声明也吞掉（那会让真需要重启的人不重启）。
+  writeFileSync(join(fakeProfile, 'package.json'),
+    JSON.stringify({ dsh: { profile: { patchReload: 'startup' } } }), 'utf8')
+  const r3 = await readSettings(baseHref, mod.DEFAULT_CONFIG)
+  check('⭐⭐ 反证：显式 startup **不被默认值吞掉**（照实回 startup）',
+    r3.patchReload === 'startup', r3.patchReload)
+
+  // ⚠️ 反证：**值不认识**（脏数据）也按默认 live（不是 unknown）——同一条判据。
+  writeFileSync(join(fakeProfile, 'package.json'),
+    JSON.stringify({ dsh: { profile: { patchReload: 'wat' } } }), 'utf8')
+  const r4 = await readSettings(baseHref, mod.DEFAULT_CONFIG)
+  check('  ⭐ 认不出的值 ⇒ 也回 live（按"没写"处理，不报 unknown）',
+    r4.patchReload === 'live', r4.patchReload)
+}
 
 // 补上 package.json 声明 live。
 writeFileSync(join(fakeProfile, 'package.json'),

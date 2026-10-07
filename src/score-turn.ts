@@ -32,6 +32,9 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type { MemjConfig } from './config.ts'
+// ⭐⭐⭐ 轮末评分走 `jev` 时选哪条决策 provider（与主动注入**共用 provider 列表**、
+//    但**各自选各自的**——见 `scoreDecisionOf`）。
+import { scoreDecisionOf } from './config.ts'
 import { candidatesForScope, resolveJevKey, type Candidate } from './active-recall.ts'
 import { loadEnIndex } from './en-index.ts'
 import { planInjection } from './active-context.ts'
@@ -548,8 +551,8 @@ async function logRun(
  *    （"现在要不要给"），而本处是**事后复盘**（"本来该不该有"）⇒ 它们**没有意义**。
  *    ⚠️ 硬塞进来会**白烧 token 且误导**（模型会以为在判"现在需不需要"）。
  *
- * ⚠️ **端点/凭据复用 `activeInject*` 的 plumbing**（那是同一个物理约束）；
- *    **模型与超时用 `hotScore*`**（用户裁定"单独一套"）。
+ * ⚠️ **端点/凭据/模型都来自"本次选中的那条决策 provider"**（2026-10-07 多 provider 化）
+ *    —— 与主动注入**共用同一份 provider 列表**，但**各自选各自的**（`hotScoreDecisionPick`）。
  * @returns 答案；失败时 `undefined`。
  */
 async function callJevForScore(
@@ -558,7 +561,10 @@ async function callJevForScore(
   content: string,
   pool: Candidate[],
 ): Promise<{ answers: Record<string, { noul?: unknown }> | undefined } | undefined> {
-  const key = await resolveJevKey(ctx, config)
+  // ⭐⭐ 解一次、全程复用（模型 / 端点 / 派生凭据名三者必须同源）。
+  const pick = scoreDecisionOf(config)
+  if (pick.endpoint === '' || pick.model === '') return undefined
+  const key = await resolveJevKey(ctx, config, pick.keyRef)
   if (key === undefined) return undefined
   const state: Record<string, unknown> = {
     candidates: pool.map((c, i) => ({
@@ -576,11 +582,12 @@ async function callJevForScore(
   })
   const guard = deadline(undefined, config.hotScoreTimeoutMs, 'MEMJ_SCORE_JEV_TIMEOUT')
   try {
-    const res = await fetch(config.activeInjectJevEndpoint, {
+    const res = await fetch(pick.endpoint, {
       method: 'POST',
       headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-      // ⚠️ JEV 通路下 `hotScoreModel` **就是纯模型名**（形态随通路，见 config 的注释）。
-      body: JSON.stringify({ model: config.hotScoreModel, state, questions }),
+      // ⭐⭐⭐ 多 provider：模型来自**本次选中的那条 provider**，
+      //    与上面那个端点/凭据名三者同源（别读旧的 `hotScoreModel` 单键）。
+      body: JSON.stringify({ model: pick.model, state, questions }),
       signal: guard.signal,
     })
     if (!res.ok) return undefined

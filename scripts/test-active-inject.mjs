@@ -514,9 +514,13 @@ console.log('\n【14】🔴🔴 前端提交**不得按下标**（同一 bug 踩
   check('⭐⭐⭐ 反证：提交处**不得**出现 `aiR[n].value`（按下标必错位）',
     !/activeInject\w+:\s*aiR\[\d+\]\.value/.test(appSrc),
     '仍在按下标提交')
-  check('⭐⭐ 改成按**键名**取（`aiDefs` + `aiVals`）',
-    /const aiDefs = \[/.test(appSrc) && /\.\.\.aiVals/.test(appSrc))
-  check('⭐ 且校验循环也走 `aiDefs`（不再出现 `...aiR`）', !/\.\.\.aiR\b/.test(appSrc))
+  // ⭐⭐ 2026-10-07：**全部设置页按版块保存**之后，这张表改名成 `NUM_KEYS`
+  //     （且**同时驱动校验与提交** —— 比原来的"`aiDefs` 校验 + 另处手列键名"更不易漂移）。
+  //     ⇒ 断言同步成新形态。🔴 **不是放宽**：仍要求"必须按【键名】成对声明、不得按下标"。
+  check('⭐⭐ 改成按**键名**取（`NUM_KEYS` 表 + `nums` 展开）',
+    /const NUM_KEYS = \{/.test(appSrc) && /\bnums\b/.test(appSrc))
+  check('⭐ 且校验循环也走 `NUM_KEYS[unit]`（不再出现 `...aiR`）',
+    /NUM_KEYS\[unit\]/.test(appSrc) && !/\.\.\.aiR\b/.test(appSrc))
 
   // ⭐ **逐对核**：每个数值控件的 id 与配置键必须成对声明（插入新控件不再错位）
   const pairs = appSrc.match(/\['ai-[a-z-]+',\s*'activeInject\w+'/g) ?? []
@@ -532,8 +536,8 @@ console.log('\n【14】🔴🔴 前端提交**不得按下标**（同一 bug 踩
   //       （那是在解释"为什么删它们"，是**应该留**的）。
   //       ⚠️ 我第一版写成"整个 appSrc 里不含 'ai-poolmin'" ⇒ **把注释也算成违规** ⇒ 3 条假红。
   //       ⭐ 判据：**"某东西不该出现"要指明在【哪个范围内】不该出现**。
-  const aiDefsBlock = /const aiDefs = \[([\s\S]*?)\]/.exec(appSrc)?.[1] ?? ''
-  check('⭐ 取到了 aiDefs 映射表（前置条件）', aiDefsBlock !== '', '取不到 ⇒ 下面三条会恒真')
+  const aiDefsBlock = /const NUM_KEYS = \{([\s\S]*?)\n\}/.exec(appSrc)?.[1] ?? ''
+  check('⭐ 取到了数值键映射表（前置条件）', aiDefsBlock !== '', '取不到 ⇒ 下面三条会恒真')
   for (const [id, key] of [['ai-rounds', 'activeInjectContextRounds'], ['ai-pool', 'activeInjectPoolMax'], ['ai-poolmin', 'activeInjectPoolMin']]) {
     check(`⭐⭐⭐ 已作废字段 \`${key}\` 已从**映射表**移除（控件已删）`,
       !new RegExp(`\\['${id}', '${key}'`).test(aiDefsBlock),

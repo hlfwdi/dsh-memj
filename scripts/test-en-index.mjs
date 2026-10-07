@@ -197,18 +197,152 @@ console.log('\n【3f】⭐⭐ 归属漂移必须是判据之一（2026-09-26 核
   check('⭐ 面板明细里显示这两项', /归属漂移/.test(app2) && /项目主题映射漂移/.test(app2))
 }
 
+console.log('\n【3g】⭐⭐⭐ 检查侧与写入侧必须**共用同一份口径**（2026-10-07 真 bug）')
+{
+  // 🔴🔴 **实践抓到的 bug（比"漏报"更糟的一种：修不掉的红）**：
+  //    · **写入侧**（`rebuildEnIndex`）**有意**把**归档项目**也写进 `projects` 映射
+  //      （归档项目旗下封面仍在 `entries` 里；少映射会让 `project+themes` 静默缩成单项目）；
+  //    · **检查侧**（原代码）拿默认的 `scanLibrary()` 比 —— 它**不含归档项目**
+  //      ⇒ 把索引里那两条**正确**记录判成"漂移"。
+  //    ⇒ 实测：`hindsight-research` / `qoder2api` 两个已归档项目**恒报 2 条漂移**，
+  //      **重建也修不掉** ⇒ `needsRepair` 永远 true
+  //      ⇒ 每次打开英文索引页都白跑**一整轮重建**（实测约 75 秒、155 条翻译全白试）。
+  //    ⭐⭐ **判据：'检查'与'生成'必须共用同一份口径** —— 判据里写一句"应该是什么样"，
+  //       等于把生成逻辑抄了第二遍；两份一旦不同步，症状就是**"修不掉的红"**。
+  const src = readFileSync(join(ROOT, 'src', 'en-index.ts'), 'utf8')
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+  check('⭐⭐ 检查侧用 `scanLibrary({ includeArchived: true })`（与写入侧同源）',
+    /const snapForProjects = await scanLibrary\(\{ includeArchived: true \}\)/.test(code))
+  check('⭐⭐ 项目遍历走 snapForProjects（不再用不含归档的 snap.projects）',
+    /for \(const p of snapForProjects\.projects\)/.test(code))
+  // 🔴 反证：**不得**再出现"用 snap.projects 判 projectDrift"那种半截口径。
+  check('⭐⭐ 反证：projectDrift 那两处不再引用 `snap.projects`',
+    !/idxThemes\[p\.id\][\s\S]{0,200}?snap\.projects\.some/.test(code)
+    && !/for \(const p of snap\.projects\)/.test(code))
+}
+
 console.log('\n【3b】🔴 前端提交的数字必须是 Number（踩过的真 bug）')
 {
   const app = readFileSync(join(ROOT, 'src', 'web', 'app.js'), 'utf8')
   // 🔴 实测踩到：直接提交 DOM 的 `.value`（字符串 "3"）⇒ 服务端 `typeof n !== 'number'` 判真
   //    ⇒ 报「translateConcurrency 必须是 1–20 之间的整数」，而输入框里明明写着 3。
-  // ⚠️ 决策 169：改成"**只在本页才去读值**"（`onIndex ? num(...) : SKIP`）——
-  //    因为别页的输入框**没预填**，无条件读会拿到空串 ⇒ 报错 ⇒ 那页存不了（实测踩到）。
-  //    ⇒ 断言同步成新形态（**不是放宽**：仍要求它必须是 `num()` 出来的 Number）。
-  check('⭐ translateConcurrency 走 `num()` 校验（拿到 Number，不是 DOM 字符串）',
-    /const trConcR = (onIndex \? )?num\('tr-conc'/.test(app))
-  check('提交的是 `trConcR.value`（num 返回的 Number）', /translateConcurrency:\s*trConcR\.value,/.test(app))
+  // ⚠️ 决策 169：改成"**只在保存本单元时才去读值**"。
+  // ⭐⭐ 2026-10-07：**按版块保存**之后，它由 `NUM_KEYS['index-en']` 一条表项驱动
+  //    （同一份表**既管校验又管提交**）⇒ 断言同步成新形态。
+  //    🔴 **不是放宽**：仍要求"它必须走那张受校验的表、拿到的是 Number"。
+  check('⭐ translateConcurrency 进 `NUM_KEYS` 受校验表（拿到 Number，不是 DOM 字符串）',
+    /\['tr-conc',\s*'translateConcurrency',\s*'[^']*',\s*1,\s*20,\s*true\]/.test(app))
+  check('提交时由 `nums` 展开（= 表里校验过的 Number）',
+    /case 'index-en':[\s\S]{0,400}?\.\.\.nums/.test(app))
   check('⭐⭐ 反证：不再出现 `enBoxR`（面板上已无该开关）', !/enBoxR/.test(app))
+}
+
+console.log('\n【3h】⭐⭐⭐ 失效的模型配置**不得伪装成选项**（用户 2026-10-07 裁定）')
+{
+  // 用户原话：*"我认为那个模型选择列表，就不应该显示，
+  //   如果模版选了该模型应该提示用户去配置相关模型。"*
+  //
+  // 🔴 **旧做法为什么错**：它把失效模型**插成一个 `<option>`**
+  //    （`xxx（当前配置，不在清单里）`）—— 等于把**一个错误状态伪装成合法选项**：
+  //    用户以为能用，实际选了跑不通。实测：翻译模型 `sf/tencent/Hunyuan-MT-7B`
+  //    的 provider 已消失，**155 条知识全部翻译失败**，而界面只显示一行极不显眼的括号说明。
+  //
+  // ⭐ **新判据：失效的配置不该"降级成一个选项"，而该"升格成一条告警"。**
+  //    （下拉框是**可选项**待的地方；已知跑不通的东西不属于那里。）
+  const app = readFileSync(join(ROOT, 'src', 'web', 'app.js'), 'utf8')
+  const code = app.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+  check('⭐⭐ 有 `showModelWarn`（把失效升格成告警）', /function showModelWarn\(/.test(app))
+  check('⭐⭐ 有 `clearModelWarn`（重填前清旧告警）', /function clearModelWarn\(/.test(app))
+  check('⭐⭐ 告警带 `data-model-warn` 标记（否则会越插越多）',
+    /dataset\.modelWarn = '1'/.test(app))
+  check('⭐⭐ 三个填充函数都在重填前先清（`fillModelSelect` / `fillSubagentModelSelect` / `fillChannelModelSelect`）',
+    (app.match(/clearModelWarn\(sel\)/g) ?? []).length >= 3,
+    String((app.match(/clearModelWarn\(sel\)/g) ?? []).length))
+  // 🔴 反证：**不得**再有"把失效值插成 option"的写法。
+  //    ⚠️ 判据要盯**那个反模式本身**（`o.textContent = ...（当前配置，不在清单里）`），
+  //       不能只搜"不在清单里"这四个字 —— 文件里另有一处无关的
+  //       "「画像」不在清单里"（讲的是热知识画像，与本条无关）⇒ 那样会**误报**。
+  //       （本项目已记过同族："某东西不该出现要指明在哪个范围内"。）
+  check('⭐⭐⭐ 反证：不再有把失效值插成 option 的写法',
+    !/o\.textContent = `\$\{curProvider\}\/\$\{curModel\}（当前配置，不在清单里）`/.test(app),
+    '仍在把失效模型插成可选项')
+  check('⭐⭐ 反证：不再有"缺 provider 前缀"那种插选项的写法',
+    !/o\.textContent = `\$\{curModel\}（缺 provider 前缀/.test(app))
+  // ⚠️ 关键正确性：**读不到清单 ≠ 配置失效**（请求失败时不能诬告）。
+  check('⭐⭐⭐ 用 `listed` 区分"清单读到了"与"读不到"（读不到**不报**失效）',
+    /let listed\w* = false/.test(app) && /listedChat|listedDecision/.test(app))
+  // ⚠️ JEV 通路的候选**本来就不在** DSH 清单里（走 Knox 网关）⇒ 绝不能据此报失效。
+  //    ⭐⭐⭐ 2026-10-07 多 provider 化后，判据从"看通路"改成**看这个值属于哪一份清单**
+  //       （下拉框现在两条通路的候选都给 ⇒ 不能再按通路分叉判断）：
+  //       值的 provider 在 `decisionIds` 里 ⇒ 用决策那份的 `listedDecision`。
+  check('⭐⭐ 反证：按**值所属的清单**判失效（决策 provider 用 `listedDecision`）',
+    /const isDecision = decisionIds\.has\(pid\)/.test(app)
+    && /isDecision \? listedDecision : listedChat/.test(app))
+  check('⭐⭐ 两份清单**各自**记"读到了没有"（一份失败不能诬告另一份的值）',
+    /let listedChat = false/.test(app) && /let listedDecision = false/.test(app))
+}
+
+console.log('\n【3i】⭐⭐⭐ 「mt 模板 + 非 MT 模型」必须**警告 + 保存报错**（用户 2026-10-07 要求）')
+{
+  // 用户原话：*"如果选对应比如 mt 模版，但是没有响应的 mt 模型就要警告，
+  //   并且保存时报错。"*
+  //
+  // 🔴 **背景（用户实测踩到）**：`translateTemplate` 是"提示词 + 解析器"的**配对开关**，
+  //    错配是**静默失败**。而用户选了普通对话模型 `deepseek-v4.1-flash`、
+  //    模板留着 `mt` ⇒ **面板毫无阻拦地存下去了**。
+  //
+  // ⭐ 判据（**只有这一条**）：**模板选 `mt` ⇒ 模型必须是翻译专用模型**。
+  //    ⚠️ `instruct` 那侧**不设限制**（普通模型就该配 instruct；翻译模型配 instruct 也能跑）。
+  //    ⚠️ 模型为空（跟随主会话）⇒ **不拦**（此刻无从判断，不该假装知道）。
+  const src = readFileSync(join(ROOT, 'src', 'en-index.ts'), 'utf8')
+  const api = readFileSync(join(ROOT, 'src', 'api.ts'), 'utf8')
+  const app = readFileSync(join(ROOT, 'src', 'web', 'app.js'), 'utf8')
+
+  // ① 判据本身导出（唯一出处）
+  check('⭐⭐ 导出了 `isMtModel`（认翻译专用模型）', /export function isMtModel\(/.test(src))
+  check('⭐⭐ 导出了 `pairingError`（配对的唯一判据）', /export function pairingError\(/.test(src))
+  // 🔴 反证：不许把 `instruct` 那侧也拦死（那是合法组合）。
+  check('⭐⭐ 反证：`pairingError` 只拦 mt（非 mt 直接放行）',
+    /if \(template !== 'mt'\) return ''/.test(src))
+  check('⭐⭐ 模型为空时不拦（跟随主会话 ⇒ 无从判断）',
+    /if \(model\.trim\(\) === ''\) return ''/.test(src))
+  // ⚠️ `mt` 必须按**词边界**判（子串会误伤 `mtt`/`fmt`）。
+  check('⭐⭐ `isMtModel` 用词边界判 mt（不用子串）',
+    /\(\^\|\[\\W_\]\)mt\(\[\\W_\]\|\$\)/.test(src))
+  check('⭐ 认得已知翻译模型家族（hunyuan-mt / opus-mt / nllb …）',
+    /hunyuan-mt\|opus-mt\|nllb/.test(src))
+
+  // ② 服务端：保存时**报错**，且**在任何写入之前**
+  check('⭐⭐ api.ts 导入了 `pairingError`（判据不抄第二遍）',
+    /import \{ checkAndRepair, pairingError \} from '\.\/en-index\.ts'/.test(api))
+  check('⭐⭐⭐ 保存路径会返回 400（回执以「未保存：」开头）', /未保存：\$\{bad\}/.test(api))
+  check('⭐⭐ 判据用**生效组合**（本 payload 覆盖磁盘值），不是只看本次 payload',
+    /const cur = effectiveConfig\(await readSettings\(/.test(api)
+    && /wantsTrTemplate\s*\?\s*String\(payload\.translateTemplate\)/.test(api))
+  // 🔴 时序：配对校验必须在 `writeSetting(... 'translateProvider' ...)` **之前**。
+  const pairingAt = api.indexOf('pairingError(effTemplate')
+  const writeAt = api.indexOf("writeSetting(deps.baseUrl, 'translateProvider'")
+  check('⭐⭐⭐ 配对校验排在**第一个写入之前**（否则会留下半套配置）',
+    pairingAt > 0 && writeAt > 0 && pairingAt < writeAt, `pairing@${pairingAt} write@${writeAt}`)
+  check('⭐ 回执带结构化 `pairingError` 字段（脚本不必解析文案）',
+    /pairingError: \{ template: effTemplate/.test(api))
+
+  // ③ 前端：**警告**（还没点保存就先看得见）
+  check('⭐⭐ 前端有 `translatePairingWarn`（与服务端同一判据）',
+    /function translatePairingWarn\(/.test(app))
+  check('⭐⭐ 前端有 `refreshTranslatePairingWarn`（实时显示）',
+    /function refreshTranslatePairingWarn\(/.test(app))
+  check('⭐⭐⭐ 模型与模板**两个**控件都挂了 change（只挂一个会漏"换模型"那条路）',
+    /for \(const id of \['tr-model', 'tr-template'\]\)/.test(app))
+  check('⭐ 打开面板时也算一次（填完下拉框之后）',
+    /\.then\(\(\) => refreshTranslatePairingWarn\(\)\)/.test(app))
+  // ⚠️ 两份规则必须字面一致 —— 用同一组关键正则各测一遍。
+  for (const [name, re] of [
+    ['词边界 mt', /\(\^\|\[\\W_\]\)mt\(\[\\W_\]\|\$\)/],
+    ['翻译模型家族', /hunyuan-mt\|opus-mt\|nllb/],
+  ]) {
+    check(`⭐⭐ 前后端判据一致：${name}`, re.test(src) && re.test(app))
+  }
 }
 
 console.log('\n【4】索引文件体检（存在才做）')

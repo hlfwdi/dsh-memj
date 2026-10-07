@@ -449,7 +449,19 @@
      ⭐ **样式约定**（用户 2026-09-28 要求）：**描述一律在控件下方**、灰色小字；
         **描述文字里不出现图标**；配色只用黑白（走 `--fg` / `--fg-dim`）。
      🔴 **每个子页各有一个「保存」按钮，只提交本页的键** ——
-        以前是 40 个键一起提交，任一页的读取 bug 都可能写坏别的页。 -->
+        以前是 40 个键一起提交，任一页的读取 bug 都可能写坏别的页。
+     ⭐⭐⭐ 用户 2026-10-07 裁定（两次，第二次扩到全部）：
+        · 第一次：*"版本维护和标签规范化分别给两个单独的保存按钮吧，不要按页去保存了。"*
+        · 第二次：*"还是把所有设置页面的子页面，全都按设置板块去分别保存吧。不要按页去保存了。"*
+        ⇒ **全部设置页**都改成**按【版块】保存**：每个 `.set-section` 自带一个保存按钮。
+        🔴 **为什么（不只是习惯问题）**：一个版块里的几项是**一件事的几个面**，
+           而不同版块**彼此无关**；绑在一起意味着"改这一项"要连带提交十几项
+           ⇒ 任一处读值/校验出错就**整块存不了**，且报错会指向一个
+           **当前版块根本没有的字段**（本项目已两次踩到这个形态）。
+        ⚠️ `data-savepage` 现在填的是**保存单元 id**（如 `sink-tag` / `hot-score` /
+           `active-gate`），**不再等于子页名**；子页由 `SAVE_UNITS` 映射推出。
+        ⚠️ **一个版块一个按钮**；页脚那个"保存本页"**已全部删除**——
+           留着它就会出现"两个按钮管同一批键"且旧按钮会提交一个不存在的单元。 -->
 
 <section class="panel" id="panel-settings" hidden>
 
@@ -473,6 +485,17 @@
        ⚠️ 分区轴 = **生效方式与影响面**（不是功能）：
           A 常驻文本（破缓存）｜B 工具与命令（描述破缓存、参数/输出只读）｜C 内部提示词（与主会话无关）。 -->
   <button type="button" class="subtab" data-setsub="prompts"><span class="wide-only">提示词</span><span class="narrow-only">提示词</span></button>
+  <!-- ⭐⭐⭐ 2026-10-07：【决策模型配置】子页（用户新增需求）。
+       🔴 **它存在的理由**：JEV（TypeSafe 决策模型）**不是 OpenAI 兼容协议**
+          （走 Knox 的 `/v1/systemone`，请求/响应形态都不同）⇒ **DSH 原生的
+          「模型」设置页装不下它**（那个页面只支持 openai-completions /
+          openai-responses / anthropic-messages）⇒ 只能由本插件自己给一个配置面。
+       ⭐ 用户原话：*"我还是需要能够在 dsh 前端去配置决策模型的。而不是这样，
+          直接在环境里直连。哪怕是在插件的前端里面去配置。"*
+       ⚠️ **本页不是"保存单元"**（不进 `SAVE_UNITS`）—— 它有自己的三个动作：
+          「保存配置」（写 patch）/「保存密钥」（写凭据 seam）/
+          「测试连接」（真发一次请求）。**三个动作语义不同，不能合成一个按钮。** -->
+  <button type="button" class="subtab" data-setsub="jev"><span class="wide-only">决策模型配置</span><span class="narrow-only">决策模型</span></button>
   <!-- ⭐⭐⭐ 2026-09-30：【模板】子页（决策 204/205，用户新增需求）。
        🔴 **模板 = 交接文档的结构**（节名 / 节数 / 每节用途），用户可完全自定义。
        ⚠️ **它只影响【新建项目】**——已有文档记着自己的节名，与模板已解耦
@@ -480,7 +503,10 @@
   <button type="button" class="subtab" data-setsub="templates"><span class="wide-only">模板</span><span class="narrow-only">模板</span></button>
 </div>
 
-<!-- ──────────────── 子页①：沉淀 ──────────────── -->
+<!-- ──────────────── 子页①：沉淀 ────────────────
+     ⭐⭐⭐ 用户 2026-10-07：**本页不再有"保存本页"** —— 四个版块各存各的。
+     ⚠️ 4 个保存单元的 id 与 `SAVE_UNITS`（app.js）**必须一一对应**，
+        错了的表现是"点了没反应"（找不到按钮 / 消息区）。 -->
 <div class="subpanel set-panel" id="setsub-sink" hidden>
   <div class="set-scroll">
 
@@ -501,6 +527,10 @@
         </div>
         <p class="set-desc">严格：新建主题必须有跨项目证据（本会话读过别的项目的知识），否则工具拒收。宽松：不作该项校验，是否新建完全由模型判断。两种模式都保留 desc 必填与近义主题回确认。</p>
       </div>
+      <div class="set-foot set-foot-inline">
+        <button type="button" class="primary set-save" data-savepage="sink-theme">保存</button>
+        <span class="dim set-msg" id="settings-msg-sink-theme"></span>
+      </div>
     </section>
 
     <section class="set-section">
@@ -519,6 +549,10 @@
         </div>
         <p class="set-desc">截到不超过这个字符数为止（默认 12000）。两个数字必须分开：只用一个会让介于两者之间的文档也被截。</p>
       </div>
+      <div class="set-foot set-foot-inline">
+        <button type="button" class="primary set-save" data-savepage="sink-progress">保存</button>
+        <span class="dim set-msg" id="settings-msg-sink-progress"></span>
+      </div>
     </section>
 
     <section class="set-section">
@@ -534,6 +568,12 @@
       <div class="backup-detail" id="backup-detail" hidden>
         <div class="backup-steps" id="backup-steps"></div>
         <p class="dim backup-info" id="backup-info"></p>
+      </div>
+      <!-- ⭐ 用户 2026-10-07：本版块**自己的**保存按钮（不再和标签规范化合并提交）。
+           ⚠️ 开启时会先跑 `/backup/setup` 探环境，成功了才写这个开关（开关不说谎）。 -->
+      <div class="set-foot set-foot-inline">
+        <button type="button" class="primary set-save" data-savepage="sink-git">保存</button>
+        <span class="dim set-msg" id="settings-msg-sink-git"></span>
       </div>
     </section>
 
@@ -569,12 +609,15 @@
         </div>
         <p class="set-desc">关到最低：这一步只判两个词是不是同义，不需要推理链，而思考会吃掉输出预算。即使上面选「跟随主会话模型」也照样生效，因为主会话可能带着高档位（实测就是 high）。实测 hy3 配关闭会毫秒级返回空正文（它关不掉思考），那种情况改用 deepseek-v4.1-flash，或这里设成不传。</p>
       </div>
+      <!-- ⭐ 用户 2026-10-07：本版块**自己的**保存按钮。
+           🔴 为什么单拎出来：这几个键与 git 开关、主题模式毫无关系，
+              绑在一起时"改个裁决模型"要连带提交三个不相干的键
+              ⇒ 任一版块读值出错就整页存不了（本项目已出过同族事故）。 -->
+      <div class="set-foot set-foot-inline">
+        <button type="button" class="primary set-save" data-savepage="sink-tag">保存</button>
+        <span class="dim set-msg" id="settings-msg-sink-tag"></span>
+      </div>
     </section>
-
-    <div class="set-foot">
-      <button type="button" class="primary set-save" data-savepage="sink">保存本页</button>
-      <span class="dim set-msg" id="settings-msg-sink"></span>
-    </div>
   </div>
 </div>
 
@@ -589,6 +632,10 @@
           <strong>启用热知识注入</strong>
         </label>
         <p class="set-desc">把与本会话相关的知识（标题加描述）在每轮注入给模型。与热知识页顶部那个开关是同一个键，改哪边都一样。</p>
+        <!-- ⭐⭐ 用户 2026-10-07：*"热知识注入和主动注入的总开关不需要保存按钮，
+             应该是点击开关直接生效的。"*
+             ⇒ **勾选/取消立即写配置**（本版块因此没有「保存」按钮）；这行只放回执。 -->
+        <p class="dim set-msg" id="settings-msg-hot-inject-enabled"></p>
       </div>
     </section>
 
@@ -630,6 +677,10 @@
         <p class="set-desc">按最新活跃时间倒序保留（默认 50）。淘汰只动热知识自己的绑定记录，绝不删 DSH 的会话数据。</p>
       </div>
       <p class="set-note">上限等于上下文窗口乘比例再除以字符每 token；窗口未知时用「窗口未知时的上限」。超限只提醒、不自动裁剪。</p>
+      <div class="set-foot set-foot-inline">
+        <button type="button" class="primary set-save" data-savepage="hot-budget">保存</button>
+        <span class="dim set-msg" id="settings-msg-hot-budget"></span>
+      </div>
     </section>
 
     <!-- ──────────────── ⭐⭐⭐ 知识评分（决策 177）──────────────── -->
@@ -727,12 +778,11 @@
         <p class="set-desc">单批复盘请求的超时（默认 60000）。它在后台跑，慢一点没关系，但超时就会白跑一次。</p>
       </div>
       <p class="set-note">加分只发生在<b>开关打开</b>时；关掉后已有的分数会保留（不删除），下次打开继续用。</p>
+      <div class="set-foot set-foot-inline">
+        <button type="button" class="primary set-save" data-savepage="hot-score">保存</button>
+        <span class="dim set-msg" id="settings-msg-hot-score"></span>
+      </div>
     </section>
-
-    <div class="set-foot">
-      <button type="button" class="primary set-save" data-savepage="hot">保存本页</button>
-      <span class="dim set-msg" id="settings-msg-hot"></span>
-    </div>
   </div>
 </div>
 
@@ -747,6 +797,10 @@
           <strong>启用主动注入</strong>
         </label>
         <p class="set-desc">每次思考结束后判断这一步需不需要知识，需要就注入。每个 turn 最多注入 <span id="ai-calls-hint">3</span> 次；没注入的不计（判「不需要」、没选出条目、内容重复的都不算）。</p>
+        <!-- ⭐⭐ 用户 2026-10-07：总开关**点即生效**（本版块没有「保存」按钮），这行只放回执。
+             ⚠️ 它由两个单元共同决定（开关在 `active-on`、模型在 `active-recall`）⇒
+                服务端仍守着"开着却没选模型"那条（没有模型 = 一次判断都不做）。 -->
+        <p class="dim set-msg" id="settings-msg-ai-on"></p>
       </div>
     </section>
 
@@ -796,6 +850,10 @@
         </label>
         <p class="set-desc">只认 reasoning 块结束（实测触发面约 69%）。关掉则首个 text 也算思考结束，几乎每步都判断；严格档下不输出思考的模型永不触发。</p>
       </div>
+      <div class="set-foot set-foot-inline">
+        <button type="button" class="primary set-save" data-savepage="active-recall">保存</button>
+        <span class="dim set-msg" id="settings-msg-active-recall"></span>
+      </div>
     </section>
 
     <section class="set-section">
@@ -842,6 +900,10 @@
         </div>
         <p class="set-desc">喂给召回模型的「本步思考」最多截取多少字符。调小省 token 但可能丢掉判据；调大更准但更贵。</p>
       </div>
+      <div class="set-foot set-foot-inline">
+        <button type="button" class="primary set-save" data-savepage="active-judge">保存</button>
+        <span class="dim set-msg" id="settings-msg-active-judge"></span>
+      </div>
     </section>
 
     <section class="set-section">
@@ -882,6 +944,10 @@
         <p class="set-desc">只对 <strong>chat 通路</strong>生效：用模型上下文窗口的这个比例作为单请求预算（JEV 通路走上面的固定值）。取不到窗口时该项不起作用。chat 通路不拆批。</p>
       </div>
       <p class="set-note">候选装不进一批就拆成多批并发发出（实测拆 2 批的耗时约等于单批，瓶颈在网关排队）。批数不够则自动压缩上下文腾容量，压到只剩本轮为地板，不会丢弃任何候选。</p>
+      <div class="set-foot set-foot-inline">
+        <button type="button" class="primary set-save" data-savepage="active-budget">保存</button>
+        <span class="dim set-msg" id="settings-msg-active-budget"></span>
+      </div>
     </section>
 
     <section class="set-section">
@@ -899,6 +965,10 @@
           <strong>主模型已表达检索意图时不注入</strong>
         </label>
         <p class="set-desc">它明确说要用 memj_search 或 memj_info 去查时就不重复给。泛泛的「我该查一下」不算，因为打算搜不等于搜得到（memj_search 是整词匹配，实测 top1 只中 5/10）。JEV 通路阈值 <input type="number" id="ai-intent-min" min="0" max="1" step="0.05" class="inline-num">：意图分 ≥ 此值就抑制。<strong>调大 ⇒ 只对非常明确的检索意图才让路</strong>；调小 ⇒ 更容易被抑制掉。范围 0–1。</p>
+      </div>
+      <div class="set-foot set-foot-inline">
+        <button type="button" class="primary set-save" data-savepage="active-gate">保存</button>
+        <span class="dim set-msg" id="settings-msg-active-gate"></span>
       </div>
     </section>
 
@@ -918,14 +988,13 @@
         </label>
         <p class="set-desc">仅调试用。开了就违背「输出越少越好」，每次多花输出 token。</p>
       </div>
+      <div class="set-foot set-foot-inline">
+        <button type="button" class="primary set-save" data-savepage="active-debug">保存</button>
+        <span class="dim set-msg" id="settings-msg-active-debug"></span>
+      </div>
     </section>
 
     <p class="set-note">召回的判断与工具执行并行跑（藏在工具时间里），命中的知识在下一步开始前注入。注入的消息是背景知识、不是任务，不会让你多做一件事。注入会让该轮多一次模型调用（你会看到多了一步），这是设计如此。</p>
-
-    <div class="set-foot">
-      <button type="button" class="primary set-save" data-savepage="active">保存本页</button>
-      <span class="dim set-msg" id="settings-msg-active"></span>
-    </div>
   </div>
 </div>
 
@@ -968,16 +1037,96 @@
         <span id="idx-check-msg" class="dim">未检查</span>
       </div>
       <div id="idx-check-detail" class="idx-detail" hidden></div>
+      <!-- ⭐ 本页只有这一个版块 ⇒ 它就是"按版块保存"（id 改成单元名，与 `SAVE_UNITS` 对齐）。 -->
+      <div class="set-foot set-foot-inline">
+        <button type="button" class="primary set-save" data-savepage="index-en">保存</button>
+        <span class="dim set-msg" id="settings-msg-index-en"></span>
+      </div>
     </section>
-
-    <div class="set-foot">
-      <button type="button" class="primary set-save" data-savepage="index">保存本页</button>
-      <span class="dim set-msg" id="settings-msg-index"></span>
-    </div>
   </div>
 </div>
 
-<!-- ════════════════ 子页⑤：提示词（2026-09-29 新增）════════════════
+<!-- ══════════════════════ 子页⑥：决策模型配置（2026-10-07 新增）══════════════════════
+     ⭐⭐⭐ **这一页专配 TypeSafe JEV 决策模型**（用户要求"能在前端配，别在环境里直连"）。
+
+     🔴 **为什么本插件必须自己给这一页**：JEV **不是 OpenAI 兼容协议** ——
+        它走 Knox 的 `/v1/systemone`，请求体是 `{model, state, questions}`、
+        响应是 `{answers:{q0:{noul:0.89}}}`。⇒ **DSH 原生的「模型」设置页装不下它**
+        （那页只支持 openai-completions / openai-responses / anthropic-messages）。
+        ⚠️ 硬把它注册成 chat 模型 ⇒ 选它必 400（库内 `4a7b1931` 记过）。
+
+     🔴🔴 **三个动作分开，不合并成一个「保存」**（它们的语义与目标**都不同**）：
+        · **保存配置** ⇒ 写 `cordis.patch.yml`（端点 / 凭据名 / 模型名，普通配置值）；
+        · **保存密钥** ⇒ 写**凭据 seam**（只写、永不回显、**不进 patch 文件**）；
+        · **测试连接** ⇒ **真发一次请求**（配好了 ≠ 能调通，要给一个"真通没通"的判据）。
+        ⚠️ 合成一个按钮的后果：分不清"存进去了"与"调通了"，而这两件事的失败原因完全不同。
+
+     ⚠️ **密钥输入框永远为空**（即使已经存过）—— 这是**刻意的**：
+        空 = "保留原来那个"。服务端也**只收不发**，任何回执都不含密钥。
+     ⚠️ 本页**不进 `SAVE_UNITS`**（它不是"按版块保存"那一套）⇒ 见 `app.js` 的
+        `openJevPage()` / `saveJevConfig()`。 -->
+<div class="subpanel set-panel" id="setsub-jev" hidden>
+  <div class="set-scroll">
+
+    <!-- ── 状态行：配置面要一眼看出"现在到底通不通" ── -->
+    <section class="set-section">
+      <h3 class="set-section-title">当前状态</h3>
+      <p class="set-note" id="jev-status-line">读取中…</p>
+      <p class="set-note" id="jev-empty-hint" hidden></p>
+    </section>
+
+    <!-- ── ① provider 列表（写 patch 文件）──
+         ⭐⭐ 照 DSH 官方「模型」设置页的形态：**一行一个 provider**，
+             点行/「编辑」展开那张卡片。🔴 **一次只展开一张**
+             （与官方同一交互：展开的状态是"我正在改哪一条"，不该同时开好几张）。 -->
+    <section class="set-section">
+      <h3 class="set-section-title">决策模型提供商</h3>
+      <p class="set-note">每个 provider = <b>一个端点</b> + <b>它自己的模型列表</b>。密钥按 provider 的 id <b>自动派生</b>凭据名（如 <code>knox</code> → <code>KNOX_API_KEY</code>），<b>不需要你填</b>（与 DSH 官方「模型」页同一条规则）。</p>
+      <div id="jev-provider-list"></div>
+      <!-- ⭐ 新增：官方那页也是这么做的（「添加模型提供商」是新增卡片的唯一入口）。 -->
+      <div class="set-foot set-foot-inline">
+        <button type="button" class="primary" id="jev-add-provider">添加提供商</button>
+        <span class="dim set-msg" id="jev-config-msg"></span>
+      </div>
+    </section>
+
+    <!-- ── ② 两条通路各自选谁（写 patch 文件）──
+         ⭐⭐⭐ 用户原话：*"和现在的 dsh 模型一样放在一起去选。就不要通路筛选了，
+             就选决策型通路的时候，也给全列表。让用户判断是否是决策性模型，是否匹配通路。"*
+             ⇒ 两个下拉框，**内容都是"全部 provider × 全部模型"平铺**
+                （不按 provider 分组过滤、也不做通路筛选）。 -->
+    <section class="set-section">
+      <h3 class="set-section-title">两条通路各用哪个</h3>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="jev-pick-active">主动注入（召回）</label>
+          <select id="jev-pick-active"><option value="">（未选 ⇒ 该功能不生效）</option></select>
+        </div>
+        <p class="set-desc">每次思考结束后判断"这一步要不要知识"用的决策模型。⚠️ 与<b>下方那条独立</b> —— 两条可以选不同的模型。</p>
+      </div>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="jev-pick-score">热知识轮末评分</label>
+          <select id="jev-pick-score"><option value="">（未选 ⇒ 该功能不生效）</option></select>
+        </div>
+        <p class="set-desc">每轮结束后给知识"本来能不能帮上忙"打分的决策模型。</p>
+      </div>
+      <p class="set-note">列表里是<b>全部</b>已配的 provider × 模型 —— <b>由你判断</b>哪一个适合决策任务（本页不替你筛）。</p>
+      <div class="set-foot set-foot-inline">
+        <button type="button" class="primary" id="jev-save-picks">保存选择</button>
+        <span class="dim set-msg" id="jev-pick-msg"></span>
+      </div>
+    </section>
+
+    <!-- ── 说明：为什么需要这一页（避免后人以为是重复建设）── -->
+    <section class="set-section">
+      <h3 class="set-section-title">说明</h3>
+      <p class="set-note">JEV 是 TypeSafe 的<b>决策模型</b>，协议与 OpenAI 兼容接口不同（请求 <code>{model,state,questions}</code>、响应 <code>{answers:{…:noul}}</code>），所以<b>不能</b>在 DSH 原生的「模型」设置页里声明（那页只支持 OpenAI/Anthropic 协议）。本页就是它的配置入口。跨 provider 的密钥互不干扰：每个 provider 一个派生名，改一条不影响别的。</p>
+    </section>
+  </div>
+</div>
+
+<!-- ════════════════ 子页⑦：提示词（2026-09-29 新增）════════════════
      ⭐⭐⭐ **这一页是"提示词唯一源头"** —— 保存后走运行期覆盖层，**改完即生效**。
 
      🔴 **分区轴 = 生效方式与影响面**（不是功能）：
@@ -1039,7 +1188,7 @@
   </div>
 </div>
 
-<!-- ──────────────── 子页⑥：模板（决策 204/205）──────────────── -->
+<!-- ──────────────── 子页⑧：模板（决策 204/205）──────────────── -->
 <div class="subpanel set-panel" id="setsub-templates" hidden>
   <div class="set-scroll">
 

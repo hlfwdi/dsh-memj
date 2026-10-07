@@ -63,7 +63,8 @@ import { themeDocPath } from './paths.ts'
 import { isAbsolutePath, parseCovers } from './parse.ts'
 import { isEntryKind } from './schema.ts'
 // ⭐⭐ 英文召回索引的「检查并补全」（判据与启动兜底**同源**，见 `en-index.ts`）。
-import { checkAndRepair } from './en-index.ts'
+// ⭐⭐⭐ `pairingError` 是「模板 ↔ 模型」配对规则的**唯一出处**（用户 2026-10-07 要求）。
+import { checkAndRepair, pairingError } from './en-index.ts'
 // ⭐⭐ 封面删改通道的**唯一实现**（决策 114）——人侧与 LLM 侧共用。
 import {
   archiveEntry,
@@ -86,7 +87,13 @@ import {
 } from './edit.ts'
 import type { Cover } from './schema.ts'
 import type { MemjConfig } from './config.ts'
-import { PROGRESS_WARN_MAX, PROGRESS_WARN_MIN, THEME_CREATION_VALUES, readSettings, writeSetting } from './settings.ts'
+// ⭐⭐⭐ `effectiveConfig`：**回显必须"磁盘优先"**——`writeSetting` 只改文件、
+//    不回头更新进程内配置，否则面板会出现"存完弹回旧值"（甚至把旧值写回去）。
+//    ⚠️ **每处读设置的地方都要用它**（本项目同族事故：只改一半 ⇒ 别处照旧弹回）。
+import {
+  PROGRESS_WARN_MAX, PROGRESS_WARN_MIN, THEME_CREATION_VALUES,
+  effectiveConfig, readSettings, writeSetting,
+} from './settings.ts'
 // ⭐⭐ 热知识取值边界（热知识方案 §10）——与 `config.ts` 的 schemastery 约束**必须一致**。
 import {
   HOT_BUDGET_MAX, HOT_BUDGET_MIN,
@@ -108,7 +115,12 @@ import {
   ACTIVE_TOP_K_MAX, ACTIVE_TOP_K_MIN,
 } from './settings.ts'
 // ⭐ "每 turn 最多注入几次"的**唯一判据**（新键优先、旧键回落）——别在别处再写 `?? 3`。
-import { itemMinOf, maxInjectionsPerTurn, needMinOf } from './config.ts'
+// ⭐⭐⭐ 决策模型（2026-10-07 多 provider 化）：`decisionProvidersOf` 与两个 `*DecisionOf`
+//    是**唯一**解析入口（端点 / 模型 / 派生凭据名三者必须同源）。
+import {
+  activeDecisionOf, decisionProvidersOf, deriveDecisionKeyRef,
+  itemMinOf, maxInjectionsPerTurn, needMinOf, scoreDecisionOf,
+} from './config.ts'
 import { ensureRepo, lastCommit, probeGit, readRepoState, commitAll } from './git.ts'
 import { narrativeFromProjectText } from './parse.ts'
 import { writeNarrativeMirror } from './narrative.ts'
@@ -131,7 +143,8 @@ import { loadEnIndex } from './en-index.ts'
 // ⭐⭐ 主动注入的实时状态（设计文档 §10.4）。
 import { activeInjectionsUsed, activeSnapshot, injectTotalsOf, lastInjectionOf } from './active-inject.ts'
 // ⭐ chat 通路的最近一次调用诊断（排障：只回 reasoning、拿不到 llm 服务…）。
-import { lastChatDiagnostic } from './active-recall.ts'
+// ⭐⭐ `resolveJevKey`：「决策模型配置」页的"测试连接"要与真实召回**同源**取密钥。
+import { lastChatDiagnostic, resolveJevKey } from './active-recall.ts'
 import { HOT_PROJECT_UNKNOWN } from './schema.ts'
 import type { HotProjectEntry } from './schema.ts'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -163,6 +176,253 @@ export interface ApiDeps {
 export interface ApiResult {
   status: number
   body: unknown
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ⭐⭐⭐ **决策模型（JEV）配置**的四块地基（用户 2026-10-07 要求）
+//
+// 🔴🔴 **三条贯穿始终的铁律**（本项目的既有教训，这里逐条兑现）：
+//   ① **绝不回显密钥**：读半边只走 `describe`（`CredentialInfo` 类型里**没有**
+//      放值的槽位）—— 本项目已发生过密钥明文外泄；
+//   ② **不 import `dsh-credentials`**：它**不在**本插件的 peerDependencies 里
+//      （未声明的包会让解析到另一份副本 ⇒ 同族坑）。⇒ 只用**结构化类型**
+//      调用它的方法（和 `resolveJevKey` 的做法一致）；
+//   ③ **写失败要说清是哪一类**：`set` 会因"只读来源遮蔽"而**拒绝**
+//      （那时写了也白写 —— 解析仍返回被遮蔽的那个值）⇒ 必须如实转达，
+//      否则用户会以为存进去了（典型静默失败）。
+// ══════════════════════════════════════════════════════════════════════════
+
+/** 凭据服务的**窄结构**（只声明我们用到的四个方法；见铁律②）。 */
+interface CredentialSvc {
+  resolve?: (ref: unknown) => Promise<{ value?: unknown } | undefined>
+  describe?: (ref: unknown) => Promise<{ configured?: boolean; source?: string; writable?: boolean } | undefined>
+  set?: (ref: unknown, value: string) => Promise<void>
+  unset?: (ref: unknown) => Promise<void>
+}
+
+/** 取凭据服务（拿不到 ⇒ `undefined`，调用方各自降级）。 */
+function credentialSvc(deps: ApiDeps): CredentialSvc | undefined {
+  return deps.getService?.('credentials') as CredentialSvc | undefined
+}
+
+/**
+ * ⭐ **描述一条凭据引用**（**只回事实、永不回值**）。
+ *
+ * ⚠️ 拿不到 `describe`（旧运行时 / 服务缺失）⇒ 回 `undefined`，
+ *    由调用方**降级**（例如只报"有没有值"，不报"能不能写"）——
+ *    **不要**在这里瞎猜一个 `writable: true`（那会让界面显示一个存不进去的输入框）。
+ */
+async function describeCredential(
+  deps: ApiDeps,
+  name: string,
+): Promise<{ configured: boolean; source: string; writable: boolean } | undefined> {
+  if (name === '') return undefined
+  try {
+    const got = await credentialSvc(deps)?.describe?.(name)
+    if (got === undefined) return undefined
+    return {
+      configured: got.configured === true,
+      source: typeof got.source === 'string' ? got.source : '',
+      writable: got.writable === true,
+    }
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * ⭐⭐ **把密钥存进凭据 seam**（`set`：只写、不落 patch、不回显）。
+ *
+ * 🔴 **失败必须如实说**：`set` 在"只读来源遮蔽"时会**拒绝** ——
+ *    那种情况下**不能**报成功（写了也白写：解析仍返回被遮蔽的那个值）。
+ *    ⭐ 判据（本项目既有教训）：**"开关在说谎"比"操作失败"更糟** ——
+ *    失败就说失败，并把下一步指出来。
+ * @returns `{ok, message}`；`ok=false` 时 `message` 是**给人看的**原因。
+ */
+async function setCredential(
+  deps: ApiDeps,
+  name: string,
+  value: string,
+): Promise<{ ok: boolean; message: string }> {
+  const svc = credentialSvc(deps)
+  if (typeof svc?.set !== 'function') {
+    return {
+      ok: false,
+      message: '当前运行时不提供凭据写入（拿不到 credentials.set）。'
+        + '可以改用环境变量注入该密钥，或用 profile 的凭据文件。',
+    }
+  }
+  try {
+    await svc.set(name, value)
+    return { ok: true, message: 'ok' }
+  } catch (err) {
+    const m = err instanceof Error ? err.message : String(err)
+    // ⭐ 遮蔽是最常见的一种：把它**单独说清**（否则用户会反复重试同一个动作）。
+    const shadowed = /shadow|read-only|readonly/i.test(m)
+    return {
+      ok: false,
+      message: shadowed
+        ? `未能保存：凭据「${name}」当前被一个**只读来源**（如环境变量）遮住，`
+          + `写进去也不会生效。请先移除那个来源，再在这里保存。`
+        : `未能保存密钥：${m}`,
+    }
+  }
+}
+
+/** ⭐ **清除凭据**（`unset`；引用缺失时是 no-op）。 */
+async function unsetCredential(
+  deps: ApiDeps,
+  name: string,
+): Promise<{ ok: boolean; message: string }> {
+  const svc = credentialSvc(deps)
+  if (typeof svc?.unset !== 'function') {
+    return { ok: false, message: '当前运行时不提供凭据清除（拿不到 credentials.unset）。' }
+  }
+  try {
+    await svc.unset(name)
+    return { ok: true, message: 'ok' }
+  } catch (err) {
+    const m = err instanceof Error ? err.message : String(err)
+    const shadowed = /shadow|read-only|readonly/i.test(m)
+    return {
+      ok: false,
+      message: shadowed
+        ? `未能清除：凭据「${name}」被一个只读来源遮住，清除它不会改变解析结果。`
+        : `未能清除密钥：${m}`,
+    }
+  }
+}
+
+/**
+ * ⭐⭐⭐ **测试 JEV 连接** —— 真发**一次**最小请求，回状态与耗时。
+ *
+ * 🔴 **为什么值得单独做**：`/jev-status` 只查"凭据**存不存在**"，
+ *    **不发请求** ⇒ "配了密钥"与"真能调通"是两件事（端点写错、密钥失效、
+ *    网关不通都过不了）。本项目一贯判据：**"配置读到了"不等于"功能能工作"**。
+ *
+ * ⚠️ 与真实召回**同源**：复用 `resolveJevKey` 取密钥、同一套请求体形态
+ *    （`{model, state, questions}` + 一个 `noul` 问题），只是**候选只有 1 条**。
+ * ⚠️ **超时短**（15 秒）：这是"点一下看看通不通"，不是真实召回
+ *    （真实召回有自己的 `activeInjectTimeoutMs`）。
+ * 🔴 **绝不回密钥**；失败时回**能指引下一步**的文案（本项目"报错要能直接指引到修法"）。
+ */
+async function testJevConnection(
+  deps: ApiDeps,
+  providerId: string,
+  modelName: string,
+): Promise<{
+  ok: boolean
+  message: string
+  ms?: number
+  model?: string
+  provider?: string
+  endpoint?: string
+  /** 上游自报的模型版本（如 `jev-1.13.0`）—— 有它才好确认"真到了网关"。 */
+  upstream?: string | undefined
+  /** 拿到 noul 才算真通（只有 HTTP 200 不够：可能回了个空壳）。 */
+  noul?: number
+}> {
+  // ⭐⭐ 按 **provider id** 找出这一条（端点与派生凭据名都从它来）。
+  const providers = decisionProvidersOf(deps.config)
+  const prov = providers.find((p) => p.id === providerId)
+  if (prov === undefined) {
+    return { ok: false, message: `找不到 provider「${providerId}」—— 请先在列表里加一个，或换一个测试。` }
+  }
+  const endpoint = prov.endpoint
+  // ⚠️ 模型：调用方指定则用它，否则用该 provider 的第一个（都空则报错）。
+  const model = (modelName.trim() !== '' ? modelName.trim() : (prov.models[0] ?? ''))
+  // ⭐ **凭据名按官方规则派生**（`<ID>_API_KEY`）—— 不问用户，也就不会写错。
+  const keyRef = deriveDecisionKeyRef(prov.id)
+  const key = await resolveJevKey(
+    { get: (n: string) => deps.getService?.(n) } as never,
+    deps.config,
+    keyRef,
+  )
+  if (key === undefined) {
+    return {
+      ok: false,
+      provider: prov.id,
+      endpoint,
+      model,
+      message: `没有可用密钥（凭据「${keyRef}」与环境变量均为空）。请先在下面保存该 provider 的密钥。`,
+    }
+  }
+  if (endpoint.trim() === '') {
+    return { ok: false, provider: prov.id, message: '该 provider 的端点为空 —— 请填一个。' }
+  }
+  if (model.trim() === '') {
+    return { ok: false, provider: prov.id, endpoint, message: '该 provider 下还没有模型 —— 请先加一个模型名。' }
+  }
+  const t0 = Date.now()
+  try {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        state: { probe: 'connectivity test from the memj settings page' },
+        questions: { q0: { type: 'noul', instructions: 'Is this a connectivity test?' } },
+      }),
+      signal: AbortSignal.timeout(15000),
+    })
+    const ms = Date.now() - t0
+    if (!res.ok) {
+      const text = await res.text().catch(() => '')
+      return {
+        ok: false,
+        ms,
+        model,
+        provider: prov.id,
+        endpoint,
+        message: `provider「${prov.id}」回了 HTTP ${res.status}${text ? `：${text.slice(0, 200)}` : ''}`
+          + '。401/403 ⇒ 密钥无效；404 ⇒ 端点路径不对（要 /v1/systemone）。',
+      }
+    }
+    const body = (await res.json().catch(() => ({}))) as {
+      model?: string
+      answers?: Record<string, { noul?: unknown }>
+    }
+    const noul = body.answers?.['q0']?.noul
+    const num = typeof noul === 'number' ? noul : undefined
+    if (num === undefined) {
+      // ⭐ 200 但没拿到 noul ⇒ **不算通**（"响应了"与"答对了形态"是两件事）。
+      return {
+        ok: false,
+        ms,
+        model,
+        provider: prov.id,
+        endpoint,
+        upstream: typeof body.model === 'string' ? body.model : undefined,
+        message: `端点通了（HTTP 200）但响应里没有 noul —— 形态不对。`
+          + `确认这真的是 TypeSafe 的 /v1/systemone 端点。`,
+      }
+    }
+    return {
+      ok: true,
+      ms,
+      model,
+      provider: prov.id,
+      endpoint,
+      upstream: typeof body.model === 'string' ? body.model : undefined,
+      noul: num,
+      message: `连接正常（${prov.id}／${model}，${ms}ms，上游 ${body.model ?? model}，noul=${num}）。`,
+    }
+  } catch (err) {
+    const ms = Date.now() - t0
+    const m = err instanceof Error ? err.message : String(err)
+    // ⭐ 超时与网络失败**要分开说**（下一步动作不同）。
+    const timeout = /timeout|abort/i.test(m)
+    return {
+      ok: false,
+      ms,
+      model,
+      provider: prov.id,
+      endpoint,
+      message: timeout
+        ? `超时（15 秒未响应）。检查端点是否可达、或换个网络环境。`
+        : `请求失败：${m}。`,
+    }
+  }
 }
 
 /**
@@ -1597,35 +1857,41 @@ export async function handleApi(
         return { status: 405, body: { ok: false, error: '该接口只接受 GET' } }
       }
       try {
-        // ⭐ 复用召回通路的 JEV 凭据解析（正规通道 credentials → 环境变量），
-        //    与 `active-recall.ts` 的 `resolveJevKey` 同源。
-        const name = deps.config.activeInjectJevApiKeyEnv || ''
-        let key: string | undefined
-        if (name !== '') {
-          try {
-            const creds = (deps.getService?.('credentials') as
-              | { resolve?: (n: string) => Promise<{ value?: unknown }> }
-              | undefined)
-            const got = await creds?.resolve?.(name)
-            if (typeof got?.value === 'string' && got.value !== '') key = got.value
-          } catch {
-            /* 正规通道取不到就退环境变量的路 */
-          }
-          if (key === undefined) {
-            const env = process.env[name]
-            if (typeof env === 'string' && env !== '') key = env
-          }
+        // ⭐⭐⭐ 2026-10-07 多 provider 化；**回一份完整清单**（每个 provider 的
+        //    凭据状态与派生凭据名），配置面据此一次画完，不必逐条再问。
+        //    🔴 **绝不回值** —— 每条只回 `describe` 的三个事实
+        //       （`CredentialInfo` 类型里没有放值的槽位）。
+        const providers = decisionProvidersOf(deps.config)
+        const rows = []
+        for (const p of providers) {
+          const keyRef = deriveDecisionKeyRef(p.id)
+          const meta = await describeCredential(deps, keyRef)
+          rows.push({
+            id: p.id,
+            displayName: p.displayName,
+            endpoint: p.endpoint,
+            models: p.models,
+            // ⭐ 凭据名**由 id 派生**（与官方同规则）—— 用户不必知道它，但排障要能看见。
+            keyRef,
+            credential: meta,
+            ready: meta?.configured === true,
+          })
         }
-        const ready = typeof key === 'string' && key !== ''
+        // ⭐ 两条通路各自**选中**了哪条（回 `provider/model`，前端直接显示）。
+        const aPick = activeDecisionOf(deps.config)
+        const sPick = scoreDecisionOf(deps.config)
         return {
           status: 200,
           body: {
             ok: true,
-            ready,
-            envName: name,
-            reason: ready
-              ? ''
-              : '未检测到 JEV 凭据（credentials 与对应环境变量均为空），选了 jev 通路会在运行期调用失败。'
+            providers: rows,
+            // ⚠️ 列表为空 ⇒ 前端要显示引导（"加一个 provider"），而不是空白。
+            empty: rows.length === 0,
+            activeInjectPick: aPick.provider === '' ? '' : `${aPick.provider}/${aPick.model}`,
+            hotScorePick: sPick.provider === '' ? '' : `${sPick.provider}/${sPick.model}`,
+            reason: rows.length === 0
+              ? '还没有配置任何决策模型 provider ⇒ 选了 jev 通路会在运行期调用失败。请先添加一个。'
+              : '',
           }
         }
       } catch (err) {
@@ -1633,97 +1899,219 @@ export async function handleApi(
       }
     }
 
+    // ══════════════════════════════════════════════════════════════════════
+    // ⭐⭐⭐ **决策模型（JEV）配置**（用户 2026-10-07 要求：在前端配，别在环境里配）
+    //
+    // 用户原话：*"我还是需要能够在 dsh 前端去配置决策模型的。而不是这样，
+    //   直接在环境里直连。哪怕是在插件的前端里面去配置。"*
+    // 以及：*"就也应该像 dsh 官方的模型设置一样，而且可以配置多个决策型模型。
+    //   有不同的 provider，和对应的模型才对啊。"*
+    //
+    // 🔴 **它与 `/settings` 分开的理由**：这里有一件事 `/settings` **做不到** ——
+    //    **写密钥**。`/settings` 只改 `cordis.patch.yml` 的**配置值**，
+    //    而密钥必须进**凭据 seam**（只写、不回显、不落 patch 文件）。
+    //    ⭐ 且"测试连接"要**发一次真实请求**，那也不是"改配置"的语义。
+    //
+    // 🔴🔴 **凭据名由 provider id 派生**（`deriveDecisionKeyRef`，与官方同规则）——
+    //    **页面从不询问环境变量名**（官方 README 原话）。
+    //    ⇒ 这三个端点都**收 provider id**，不收凭据名。
+    // ══════════════════════════════════════════════════════════════════════
+
+    // ── ① 保存密钥（**只写**：收下值，存进 seam，不回显任何东西）──
+    if (route === '/jev/key') {
+      if (method !== 'POST') {
+        return { status: 405, body: { ok: false, error: '该接口只接受 POST' } }
+      }
+      let body: { key?: unknown; providerId?: unknown } = {}
+      try {
+        body = JSON.parse(rawBody === '' ? '{}' : rawBody) as { key?: unknown; providerId?: unknown }
+      } catch {
+        return { status: 400, body: { ok: false, error: '请求体不是合法 JSON。' } }
+      }
+      const value = typeof body.key === 'string' ? body.key : ''
+      const pid = typeof body.providerId === 'string' ? body.providerId.trim() : ''
+      if (pid === '') {
+        return { status: 400, body: { ok: false, error: '缺少 providerId（密钥要存到某个 provider 名下）。' } }
+      }
+      // ⚠️ provider 必须**真的存在**（否则会往一个谁也不用的名字下存密钥 ⇒ 静默无效）。
+      if (!decisionProvidersOf(deps.config).some((p) => p.id === pid)) {
+        return {
+          status: 400,
+          body: { ok: false, error: `找不到 provider「${pid}」—— 请先保存 provider 配置，再存它的密钥。` },
+        }
+      }
+      // ⚠️ **空值一律拒绝**（想清空请用「清除」那个动作 —— 与 seam 的 set/unset 分工一致）。
+      if (value.trim() === '') {
+        return { status: 400, body: { ok: false, error: '密钥不能为空。要清除请点「清除密钥」。' } }
+      }
+      const keyRef = deriveDecisionKeyRef(pid)
+      const r = await setCredential(deps, keyRef, value)
+      if (!r.ok) return { status: 400, body: { ok: false, error: r.message } }
+      // ⭐ 回执**只说成了**，不回值、不回长度、不回前几位（本项目已发生过密钥外泄）。
+      return {
+        status: 200,
+        body: { ok: true, message: `「${pid}」的密钥已保存到凭据「${keyRef}」（只写，永不回显）。` },
+      }
+    }
+
+    // ── ② 清除密钥（走 seam 的 unset；缺失即 no-op）──
+    if (route === '/jev/key/clear') {
+      if (method !== 'POST') {
+        return { status: 405, body: { ok: false, error: '该接口只接受 POST' } }
+      }
+      let pid = ''
+      try {
+        pid = String((JSON.parse(rawBody === '' ? '{}' : rawBody) as { providerId?: unknown }).providerId ?? '').trim()
+      } catch {
+        return { status: 400, body: { ok: false, error: '请求体不是合法 JSON。' } }
+      }
+      if (pid === '') {
+        return { status: 400, body: { ok: false, error: '缺少 providerId。' } }
+      }
+      const keyRef = deriveDecisionKeyRef(pid)
+      const r = await unsetCredential(deps, keyRef)
+      if (!r.ok) return { status: 400, body: { ok: false, error: r.message } }
+      return { status: 200, body: { ok: true, message: `已清除「${pid}」的凭据「${keyRef}」。` } }
+    }
+
+    // ── ③ 测试连接（真发一次最小请求；**回状态与耗时，绝不回密钥**）──
+    if (route === '/jev/test') {
+      if (method !== 'POST') {
+        return { status: 405, body: { ok: false, error: '该接口只接受 POST' } }
+      }
+      let pid = ''
+      let model = ''
+      try {
+        const b = JSON.parse(rawBody === '' ? '{}' : rawBody) as { providerId?: unknown; model?: unknown }
+        pid = String(b.providerId ?? '').trim()
+        model = String(b.model ?? '').trim()
+      } catch {
+        return { status: 400, body: { ok: false, error: '请求体不是合法 JSON。' } }
+      }
+      if (pid === '') {
+        return { status: 400, body: { ok: false, error: '缺少 providerId（要测哪一条？）。' } }
+      }
+      const r = await testJevConnection(deps, pid, model)
+      // ⚠️ 连不上**不是服务器错误**（是用户配置问题）⇒ 回 200 + `ok:false`，
+      //    让界面把它当"测试结果"显示，而不是当"接口挂了"。
+      return { status: 200, body: r }
+    }
+
     if (route === '/settings') {
       if (method === 'GET') {
         const r = await readSettings(deps.baseUrl, deps.config, deps.pluginId)
+        // ⭐⭐⭐ **回显必须"磁盘优先"**（2026-10-07 修的真 bug）：
+        //    `r.config` 是 **`apply()` 那一刻**的进程内配置，`writeSetting` 只改文件、
+        //    不回头更新它 ⇒ 存完立刻拉 `/settings` 会拿到**旧值**
+        //    ⇒ 面板把控件填回旧值 ⇒ 用户看到「存完就弹回默认」，
+        //    而且**再存一次会把旧值写回磁盘**（真丢数据，已实测复现）。
+        //    ⚠️ `effectiveConfig` 只覆盖**磁盘上显式写了**的键，
+        //      其余仍走 `r.config`（保住"旧键回落生效值"那些键的回显）。
+        const cfg = effectiveConfig(r)
         return {
           status: 200,
           body: {
             ok: true,
             // ⭐ 只透出**本面板管的项**——不把整份配置倒给前端。
-            themeCreation: r.config.themeCreation,
+            themeCreation: cfg.themeCreation,
             // ⭐ 压缩阈值（决策 127 的触发条件；用户要求做成旋钮）。
-            progressCharsWarn: r.config.progressCharsWarn,
+            progressCharsWarn: cfg.progressCharsWarn,
             // ⭐⭐ 截断目标（决策 136）：超过阈值后自动截到 ≤ 本值。
-            progressCharsKeep: r.config.progressCharsKeep,
+            progressCharsKeep: cfg.progressCharsKeep,
             // ⭐ git 版本维护开关（决策 135；台账开关已在决策 136 删除）。
-            backupGit: r.config.backupGit,
+            backupGit: cfg.backupGit,
             // ⭐⭐ 热知识（热知识方案 §10）——预算类旋钮放主设置面板（用户裁定）。
-            hotInject: r.config.hotInject,
-            hotInjectRatio: r.config.hotInjectRatio,
-            hotCharsPerToken: r.config.hotCharsPerToken,
-            hotBudgetCharsFallback: r.config.hotBudgetCharsFallback,
-            hotFullWarnChars: r.config.hotFullWarnChars,
-            hotSessionKeep: r.config.hotSessionKeep,
+            hotInject: cfg.hotInject,
+            hotInjectRatio: cfg.hotInjectRatio,
+            hotCharsPerToken: cfg.hotCharsPerToken,
+            hotBudgetCharsFallback: cfg.hotBudgetCharsFallback,
+            hotFullWarnChars: cfg.hotFullWarnChars,
+            hotSessionKeep: cfg.hotSessionKeep,
             // ⭐⭐⭐ 知识评分（决策 177；属**热知识注入**板块）
-            hotScoreOnTurnEnd: r.config.hotScoreOnTurnEnd,
-            hotScoreThreshold: r.config.hotScoreThreshold,
-            hotScoreWindowHours: r.config.hotScoreWindowHours,
-            hotScoreTopN: r.config.hotScoreTopN,
-            hotScoreGateMinScore: r.config.hotScoreGateMinScore,
-            hotScoreGateLastTurn: r.config.hotScoreGateLastTurn,
-            hotScoreMaxPicks: r.config.hotScoreMaxPicks,
-            hotScoreMinChars: r.config.hotScoreMinChars,
-            hotScoreChannel: r.config.hotScoreChannel,
-            hotScoreModel: r.config.hotScoreModel,
-            hotScoreSubagentProvider: r.config.hotScoreSubagentProvider,
-            hotScoreSubagentModel: r.config.hotScoreSubagentModel,
-            hotScoreTimeoutMs: r.config.hotScoreTimeoutMs,
+            hotScoreOnTurnEnd: cfg.hotScoreOnTurnEnd,
+            hotScoreThreshold: cfg.hotScoreThreshold,
+            hotScoreWindowHours: cfg.hotScoreWindowHours,
+            hotScoreTopN: cfg.hotScoreTopN,
+            hotScoreGateMinScore: cfg.hotScoreGateMinScore,
+            hotScoreGateLastTurn: cfg.hotScoreGateLastTurn,
+            hotScoreMaxPicks: cfg.hotScoreMaxPicks,
+            hotScoreMinChars: cfg.hotScoreMinChars,
+            hotScoreChannel: cfg.hotScoreChannel,
+            hotScoreModel: cfg.hotScoreModel,
+            hotScoreSubagentProvider: cfg.hotScoreSubagentProvider,
+            hotScoreSubagentModel: cfg.hotScoreSubagentModel,
+            hotScoreTimeoutMs: cfg.hotScoreTimeoutMs,
             // ⭐⭐ 英文召回索引（设计文档 §9）：翻译模型 / 模板 / 并发 / 诊断
-            enIndex: r.config.enIndex,
-            enIndexDiag: r.config.enIndexDiag,
-            translateProvider: r.config.translateProvider,
-            translateModel: r.config.translateModel,
-            translateTemplate: r.config.translateTemplate,
-            translateConcurrency: r.config.translateConcurrency,
-            translateRetries: r.config.translateRetries,
-            translateTimeoutMs: r.config.translateTimeoutMs,
-            translateMaxTokens: r.config.translateMaxTokens,
+            enIndex: cfg.enIndex,
+            enIndexDiag: cfg.enIndexDiag,
+            translateProvider: cfg.translateProvider,
+            translateModel: cfg.translateModel,
+            translateTemplate: cfg.translateTemplate,
+            translateConcurrency: cfg.translateConcurrency,
+            translateRetries: cfg.translateRetries,
+            translateTimeoutMs: cfg.translateTimeoutMs,
+            translateMaxTokens: cfg.translateMaxTokens,
             // ⭐⭐⭐ 标签规范化（决策 162）：裁决模型（B 层）。
-            tagNormalizeProvider: r.config.tagNormalizeProvider,
-            tagNormalizeModel: r.config.tagNormalizeModel,
-            tagNormalizeTimeoutMs: r.config.tagNormalizeTimeoutMs,
-            tagNormalizeMaxTokens: r.config.tagNormalizeMaxTokens,
+            tagNormalizeProvider: cfg.tagNormalizeProvider,
+            tagNormalizeModel: cfg.tagNormalizeModel,
+            tagNormalizeTimeoutMs: cfg.tagNormalizeTimeoutMs,
+            tagNormalizeMaxTokens: cfg.tagNormalizeMaxTokens,
             // ⭐ 决策 165：轮次结束有沉淀时**自动**跑（默认开）。
-            tagNormalizeOnHandoff: r.config.tagNormalizeOnHandoff,
+            tagNormalizeOnHandoff: cfg.tagNormalizeOnHandoff,
             // ⭐ 决策 168：裁决模型的思考等级（默认 off）。
-            tagNormalizeReasoningEffort: r.config.tagNormalizeReasoningEffort,
+            tagNormalizeReasoningEffort: cfg.tagNormalizeReasoningEffort,
             // ⭐⭐ 主动注入（设计文档 §10.1）：开关 / 通路 / 模型 / 范围 / 触发口径 / 阈值
-            activeInject: r.config.activeInject,
-            activeInjectChannel: r.config.activeInjectChannel,
-            activeInjectModel: r.config.activeInjectModel,
-            activeInjectScope: r.config.activeInjectScope,
-            activeInjectJevNarrowScope: r.config.activeInjectJevNarrowScope,
-            activeInjectStrict: r.config.activeInjectStrict,
-            activeInjectTopK: r.config.activeInjectTopK,
+            activeInject: cfg.activeInject,
+            activeInjectChannel: cfg.activeInjectChannel,
+            activeInjectModel: cfg.activeInjectModel,
+            activeInjectScope: cfg.activeInjectScope,
+            activeInjectJevNarrowScope: cfg.activeInjectJevNarrowScope,
+            // ⭐⭐⭐ 决策模型（JEV）配置（用户 2026-10-07）——
+            //    ⚠️ **前三项**是「决策模型配置」页要显示/编辑的；**密钥不在这里**
+            //    （它走凭据 seam，只写、永不回显 ⇒ 只能从 `/jev-status` 拿"有没有"）。
+            // ⭐⭐⭐ 决策模型（JEV）配置（用户 2026-10-07 多 provider 化）——
+            //    ⚠️ **只回"生效列表"**（`decisionProvidersOf` 会把旧单 provider 的三条键
+            //    回落成一条）⇒ 界面永远看到一份统一的 provider 列表，不必自己拼回落。
+            decisionProviders: decisionProvidersOf(cfg),
+            activeInjectDecisionPick: cfg.activeInjectDecisionPick,
+            hotScoreDecisionPick: cfg.hotScoreDecisionPick,
+            // ⚠️ 这三个旧键**继续透出**（只为排障/兼容：让人能看出"值是从哪回落的"）。
+            activeInjectJevEndpoint: cfg.activeInjectJevEndpoint,
+            activeInjectJevApiKeyEnv: cfg.activeInjectJevApiKeyEnv,
+            // ⚠️ 这个旧键**继续透出**（只为排障/兼容：让人能看出"值是从哪回落的"）。
+            jevModel: cfg.jevModel,
+            activeInjectStrict: cfg.activeInjectStrict,
+            activeInjectTopK: cfg.activeInjectTopK,
             // ⭐ 回显**生效值**（走回落函数）—— 旧键有值、新键没写时，
             //   面板要显示"实际在用的那个数"，而不是空白（否则用户一存就把回落值写没了）。
-            activeInjectNeedMin: needMinOf(r.config),
-            activeInjectItemMin: itemMinOf(r.config),
-            activeInjectBand: r.config.activeInjectBand,
-            activeInjectTimeoutMs: r.config.activeInjectTimeoutMs,
-            activeInjectContextRounds: r.config.activeInjectContextRounds,
-            activeInjectPoolMax: r.config.activeInjectPoolMax,
-            activeInjectExplain: r.config.activeInjectExplain,
-            activeInjectSearchIntentGate: r.config.activeInjectSearchIntentGate,
-            activeInjectSearchIntentMin: r.config.activeInjectSearchIntentMin,
-            activeInjectSufficientGate: r.config.activeInjectSufficientGate,
-            activeInjectSufficientMin: r.config.activeInjectSufficientMin,
+            //   ⚠️ 传 `cfg`（磁盘优先那份）而不是 `r.config`：新键刚存下去、
+            //      进程内还没热重载时，回落函数**必须看见新键**，否则照样弹回旧值。
+            activeInjectNeedMin: needMinOf(cfg),
+            activeInjectItemMin: itemMinOf(cfg),
+            activeInjectBand: cfg.activeInjectBand,
+            activeInjectTimeoutMs: cfg.activeInjectTimeoutMs,
+            activeInjectContextRounds: cfg.activeInjectContextRounds,
+            activeInjectPoolMax: cfg.activeInjectPoolMax,
+            activeInjectExplain: cfg.activeInjectExplain,
+            activeInjectSearchIntentGate: cfg.activeInjectSearchIntentGate,
+            activeInjectSearchIntentMin: cfg.activeInjectSearchIntentMin,
+            activeInjectSufficientGate: cfg.activeInjectSufficientGate,
+            activeInjectSufficientMin: cfg.activeInjectSufficientMin,
             // ⭐ 2026-09-27：新键（每 turn 最多**注入**几次）。
             //    ⚠️ 解析后回显（含旧键回落）—— 面板显示的是**真正生效的值**，
             //       而不是"新键写没写"（否则旧配置会显示成空白/0，让用户误以为丢了设置）。
-            activeInjectMaxInjectionsPerTurn: maxInjectionsPerTurn(r.config),
-            activeInjectReasoningMaxChars: r.config.activeInjectReasoningMaxChars,
+            activeInjectMaxInjectionsPerTurn: maxInjectionsPerTurn(cfg),
+            activeInjectReasoningMaxChars: cfg.activeInjectReasoningMaxChars,
             // ⭐⭐⭐ 预算与拆批（用户 2026-09-26 定稿方案）
-            activeInjectBudget: r.config.activeInjectBudget,
-            activeInjectBudgetTokens: r.config.activeInjectBudgetTokens,
-            activeInjectContextTokens: r.config.activeInjectContextTokens,
-            activeInjectConcurrency: r.config.activeInjectConcurrency,
-            activeInjectChatWindowRatio: r.config.activeInjectChatWindowRatio,
+            activeInjectBudget: cfg.activeInjectBudget,
+            activeInjectBudgetTokens: cfg.activeInjectBudgetTokens,
+            activeInjectContextTokens: cfg.activeInjectContextTokens,
+            activeInjectConcurrency: cfg.activeInjectConcurrency,
+            activeInjectChatWindowRatio: cfg.activeInjectChatWindowRatio,
             // ⚠️ 已作废（保留字段，见 config.ts）
-            activeInjectPoolMin: r.config.activeInjectPoolMin,
+            activeInjectPoolMin: cfg.activeInjectPoolMin,
             // ⭐⭐ 召回日志的"请求快照"档（B 档；默认关）。
-            activeRecallLogRequest: r.config.activeRecallLogRequest,
+            activeRecallLogRequest: cfg.activeRecallLogRequest,
             patchPath: r.patchPath,
             patchExists: r.patchExists,
             explicitKeys: r.explicitKeys,
@@ -1786,6 +2174,10 @@ export async function handleApi(
         activeInjectModel?: unknown
         activeInjectScope?: unknown
         activeInjectJevNarrowScope?: unknown
+        // ⭐⭐⭐ 决策模型（2026-10-07 多 provider 化）。
+        decisionProviders?: unknown
+        activeInjectDecisionPick?: unknown
+        hotScoreDecisionPick?: unknown
         activeInjectStrict?: unknown
         activeInjectTopK?: unknown
         activeInjectNeedMin?: unknown
@@ -1877,6 +2269,12 @@ export async function handleApi(
       const wantsActiveModel = payload.activeInjectModel !== undefined
       const wantsActiveScope = payload.activeInjectScope !== undefined
       const wantsActiveJevNarrow = payload.activeInjectJevNarrowScope !== undefined
+      // ⭐⭐⭐ 决策模型（2026-10-07 多 provider 化，用户要求）：
+      //    provider 列表 + 两条通路各自的选集。⚠️ 旧的三个单 provider 键
+      //    （endpoint / keyEnv / jevModel）**不再接受写入**（只读回落，见 `decisionProvidersOf`）。
+      const wantsDecisionProviders = payload.decisionProviders !== undefined
+      const wantsActiveDecisionPick = payload.activeInjectDecisionPick !== undefined
+      const wantsHotScoreDecisionPick = payload.hotScoreDecisionPick !== undefined
       const wantsActiveStrict = payload.activeInjectStrict !== undefined
       const wantsActiveTopK = payload.activeInjectTopK !== undefined
       const wantsActiveNeedMin = payload.activeInjectNeedMin !== undefined
@@ -1926,6 +2324,9 @@ export async function handleApi(
         && !wantsTagProvider && !wantsTagModel && !wantsTagAuto && !wantsTagEffort
         && !wantsActive && !wantsActiveChannel && !wantsActiveModel && !wantsActiveScope
         && !wantsActiveJevNarrow && !wantsActiveStrict && !wantsActiveTopK && !wantsActiveBand
+        // ⭐⭐⭐ 决策模型（多 provider）—— ⚠️ **必须同时进这个条件**，否则单独提交它们
+        //    会被判"什么都没给"⇒ 400（本项目已两次踩过这个形态）。
+        && !wantsDecisionProviders && !wantsActiveDecisionPick && !wantsHotScoreDecisionPick
         && !wantsActiveNeedMin && !wantsActiveItemMin
         && !wantsActiveTimeout && !wantsActiveRounds && !wantsActivePool && !wantsActiveExplain
         && !wantsActiveIntentGate && !wantsActiveIntentMin && !wantsActiveSuffGate
@@ -2107,6 +2508,47 @@ export async function handleApi(
         const w = await writeSetting(deps.baseUrl, 'enIndexDiag', payload.enIndexDiag, deps.pluginId)
         if (!w.ok) return { status: 400, body: { ok: false, error: w.message, patchPath: w.patchPath } }
       }
+      // ══════════════════════════════════════════════════════════════════════
+      // ⭐⭐⭐ **「翻译模板 ↔ 模型」配对校验**（用户 2026-10-07 要求）
+      //
+      // 用户原话：*"如果选对应比如 mt 模版，但是没有响应的 mt 模型就要警告，
+      //   并且保存时报错。"*
+      //
+      // 🔴 **为什么要在这里拦**：`translateTemplate` 是"提示词 + 解析器"的**配对开关**，
+      //    错配是**静默失败**（实测踩到：选了普通对话模型却把模板留成 `mt`，
+      //    面板**毫无阻拦地存下去了**）。⇒ 用户明确要求：**保存时就报错**。
+      //
+      // ⚠️⚠️ **三条实现纪律**（都是本项目踩过的）：
+      //   ① **必须在任何写入【之前】校验** —— 排在下面那几个 `writeSetting` 前面，
+      //      否则会出现"模板已写进去、模型校验又失败"的**半套配置**；
+      //   ② **判据用【生效组合】，不是只看本次 payload** —— 用户可能只改模板、
+      //      只改模型、或两个一起改 ⇒ 三种情形都要能算出"改完之后是什么组合"。
+      //      故用**磁盘优先**的 `effectiveConfig`（本文件刚统一过的口径），
+      //      避免拿进程内那份**过时**的配置去判（那会漏判或误判）；
+      //   ③ **判据本身只写一份** —— 调 `pairingError()`（`en-index.ts`），
+      //      前端告警也用它，**不要在这里再抄一遍规则**。
+      // ══════════════════════════════════════════════════════════════════════
+      if (wantsTrProvider || wantsTrModel || wantsTrTemplate) {
+        const cur = effectiveConfig(await readSettings(deps.baseUrl, deps.config, deps.pluginId))
+        const effTemplate = wantsTrTemplate
+          ? String(payload.translateTemplate)
+          : cur.translateTemplate
+        const effProvider = wantsTrProvider ? String(payload.translateProvider) : cur.translateProvider
+        const effModel = wantsTrModel ? String(payload.translateModel) : cur.translateModel
+        const bad = pairingError(effTemplate, effProvider, effModel)
+        if (bad !== '') {
+          return {
+            status: 400,
+            body: {
+              ok: false,
+              // ⚠️ 文案要能独立读懂（前端直接把它显示在结果行里）。
+              error: `未保存：${bad}`,
+              // ⭐ 结构化字段：前端/脚本不必去解析那句话。
+              pairingError: { template: effTemplate, provider: effProvider, model: effModel },
+            },
+          }
+        }
+      }
       if (wantsTrProvider) {
         const v = payload.translateProvider
         if (typeof v !== 'string' || v.length > 200) {
@@ -2261,6 +2703,98 @@ export async function handleApi(
           return { status: 400, body: { ok: false, error: 'activeInjectJevNarrowScope 必须是布尔值。' } }
         }
         const w = await writeSetting(deps.baseUrl, 'activeInjectJevNarrowScope', payload.activeInjectJevNarrowScope, deps.pluginId)
+        if (!w.ok) return { status: 400, body: { ok: false, error: w.message, patchPath: w.patchPath } }
+      }
+      // ⭐⭐⭐ **决策模型 providers 列表**（用户 2026-10-07 多 provider 化）。
+      //    ⚠️ 这是**普通配置值**（进 `cordis.patch.yml`）；**密钥不在其中**
+      //    （密钥走凭据 seam，由 `/jev/key` 单独收，且名字由 id 派生）。
+      if (wantsDecisionProviders) {
+        const v = payload.decisionProviders
+        if (!Array.isArray(v)) {
+          return { status: 400, body: { ok: false, error: 'decisionProviders 必须是数组。' } }
+        }
+        const cleaned: Array<{ id: string; displayName: string; endpoint: string; models: string[] }> = []
+        const seen = new Set<string>()
+        for (const raw of v) {
+          if (raw === null || typeof raw !== 'object') {
+            return { status: 400, body: { ok: false, error: 'decisionProviders 的每一项必须是对象。' } }
+          }
+          const o = raw as Record<string, unknown>
+          const id = typeof o['id'] === 'string' ? o['id'].trim() : ''
+          // ⚠️ id 是**路由标识**：它会派生出凭据名 ⇒ 必须是安全的短标识符。
+          //    写成中文/空格/斜杠会派生出一个古怪的凭据名，且**失败是静默的**。
+          if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,47}$/.test(id)) {
+            return {
+              status: 400,
+              body: {
+                ok: false,
+                error: `provider id「${id || '(空)'}」不合法：只能是字母数字开头、含字母数字/下划线/连字符，最长 48（它会派生出凭据名，所以不能随意写）。`,
+              },
+            }
+          }
+          if (seen.has(id)) {
+            return { status: 400, body: { ok: false, error: `provider id「${id}」重复了（同一份配置里必须唯一）。` } }
+          }
+          seen.add(id)
+          const endpoint = typeof o['endpoint'] === 'string' ? o['endpoint'].trim() : ''
+          if (!/^https?:\/\/\S+$/i.test(endpoint)) {
+            return {
+              status: 400,
+              body: {
+                ok: false,
+                error: `provider「${id}」的端点必须是 http:// 或 https:// 开头的 URL（如 https://api.knox.chat/v1/systemone）。`,
+              },
+            }
+          }
+          const modelsRaw = Array.isArray(o['models']) ? o['models'] : []
+          const models = modelsRaw
+            .filter((m): m is string => typeof m === 'string')
+            .map((m) => m.trim())
+            .filter((m) => m !== '')
+          cleaned.push({
+            id,
+            displayName: typeof o['displayName'] === 'string' ? o['displayName'].trim().slice(0, 100) : '',
+            endpoint,
+            models,
+          })
+        }
+        // ⚠️ 存成**结构化数组**（YAML 会写成漂亮的块风格 —— 已实测）。
+        const w = await writeSetting(deps.baseUrl, 'decisionProviders', cleaned, deps.pluginId)
+        if (!w.ok) return { status: 400, body: { ok: false, error: w.message, patchPath: w.patchPath } }
+      }
+      // ⭐⭐ 两处选集（`<providerId>/<modelName>`）—— 格式校验 + **必须指向存在的 provider**。
+      for (const [key, wants] of [
+        ['activeInjectDecisionPick', wantsActiveDecisionPick],
+        ['hotScoreDecisionPick', wantsHotScoreDecisionPick],
+      ] as const) {
+        if (!wants) continue
+        const v = payload[key as 'activeInjectDecisionPick' | 'hotScoreDecisionPick']
+        if (typeof v !== 'string' || v.length > 200) {
+          return { status: 400, body: { ok: false, error: `${key} 必须是字符串（≤200 字符）。` } }
+        }
+        const pick = v.trim()
+        if (pick !== '') {
+          const i = pick.indexOf('/')
+          const pid = i > 0 ? pick.slice(0, i) : ''
+          if (pid === '') {
+            return {
+              status: 400,
+              body: { ok: false, error: `${key} 要写成「providerId/模型名」（当前是「${pick}」）。` },
+            }
+          }
+          // 🔴 **必须指向一个真的存在的 provider** —— 否则运行期会静默回落到别的
+          //    provider（`resolveDecisionPick` 的兜底），而用户以为自己选对了。
+          const exists = decisionProvidersOf(effectiveConfig(
+            await readSettings(deps.baseUrl, deps.config, deps.pluginId),
+          )).some((p) => p.id === pid)
+          if (!exists) {
+            return {
+              status: 400,
+              body: { ok: false, error: `${key} 指向的 provider「${pid}」不存在 —— 请先在列表里加它。` },
+            }
+          }
+        }
+        const w = await writeSetting(deps.baseUrl, key, pick, deps.pluginId)
         if (!w.ok) return { status: 400, body: { ok: false, error: w.message, patchPath: w.patchPath } }
       }
       if (wantsActiveStrict) {
@@ -2576,6 +3110,10 @@ export async function handleApi(
           ...(wantsActiveModel ? { activeInjectModel: payload.activeInjectModel } : {}),
           ...(wantsActiveScope ? { activeInjectScope: payload.activeInjectScope } : {}),
           ...(wantsActiveJevNarrow ? { activeInjectJevNarrowScope: payload.activeInjectJevNarrowScope } : {}),
+          // ⭐⭐⭐ 决策模型（2026-10-07 多 provider 化）
+          ...(wantsDecisionProviders ? { decisionProviders: payload.decisionProviders } : {}),
+          ...(wantsActiveDecisionPick ? { activeInjectDecisionPick: payload.activeInjectDecisionPick } : {}),
+          ...(wantsHotScoreDecisionPick ? { hotScoreDecisionPick: payload.hotScoreDecisionPick } : {}),
           ...(wantsActiveStrict ? { activeInjectStrict: payload.activeInjectStrict } : {}),
           ...(wantsActiveTopK ? { activeInjectTopK: payload.activeInjectTopK } : {}),
           ...(wantsActiveBand ? { activeInjectBand: payload.activeInjectBand } : {}),

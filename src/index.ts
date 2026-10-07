@@ -450,6 +450,14 @@ export function apply(ctx: Context, config: MemjConfig = DEFAULT_CONFIG): void {
       //    🔴 漏注册 ⇒ 请求落到 SPA 兜底、返回 HTML ⇒ 前端 json 解析失败、
       //       jev 未配置提示永远出不来，而服务端毫无异常（同 `/models` 那类老坑）。
       `${API_BASE}/jev-status`,
+      // ⭐⭐⭐ **决策模型（JEV）配置页的三个动作**（用户 2026-10-07 要求）。
+      //    🔴 **漏注册 ⇒ 请求落到 SPA 兜底、返回 HTML** ⇒ 前端 `JSON.parse` 报错，
+      //       而服务端**毫无异常**（同 `/models`、`/archived` 那类老坑）。
+      //    ⚠️ 本轮**真的漏了这三个**，是 `test-web-api.mjs` 的【0】路由注册一致性
+      //       当场抓到的（**不是靠记性**）—— 那条测试就是为这类事存在的。
+      `${API_BASE}/jev/key`,
+      `${API_BASE}/jev/key/clear`,
+      `${API_BASE}/jev/test`,
       // ⭐⭐ 英文召回索引的**「检查并补全」**（用户 2026-09-26 要求）
       //    🔴 同上：漏注册 ⇒ 请求返回 HTML ⇒ 按钮报"检查失败"，而服务端毫无异常。
       `${API_BASE}/index-check`,

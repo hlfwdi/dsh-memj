@@ -34,7 +34,174 @@ const TABS = ['kb', 'projects', 'themes', 'hot', 'review', 'archive', 'settings'
 //        *"这样拆，每条都那么一两句话，完全不知道咋回事"*）。
 //       ⇒ **分组不再手写在前端**：由服务端 `GET /api/prompts` 的 `groups` 回，
 //         前端只负责画（本项目判据：能给人看的列表必须由服务端回结构化条目）。
-const SET_SUBTABS = ['sink', 'hot', 'active', 'index', 'prompts', 'templates']
+//    ⭐⭐⭐ 2026-10-07：**新增 `jev`**（决策模型配置）—— 用户要求"能在前端配 JEV"。
+//       🔴 **它不进 `SAVE_UNITS`**：本页的三个动作语义各不相同（保存配置 / 保存密钥 /
+//          测试连接），而不是"一个版块一个保存按钮"那一套。
+const SET_SUBTABS = ['sink', 'hot', 'active', 'index', 'jev', 'prompts', 'templates']
+
+/**
+ * ⭐⭐⭐ **保存单元 → 所属子页**（2026-10-07，用户裁定）。
+ *
+ * 🔴 **为什么要这张表**：`data-savepage` 原来**同时**当"子页名"用
+ *    （保存按钮、消息区 id、`openSettingsPage` 的页面判定全按它算）。
+ *    现在**每个设置版块各存各的** ⇒ **单元 ≠ 子页**，两件事必须分开：
+ *      · **单元**（`data-savepage` / `settings-msg-<单元>` / `data-unit`）= 一次提交的粒度；
+ *      · **子页**（`state.setSub` / `#setsub-<页>`）= 界面上一次看一屏的粒度。
+ *    ⚠️ **不分开的后果**：`settings-msg-sink` 这种"页级" id **已经不存在了**
+ *       ⇒ 保存结果那行字**永远不显示**（静默：按钮照常工作、只是没有反馈）。
+ *
+ * ⭐⭐⭐ 用户 2026-10-07 第二次裁定：*"还是把所有设置页面的子页面，
+ *    全都按设置板块去分别保存吧。不要按页去保存了。"*
+ *    ⇒ 从"只有沉淀页拆"扩到**全部设置页**。
+ *    🔴 **为什么这不是"为了整齐"**：绑在一起意味着**改一处要连带提交十几项**，
+ *      任一处读值/校验出错就**整页存不了**，而且报错会指向一个
+ *      **当前版块根本没有的字段**（本项目已两次踩到这个形态：决策 169、
+ *      以及"删了控件却留着读它的代码"）。
+ *    ⚠️ 顺带一个真实收益：git 环境探测、召回模型守卫这类**有代价的前置动作**，
+ *      只在本版块保存时跑 —— 以前改个阈值也会顺带探一次 git。
+ *
+ * ⭐⭐⭐ 用户 2026-10-07 第三次裁定：*"热知识注入和主动注入的总开关不需要保存按钮，
+ *    应该是点击开关直接生效的。"*
+ *    ⇒ `hot-inject`（启用热知识注入）与 `active-on`（启用主动注入）**移出本表**：
+ *      它们由 `change` 事件**即时写配置**（见 `bindInstantToggles`）。
+ *    🔴 **判据（为什么不给所有键都做成即时）**：**一个键、独立成项、无配套参数** ⇒
+ *      即时生效最自然（点了就是它的全部语义）。
+ *      而带**配套参数**的版块（如"预算"有 5 个数值）必须留保存按钮 ——
+ *      否则每敲一个字符就写一次盘，且**半成品配置会被热重载吃进去**（状态不一致）。
+ */
+const SAVE_UNITS = {
+  // ── 沉淀 ──
+  'sink-theme': 'sink',
+  'sink-progress': 'sink',
+  'sink-git': 'sink',
+  'sink-tag': 'sink',
+  // ── 热知识注入 ──
+  // ⚠️ `hot-inject`（总开关）**故意不在这里** —— 它是即时生效项。
+  'hot-budget': 'hot',
+  'hot-score': 'hot',
+  // ── 主动注入 ──
+  // ⚠️ `active-on`（总开关）**故意不在这里** —— 它是即时生效项。
+  'active-recall': 'active',
+  'active-judge': 'active',
+  'active-budget': 'active',
+  'active-gate': 'active',
+  'active-debug': 'active',
+  // ── 英文索引 ──
+  'index-en': 'index',
+}
+
+/**
+ * ⭐⭐⭐ **即时生效的开关**（用户 2026-10-07 裁定）：`[控件 id, 配置键, 所属子页]`。
+ *
+ * 🔴 **与"保存单元"的区别**：这些**没有保存按钮**，勾选/取消**立刻写配置**。
+ *    ⇒ 它们**不属于 `SAVE_UNITS`**（那是"按钮驱动"的表），是另一条通道。
+ * ⚠️ **别把带配套参数的项塞进来**：即时写盘的前提是"这一个勾选就是全部语义"。
+ *    例：`ai-strict`（严格触发口径）看着也像个开关，但它与同版的通路/模型/范围
+ *    一起构成"召回模型"那一块、且保存时要过"开着却没选模型"那道守卫
+ *    ⇒ **它仍留在 `active-recall` 里走保存按钮**。
+ * ⚠️ 第三列是**所属子页**——`saveUnitsOf` 靠它把即时开关也算进"本页要清的消息"。
+ */
+const INSTANT_TOGGLES = [
+  ['hot-inject-enabled', 'hotInject', 'hot'],
+  ['ai-on', 'activeInject', 'active'],
+]
+
+/**
+ * ⭐⭐ **每个子页上有哪些"会写配置的项"**（用于消息清理）。
+ *
+ * 🔴 与 `SAVE_UNITS` **互为反向**，必须是同一份事实的两个方向：
+ *    改了 `SAVE_UNITS` 而忘了这里 ⇒ 某个单元保存后**不会刷新**（值看着没变）。
+ *    ⚠️ 本项目判据：这种"两份互逆清单"要**从同一份推导**，不要手抄两遍
+ *       （故这里由 `SAVE_UNITS` 现算，不写死）。
+ * ⭐⭐ 2026-10-07：**即时生效的开关也要算进来**（它们同样写配置、同样要显示回执）
+ *    —— 否则切页回来时那行"已保存"清不掉，用户会以为是这一次操作的结果。
+ * @param page - 子页 id（`sink` / `hot` / `active` / `index`）。
+ * @returns 该页上所有会写配置的项 id（保存单元 + 即时开关）。
+ */
+function saveUnitsOf(page) {
+  const units = Object.keys(SAVE_UNITS).filter((u) => SAVE_UNITS[u] === page)
+  // ⚠️ 即时开关的 id **本身就是**它那一项的名字（与保存单元同一套取值口径）。
+  const instant = INSTANT_TOGGLES.filter(([, , p]) => p === page).map(([id]) => id)
+  const all = [...units, ...instant]
+  return all.length > 0 ? all : [page]
+}
+
+/**
+ * ⭐⭐⭐ **每个保存单元里的数值键**：`[控件 id, 配置键, 显示名, min, max, 是否必须整数]`。
+ *
+ * 🔴🔴 **这张表同时驱动【校验】与【提交】两件事**（本项目铁律"实现只留一份"）。
+ *    以前它们是分开写的：一张 `aiDefs` 管校验、另一处再列一遍键名管提交 ——
+ *    那种写法下**插入一个控件就可能让两边错位**（实测踩过：按下标取值的时代，
+ *    中间插 3 个控件就让后面全部错位，而**报错不在插入处**、
+ *    只是把值写到了别的配置键上）。
+ *    ⇒ 现在两者来自同一行：**结构上不可能漂移**。
+ *
+ * ⚠️ **按单元分组 = 按【读值】裁剪**。这一点是本项目最贵的一课（决策 169）：
+ *    只裁提交体、不裁读值 ⇒ 在 A 版块点保存时它仍去读 B 版块的控件，
+ *    而 B 的控件此刻可能是空的 ⇒ 报「某某必须是 1–50 之间的整数」，
+ *    那个字段**在 A 版块界面上根本不存在**。
+ *    ⇒ ⭐ 判据：**"拆分"必须同时裁【写】与【读】两条路径**。
+ *
+ * ⚠️ `integer` 要如实标：小数键写成 `true` 会把 0.6 拒掉（本项目踩过）。
+ */
+const NUM_KEYS = {
+  // ── 沉淀 · 当前进度自动截断归档 ──
+  'sink-progress': [
+    ['progress-warn', 'progressCharsWarn', '触发阈值', 1000, 1000000, true],
+    ['progress-keep', 'progressCharsKeep', '截断目标', 1000, 1000000, true],
+  ],
+  // ── 热知识注入 · 预算 ──
+  'hot-budget': [
+    ['hot-ratio', 'hotInjectRatio', '注入上限比例', 0, 100, false],
+    ['hot-cpt', 'hotCharsPerToken', '字符/token 换算', 0.1, 10, false],
+    ['hot-budget', 'hotBudgetCharsFallback', '窗口未知时的上限', 1000, 10000000, true],
+    ['hot-full-warn', 'hotFullWarnChars', '单条正文提醒阈值', 1, 1000000, true],
+    ['hot-keep', 'hotSessionKeep', '会话绑定保留数', 1, 10000, true],
+  ],
+  // ── 热知识注入 · 知识评分（决策 177）──
+  'hot-score': [
+    ['hs-threshold', 'hotScoreThreshold', '加分阈值', 0, 1, false],
+    ['hs-window', 'hotScoreWindowHours', '滚动窗口小时数', 0.1, 10000, false],
+    ['hs-topn', 'hotScoreTopN', '注入前几名', 1, 200, true],
+    // ⭐ 决策 180：每轮最多选几条（**写入侧**，与 `hs-topn` 那个读取侧不是一回事）。
+    ['hs-maxpicks', 'hotScoreMaxPicks', '每轮最多选几条', 1, 200, true],
+    // ⭐ 决策 182：入围门槛分数（⚠️ 1–1000，不是 0–1 —— 它比的是**累计分**）。
+    ['hs-gate-min', 'hotScoreGateMinScore', '入围门槛：至少几分', 1, 1000, true],
+    ['hs-minchars', 'hotScoreMinChars', '低于多少字符不评分', 0, 1000000, true],
+    ['hs-timeout', 'hotScoreTimeoutMs', '复盘超时', 1000, 300000, true],
+  ],
+  // ── 英文索引 ──
+  'index-en': [
+    ['tr-conc', 'translateConcurrency', '翻译并发', 1, 20, true],
+  ],
+  // ── 主动注入 · 判断参数 ──
+  'active-judge': [
+    ['ai-topk', 'activeInjectTopK', '最多注入条数', 1, 50, true],
+    // ⭐⭐ 原来的 `ai-band`（一个键兼两个语义）拆成两个控件。
+    //    · need-min  = 「要不要注入」（总控分）
+    //    · item-min  = 「哪几条候选够格」（逐条候选分）
+    //    ⚠️ 键名与 id 只差一个词，**别写反** —— 写反的后果是"两个阈值被换掉"，
+    //       而它**不报错**（两个都是 0–1 的合法分数），只表现为筛选行为莫名改变。
+    ['ai-need-min', 'activeInjectNeedMin', '需求阈值（要不要注入）', 0, 1, false],
+    ['ai-item-min', 'activeInjectItemMin', '入选阈值（哪几条够格）', 0, 1, false],
+    ['ai-timeout', 'activeInjectTimeoutMs', '召回超时', 500, 120000, true],
+    ['ai-calls', 'activeInjectMaxInjectionsPerTurn', '每 turn 注入上限', 0, 50, true],
+    ['ai-reasoncap', 'activeInjectReasoningMaxChars', '思考段字符上限', 100, 100000, true],
+  ],
+  // ── 主动注入 · 预算与拆批并发 ──
+  'active-budget': [
+    ['ai-budgettok', 'activeInjectBudgetTokens', 'JEV 预算(token)', 1000, 200000, true],
+    ['ai-ctxtok', 'activeInjectContextTokens', '上下文名义预算', 1000, 200000, true],
+    ['ai-conc', 'activeInjectConcurrency', '并发批数上限', 1, 16, true],
+    // ⚠️ **小数键** ⇒ integer=false（写成 true 会把 0.6 拒掉）
+    ['ai-chatratio', 'activeInjectChatWindowRatio', 'chat 占窗口比例', 0.1, 1, false],
+  ],
+  // ── 主动注入 · 抑制门（两个阈值在描述文字里内联，见 `.inline-num`）──
+  'active-gate': [
+    ['ai-suff-min', 'activeInjectSufficientMin', '已有知识充足阈值', 0, 1, false],
+    ['ai-intent-min', 'activeInjectSearchIntentMin', '检索意图阈值', 0, 1, false],
+  ],
+}
 
 /**
  * ⭐⭐ **【提示词】页的分组排序兜底**（2026-10-12）。
@@ -3023,25 +3190,150 @@ async function loadBackupStatus() {
 }
 
 /**
+ * ⭐ **告警的插入锚点**：优先用**包住这个 `<select>` 的 `.set-row`**，而不是 `<select>` 自己。
+ *
+ * 🔴🔴 **为什么（我第一版就插错了，实测截图抓到）**：
+ *    `.set-row` 是 **flex + `space-between`** 的"左标签 / 右控件"行。
+ *    把告警插成 `<select>` 的**下一个兄弟** ⇒ 它落进**同一行**里当第三个 flex 子项
+ *    ⇒ 三者互相挤压：**标签被压成竖排**（「翻译模型」四个字一行一个）。
+ *    ⭐ 判据：**往一个 flex 行里插元素，等于改那一行的布局** ——
+ *      这种"某段文字属于这个控件、但不属于这一行"的东西，要插在**行的外面**。
+ *    ⚠️ 与既有约定一致：本项目"描述一律在控件下方"（`.set-desc` 就是这么放的），
+ *      告警同理 —— 它是**控件脚下的一条说明**，不是行内元素。
+ * @param sel - 目标 `<select>`。
+ * @returns 插入锚点（`.set-row` 或退化成 `sel`）。
+ */
+function modelWarnAnchor(sel) {
+  return sel.closest('.set-row') ?? sel
+}
+
+/**
+ * ⭐⭐⭐ **一个"当前配置的模型已不在清单里"的告警行**（用户 2026-10-07 裁定）。
+ *
+ * 🔴🔴 **为什么要有它 —— 旧做法是错的**：
+ *    以前把失效的模型**当成一个 option 插进下拉框**（`xxx（当前配置，不在清单里）`），
+ *    理由是"否则用户会以为配置丢了"。**那个理由站不住**：
+ *    · 它把**一个错误状态伪装成了一个合法选项** —— 用户看到它在下拉框里、
+ *      以为能用，实际选了也跑不通（实测：翻译模型 `sf/…` 已不存在，
+ *      **155 条知识全部翻译失败**，而界面只显示"（当前配置，不在清单里）"，**极不显眼**）；
+ *    · 用户原话：*"我认为那个模型选择列表，就不应该显示，
+ *      如果模版选了该模型应该提示用户去配置相关模型。"*
+ *    ⇒ ⭐ **判据：失效的配置不该"降级成一个选项"，而该"升格成一条告警"。**
+ *      下拉框是**可选项**待的地方；一个已知跑不通的东西**不属于那里**。
+ *    ⚠️ 而"怕用户以为配置丢了"这个诉求，由**这条告警如实说明**来满足 ——
+ *      它比一个静默的 option 说得更清楚（明说"已失效、请重选"）。
+ *
+ * ⚠️ **带 `data-model-warn` 标记**，重填下拉框前先清旧的 ——
+ *    否则切通路/重开面板会**越插越多**（本项目踩过"插入式提示不清除"的同族坑）。
+ * @param sel - 那个 `<select>`（告警插在**它所在的 `.set-row` 之后**，见 `modelWarnAnchor`）。
+ * @param text - 告警文案（**必须说清"已失效"与"该做什么"**）。
+ */
+function showModelWarn(sel, text) {
+  clearModelWarn(sel)
+  const tip = document.createElement('div')
+  tip.className = 'notice warn model-warn'
+  tip.dataset.modelWarn = '1'
+  tip.textContent = text
+  modelWarnAnchor(sel).insertAdjacentElement('afterend', tip)
+}
+
+/** 清掉某个下拉框后面那条模型告警（**重填前必调**，否则会越插越多）。 */
+function clearModelWarn(sel) {
+  let n = modelWarnAnchor(sel).nextElementSibling
+  while (n && n.dataset && n.dataset.modelWarn === '1') {
+    const next = n.nextElementSibling
+    n.remove()
+    n = next
+  }
+}
+
+/**
+ * ⭐⭐⭐ **「翻译模板 ↔ 模型」配对判据**（前端侧；用户 2026-10-07 要求）。
+ *
+ * 🔴 **服务端才是权威**（`en-index.ts` 的 `pairingError()`，保存时返 400）。
+ *    这里这份**只为了"还没点保存就先看见警告"** ——
+ *    ⚠️ **两份规则必须字面一致**（本项目已因"同一语义两条实现"出过多次事故）。
+ *    判据只有一条：**模板选 `mt` ⇒ 模型必须是翻译专用模型**。
+ *    ⚠️ 模型为空（跟随主会话）⇒ **不报**（此刻无从判断，不该假装知道）。
+ * @param template - `'instruct'` / `'mt'`。
+ * @param provider - `translateProvider`。
+ * @param model - `translateModel`（**可能含 `/`**）。
+ * @returns 警告文案；`''` = 配对没问题。
+ */
+function translatePairingWarn(template, provider, model) {
+  if (template !== 'mt') return ''
+  if (String(model).trim() === '') return ''
+  const m = `${provider}/${model}`.toLowerCase()
+  // ⚠️ 词边界判 `mt`（别用子串：会误伤 `mtt` / `fmt`）+ 已知翻译模型家族。
+  const isMt = /(^|[\W_])mt([\W_]|$)/.test(m) || /hunyuan-mt|opus-mt|nllb|m2m100|seamless-m4t/.test(m)
+  if (isMt) return ''
+  return `「${provider}/${model}」看起来不是翻译专用模型，但翻译模板选了 mt`
+    + `（mt 要求模型按"编号 + 空行"输出，两者必须配对，否则会静默解析失败）。`
+    + `请把模板改成 instruct，或换一个翻译专用模型（如 Hunyuan-MT 系列）。`
+}
+
+/**
+ * ⭐⭐ **在「英文索引」版块实时显示配对警告**（选完立刻看得见，不必等保存）。
+ *
+ * ⚠️ 与"模型已失效"那条告警**分开**（不同原因、不同处置）：
+ *    那条说"这个模型不存在了"，这条说"模型和模板不搭"。
+ */
+function refreshTranslatePairingWarn() {
+  const modelSel = document.getElementById('tr-model')
+  const tplSel = document.getElementById('tr-template')
+  if (!modelSel || !tplSel) return
+  const anchor = modelWarnAnchor(tplSel)
+  // 先清旧的（本次这条）
+  let n = anchor.nextElementSibling
+  while (n && n.dataset && n.dataset.pairingWarn === '1') {
+    const next = n.nextElementSibling
+    n.remove()
+    n = next
+  }
+  // 取当前下拉框的值（value 是 JSON 数组；空 = 跟随主会话）
+  let provider = ''
+  let model = ''
+  if (modelSel.value) {
+    try {
+      const pair = JSON.parse(modelSel.value)
+      provider = String(pair[0] ?? '')
+      model = String(pair[1] ?? '')
+    } catch { /* 值不是 JSON ⇒ 视为跟随主会话 */ }
+  }
+  const text = translatePairingWarn(tplSel.value, provider, model)
+  if (text === '') return
+  const tip = document.createElement('div')
+  tip.className = 'notice warn model-warn'
+  tip.dataset.pairingWarn = '1'
+  tip.textContent = text
+  anchor.insertAdjacentElement('afterend', tip)
+}
+
+/**
  * 填充「模型」下拉框（数据源 `GET /models`，按 provider 分组）。
  *
  * 🔴 **option 的 value 用 JSON 数组 `[provider, model]` 编码**：
  *    model id 里**可能含 `/`**（如 `tencent/Hunyuan-MT-7B`）
  *    ⇒ 用 `provider/model` 拼字符串会**歧义**，拆不回来。
  *
- * ⚠️ 拉不到模型清单**不阻塞设置面板**（只剩"跟随主会话"那一项）；
- *    当前配置的模型若不在清单里（被删/改名）⇒ **临时插一项显示出来**，
- *    否则用户会误以为"配置丢了、变回跟随主会话了"。
+ * ⚠️ 拉不到模型清单**不阻塞设置面板**（只剩"跟随主会话"那一项）。
+ *
+ * ⭐⭐⭐ 用户 2026-10-07 裁定：**当前配置的模型若已不在清单里 ⇒
+ *    「不显示为选项」+「给一条告警让它去重选」**（旧做法是插一个 option）。
+ *    🔴 关键细节：**"读不到清单"（请求失败）与"清单里没有它"是两件事** ——
+ *      前者无从判断，**不该报失效**（否则网络一抖就诬告用户配置坏了）。用 `listed` 区分。
  *
  * ⭐ 它是**两个下拉共用的一份实现**（翻译模型 / 标签裁决模型）——
- *    本项目铁律"实现只留一份"：抄第二遍迟早会漏掉"当前值不在清单里"那段兜底。
+ *    本项目铁律"实现只留一份"：抄第二遍迟早会漏掉"当前值不在清单里"那段处置。
  * @param elId - 目标 `<select>` 的 id。
  * @param curProvider - 当前配置的 provider（空 = 跟随主会话）。
  * @param curModel - 当前配置的 model。
+ * @param label - 用于告警文案（如「翻译模型」/「裁决模型」）。
  */
-async function fillModelSelect(elId, curProvider, curModel) {
+async function fillModelSelect(elId, curProvider, curModel, label = '模型') {
   const sel = document.getElementById(elId)
   if (!sel) return
+  clearModelWarn(sel)
   sel.innerHTML = ''
   const mkFollow = () => {
     const o = document.createElement('option')
@@ -3050,8 +3342,11 @@ async function fillModelSelect(elId, curProvider, curModel) {
     return o
   }
   sel.appendChild(mkFollow())
+  /** ⚠️ 清单**是否真的读到了** —— 读不到时**不能**判"配置已失效"（那是诬告）。 */
+  let listed = false
   try {
     const r = await getJson('/models')
+    listed = true
     for (const p of r.providers ?? []) {
       const group = document.createElement('optgroup')
       group.label = p.name || p.provider
@@ -3064,17 +3359,23 @@ async function fillModelSelect(elId, curProvider, curModel) {
       if (group.children.length > 0) sel.appendChild(group)
     }
   } catch {
-    /* 拉不到清单 ⇒ 只剩"跟随主会话"，不阻塞面板 */
+    /* 拉不到清单 ⇒ 只剩"跟随主会话"，不阻塞面板（也**不**据此报失效） */
   }
-  const want = curProvider && curModel ? JSON.stringify([curProvider, curModel]) : ''
+  if (curProvider === '' || curModel === '') {
+    sel.value = ''
+    return
+  }
+  const want = JSON.stringify([curProvider, curModel])
   sel.value = want
-  if (sel.value !== want && want !== '') {
-    const o = document.createElement('option')
-    o.value = want
-    o.textContent = `${curProvider}/${curModel}（当前配置，不在清单里）`
-    sel.appendChild(o)
-    sel.value = want
-  }
+  if (sel.value === want) return // 在清单里 ⇒ 正常选中，无需告警
+  // ── 以下：配置了、但在清单里找不到它 ──
+  // ⚠️ 下拉框**停在"跟随主会话"**（不再把失效值当选项插进去）。
+  sel.value = ''
+  if (!listed) return // ① 读不到清单 ⇒ 无从判断 ⇒ **不报**（保留配置不动）
+  // ② 清单读到了、里面确实没有它 ⇒ **明确告警**
+  showModelWarn(sel, `${label}「${curProvider}/${curModel}」已不在可用模型清单里`
+    + `（provider 被移除或改名？），该功能当前不会生效。`
+    + `请在上面重新选一个${label}，或清空改用「跟随主会话默认模型」。`)
 }
 
 /**
@@ -3110,13 +3411,16 @@ async function fillActiveModelSelect(channel, curModel) {
 async function fillSubagentModelSelect(curProvider, curModel) {
   const sel = document.getElementById('hs-subagent-model')
   if (!sel) return
+  clearModelWarn(sel)
   sel.innerHTML = ''
   const o0 = document.createElement('option')
   o0.value = ''
   o0.textContent = '（跟随主会话默认模型）'
   sel.appendChild(o0)
+  let listed = false
   try {
     const r = await getJson('/models')
+    listed = true
     for (const p of r.providers ?? []) {
       const group = document.createElement('optgroup')
       group.label = p.name || p.provider
@@ -3135,13 +3439,12 @@ async function fillSubagentModelSelect(curProvider, curModel) {
     ? `[${JSON.stringify(curProvider)},${JSON.stringify(curModel)}]`
     : ''
   sel.value = want
-  if (sel.value !== want && want !== '') {
-    const o = document.createElement('option')
-    o.value = want
-    o.textContent = `${curProvider}/${curModel}（当前配置，不在清单里）`
-    sel.appendChild(o)
-    sel.value = want
-  }
+  if (want === '' || sel.value === want) return
+  // ⭐ 同 `fillModelSelect`：失效的配置**不插成选项**，改为一条告警（用户 2026-10-07 裁定）。
+  sel.value = ''
+  if (!listed) return
+  showModelWarn(sel, `子代理模型「${curProvider}/${curModel}」已不在可用模型清单里`
+    + `，该功能当前不会生效。请重新选一个，或清空改用「跟随主会话默认模型」。`)
 }
 
 /**
@@ -3175,6 +3478,8 @@ async function fillChannelModelSelect(elId, hintId, channel, curModel, label) {
   const sel = document.getElementById(elId)
   const hint = document.getElementById(hintId)
   if (!sel) return
+  // ⚠️ **重填前先清旧提示**（本函数会插"已失效"告警）—— 漏了会**越插越多**。
+  clearModelWarn(sel)
   sel.innerHTML = ''
   const mkEmpty = (text) => {
     const o = document.createElement('option')
@@ -3183,78 +3488,103 @@ async function fillChannelModelSelect(elId, hintId, channel, curModel, label) {
     return o
   }
   sel.appendChild(mkEmpty('（未配置 ⇒ 功能不生效）'))
-  if (channel === 'jev') {
-    // JEV：候选来自网关（**不是** DSH 的模型路由）
-    for (const id of ['jev-latest']) {
-      const o = document.createElement('option')
-      o.value = id
-      o.textContent = `${id}（TypeSafe 决策模型）`
-      sel.appendChild(o)
-    }
-    if (hint) hint.textContent = `——${label}走 Knox 的 /v1/systemone（决策模型，不是 chat 端点）。`
-    // ⭐⭐ 未配置 JEV 凭据时不禁用，只在该模型区插一行提示（与翻译模型留空提示同款处置）：
-    // 让用户在面板里就能看到"选了也会跑不通"，而不是运行期才报错。
-    try {
-      const st = await getJson('/jev-status')
-      if (st?.ok && st.ready === false) {
-        const tip = document.createElement('div')
-        tip.className = 'dim small'
-        tip.style.marginTop = '4px'
-        tip.textContent = `⚠️ ${st.reason || 'JEV 凭据未配置，选了 jev 通路将在运行期调用失败。'}`
-        sel.insertAdjacentElement('afterend', tip)
+  // ⚠️ **两份清单各自记"读到了没有"** —— 判"配置已失效"时必须用**对应那一份**的判据。
+  //    🔴 这里踩过一个真坑（`test-en-index.mjs` 的 3h 那条抓到的）：
+  //       原来只有一个 `listed`（只反映 `/models`）⇒ 若 `/models` 成功、
+  //       而 `/jev-status` 失败，一个**决策模型**的当前值会拿 chat 清单去比对，
+  //       必然找不到 ⇒ **诬告"已不在清单里"**。这正是"读不到 ≠ 配置失效"那一族。
+  let listedChat = false
+  let listedDecision = false
+  /** ⭐ 本次拉到的**决策 provider id 集合**（判"这个值属于哪一份清单"要用它）。
+   *  ⚠️ **不能用 `jevState.rows`** —— 那个只在打开「决策模型配置」页时才填，
+   *     而本函数在**任何一个设置子页**打开时都会跑 ⇒ 那时它可能是空的。 */
+  const decisionIds = new Set()
+  // ⭐⭐⭐ **2026-10-07 用户裁定：不再按通路筛选 —— 给全列表，让用户自己判断。**
+  //    原话：*"和现在的 dsh 模型一样放在一起去选。就不要通路筛选了，
+  //    就选决策型通路的时候，也给全列表。让用户判断是否是决策性模型，是否匹配通路。"*
+  //    ⇒ 无论 `channel` 是什么，下拉框里**两类都放**：
+  //      ① DSH 的 chat 模型（按 provider 分组 —— 与「翻译模型」那个下拉框同形）；
+  //      ② 本插件配的**决策模型**（`<providerId>/<modelName>`，来自 `/jev-status`）。
+  //    ⚠️ 值形态**两条都统一成 `provider/model`** ⇒ 读值处只有一套解析（别分叉）。
+  try {
+    const r = await getJson('/models')
+    listedChat = true
+    for (const p of r.providers ?? []) {
+      const group = document.createElement('optgroup')
+      group.label = p.name || p.provider
+      for (const m of p.models ?? []) {
+        const o = document.createElement('option')
+        // ⚠️ 与翻译模型同一套编码：JSON 数组（model id 里可能含 `/`）
+        o.value = `[${JSON.stringify(p.provider)},${JSON.stringify(m.id)}]`
+        o.textContent = m.name && m.name !== m.id ? `${m.id} — ${m.name}` : m.id
+        group.appendChild(o)
       }
-    } catch {
-      /* 探测失败不阻断面板 */
+      if (group.children.length > 0) sel.appendChild(group)
     }
-  } else {
-    try {
-      const r = await getJson('/models')
-      for (const p of r.providers ?? []) {
-        const group = document.createElement('optgroup')
-        group.label = p.name || p.provider
-        for (const m of p.models ?? []) {
+  } catch {
+    /* 拉不到清单 ⇒ 只剩"未配置"，不阻塞面板 */
+  }
+  try {
+    const s = await getJson('/jev-status')
+    listedDecision = true
+    const rows = Array.isArray(s.providers) ? s.providers : []
+    for (const p of rows) decisionIds.add(String(p.id))
+    if (rows.length > 0) {
+      const group = document.createElement('optgroup')
+      // ⭐ 分组只是**方便找**，不构成"只有这组能用"的暗示（提示文案里会说清）。
+      group.label = '决策模型（本插件配置的）'
+      for (const p of rows) {
+        for (const m of (p.models ?? [])) {
           const o = document.createElement('option')
-          // ⚠️ 与翻译模型同一套编码：JSON 数组（model id 里可能含 `/`）
-          o.value = `[${JSON.stringify(p.provider)},${JSON.stringify(m.id)}]`
-          o.textContent = m.name && m.name !== m.id ? `${m.id} — ${m.name}` : m.id
+          // ⭐ 与 chat 同一套编码：JSON 数组 `[providerId, modelName]`。
+          o.value = `[${JSON.stringify(p.id)},${JSON.stringify(m)}]`
+          o.textContent = `${p.displayName && p.displayName !== '' ? p.displayName : p.id} ／ ${m}`
           group.appendChild(o)
         }
-        if (group.children.length > 0) sel.appendChild(group)
       }
-    } catch {
-      /* 拉不到清单 ⇒ 只剩"未配置"，不阻塞面板 */
+      if (group.children.length > 0) sel.appendChild(group)
     }
-    if (hint) hint.textContent = `——${label}走 DSH 内部模型路由（数据源 GET /models）。下拉框内容跟随上面的通路。`
+    if (hint) {
+      hint.textContent = `——两条通路的候选**都列在这里**（DSH 的 chat 模型 + 本插件配的决策模型）：`
+        + `由你判断哪个适合主会话、哪个适合${label}。名单里既有普通对话模型也有决策模型，`
+        + `⚠️ 选错了会在运行期报错（chat 模型走 DSH 路由、决策模型直连它自己的端点）。`
+    }
+  } catch {
+    /* 决策模型清单拉不到 ⇒ 只列 chat 那一组，不阻塞面板 */
   }
   // 回填当前值
   let want = ''
   let legacy = false
+  // ⚠️ `i`（首个 `/` 的位置）**在下面那个分支之外也要用**（判"值属于哪一份清单"）
+  //    ⇒ 必须声明在**函数作用域**，不能在 `if` 块里（那会 ReferenceError —— 真踩到过）。
+  const i = curModel.indexOf('/')
   if (curModel !== '') {
-    if (channel === 'jev') want = curModel
-    else {
-      const i = curModel.indexOf('/')
-      if (i > 0) want = `[${JSON.stringify(curModel.slice(0, i))},${JSON.stringify(curModel.slice(i + 1))}]`
-      // 🔴 **没有 provider 前缀的历史值**（2026-09-26 之前从面板保存过的那种）
-      //    ⇒ 清单里当然找不到它。**不能就这么空着** —— 那看起来像"配置丢了"。
-      //    ⭐ 插一项把它**原样显示出来**，并在文案里点明它缺前缀（要人重新选一次）。
-      else legacy = true
-    }
+    if (i > 0) want = `[${JSON.stringify(curModel.slice(0, i))},${JSON.stringify(curModel.slice(i + 1))}]`
+    // 🔴 **没有 provider 前缀的历史值**（2026-09-26 之前从面板保存过的那种，
+    //    例如裸的 `jev-latest`）。⭐ 这一种**不是"provider 被删了"**，
+    //    而是"值本身的格式过时了" ⇒ 告警文案要说清区别（见下）。
+    else legacy = true
   }
   sel.value = want
   if (legacy) {
-    const o = document.createElement('option')
-    o.value = ''
-    o.textContent = `${curModel}（缺 provider 前缀，请重新选一个）`
-    sel.appendChild(o)
+    // ⚠️ 缺前缀：**也不插成选项**（同一个理由：失效配置不该伪装成可选项）。
     sel.value = ''
+    showModelWarn(sel, `${label}「${curModel}」缺少 provider 前缀（旧版格式），`
+      + `当前无法匹配到任何模型。请重新选一个。`)
   } else if (sel.value !== want && want !== '') {
-    // ⚠️ 当前配置的模型不在清单里（被删/改名）⇒ **临时插一项显示出来** ——
-    //    否则用户会误以为"配置丢了"（与 `fillModelSelect` 同款处置）。
-    const o = document.createElement('option')
-    o.value = want
-    o.textContent = `${curModel}（当前配置，不在清单里）`
-    sel.appendChild(o)
-    sel.value = want
+    // ⚠️ 当前配置的模型不在清单里（被删/改名）⇒ **不插选项、改为告警**
+    //    （与 `fillModelSelect` 同款处置；用户 2026-10-07 裁定）。
+    sel.value = ''
+    // 🔴 **判据必须用"该值所属那一份清单"的读没读到**：
+    //    · 值的 provider 是 `decisionProviders` 里的 ⇒ 用 `/jev-status` 那份；
+    //    · 否则 ⇒ 用 `/models` 那份。
+    //    ⚠️ 只用一个 `listed` 会在"一份成功、另一份失败"时**诬告失效**（见上面的长注释）。
+    const pid = i > 0 ? curModel.slice(0, i) : ''
+    const isDecision = decisionIds.has(pid)
+    if (isDecision ? listedDecision : listedChat) {
+      showModelWarn(sel, `${label}「${curModel}」已不在可用模型清单里`
+        + `，该功能当前不会生效。请重新选一个。`)
+    }
   }
 }
 
@@ -3264,24 +3594,76 @@ function readActiveModel(channel) {
 }
 
 /**
- * ⭐⭐ **从「通路模型」下拉框读出 `provider/model`**（通用实现）。
+ * ⭐⭐ **主动注入"开着却没选模型"的判据**（唯一出处，返回错误文案；没问题回 `''`）。
  *
- * 🔴 它被**两处**用（主动注入的召回模型、知识评分的复盘模型）——
- *    ⚠️ 所以参数化元素 id，而不是复制两份（复制的那份迟早会漂移，
- *      本项目已因此出过"一个键兼两个语义"的同族事故 `决策 172`）。
- * @param elId - 下拉框元素 id。
- * @param channel - 当前通路（`chat` / `jev`）。
- * @returns `{provider, model}`（未选时都为空）。
+ * 🔴 **为什么必须共用一份**：这个状态由**两个控件**共同决定——
+ *    `ai-on`（总开关，现在**即时生效**）与 `ai-channel`/`ai-model`（在"召回模型"版块里）。
+ *    ⇒ 两道门都要能发现它，而"什么叫没选模型"**只该判一次**：
+ *      从开关那一侧、从模型那一侧，判据必须完全一样（抄两遍必然漂开，
+ *      本项目已因"两份同类实现"出过多次事故）。
+ *
+ * ⚠️ 背景（为什么值得拦）：空模型会**存下去**，表现为"开关是开的、
+ *    但一次判断都不做" —— 那是**看起来在工作、实际没工作**，最难排查的一类。
+ * @returns 错误文案；`''` 表示没问题。
  */
-function readChannelModel(elId, channel) {
+function activeModelMissing() {
+  const ch = document.getElementById('ai-channel')?.value || 'chat'
+  const pair = readActiveModel(ch)
+  const has = ch === 'jev' ? pair.model !== '' : (pair.provider !== '' && pair.model !== '')
+  if (has) return ''
+  return '未选召回模型：请在上面的「召回模型」里挑一个，或先关掉总开关。'
+}
+
+/**
+ * ⭐⭐ **把"模型下拉框"的 value 拆成 `{provider, model}`**。
+ *
+ * 🔴 **value 是 JSON 数组** `[provider, model]`（见 `fillModelSelect`）——
+ *   因为 model id 里**可能含 `/`**（如 `tencent/Hunyuan-MT-7B`），
+ *   用 `provider/model` 拼字符串会**歧义、拆不回来**（本项目已知坑）。
+ * ⚠️ 值不是 JSON（或空）⇒ 视为"跟随主会话"，两个字段都回空串。
+ * ⭐ 它是**翻译模型 / 标签裁决模型两处共用的一份实现**（本项目铁律：实现只留一份）。
+ * @param elId - 下拉框元素 id。
+ * @returns `{provider, model}`
+ */
+function readModelPair(elId) {
   const raw = document.getElementById(elId)?.value ?? ''
   if (raw === '') return { provider: '', model: '' }
-  if (channel === 'jev') return { provider: '', model: raw }
   try {
     const pair = JSON.parse(raw)
     return { provider: String(pair[0] ?? ''), model: String(pair[1] ?? '') }
   } catch {
     return { provider: '', model: '' }
+  }
+}
+
+/**
+ * ⭐⭐ **从「通路模型」下拉框读出 `{provider, model}`**（通用实现）。
+ *
+ * 🔴 它被**两处**用（主动注入的召回模型、知识评分的复盘模型）——
+ *    ⚠️ 所以参数化元素 id，而不是复制两份（复制的那份迟早会漂移，
+ *      本项目已因此出过"一个键兼两个语义"的同族事故 `决策 172`）。
+ *
+ * ⭐⭐⭐ **2026-10-07：不再按通路分叉**。用户裁定"给全列表、不按通路筛选"后，
+ *    下拉框里的值**无论哪条通路都是 `[provider, model]` 的 JSON 数组**
+ *    （决策模型那组也编码成 `[providerId, modelName]`）。
+ *    ⇒ 读法只有一套 —— 去掉原来的 `if (channel === 'jev') return {provider:'', ...}` 分支。
+ *    🔴 **别把那个分支加回来**：它会让决策模型丢掉 provider（存成裸模型名），
+ *       而多 provider 下裸模型名是**歧义**的（两条 provider 可能有同名模型）。
+ * @param elId - 下拉框元素 id。
+ * @param channel - ⚠️ **仅为兼容调用签名保留**（值不再随它变）。
+ * @returns `{provider, model}`（未选时都为空）。
+ */
+function readChannelModel(elId, channel) {
+  void channel // ⚠️ 见上：值形态已统一，这个参数不再参与解析。
+  const raw = document.getElementById(elId)?.value ?? ''
+  if (raw === '') return { provider: '', model: '' }
+  try {
+    const pair = JSON.parse(raw)
+    return { provider: String(pair[0] ?? ''), model: String(pair[1] ?? '') }
+  } catch {
+    // ⚠️ 不是 JSON ⇒ 视为旧格式（裸模型名）—— **provider 留空**，
+    //    由读值处决定怎么报"缺少 provider 前缀"。
+    return { provider: '', model: raw }
   }
 }
 
@@ -3339,8 +3721,13 @@ function bindActiveSettings(s) {
   // ⭐ 提示里那个数字跟随"每 turn 最多注入几次"
   const hint = document.getElementById('ai-calls-hint')
   if (hint) hint.textContent = String(s.activeInjectMaxInjectionsPerTurn ?? '')
-  // 🔴 **模型下拉框跟随通路**（两条通路的候选来源不同）
-  void fillActiveModelSelect(String(s.activeInjectChannel ?? 'chat'), String(s.activeInjectModel ?? ''))
+  // ⭐⭐⭐ **模型下拉框：候选不再随通路变**（用户 2026-10-07："给全列表、不要通路筛选"）。
+  //    🔴 但**当前值**要按通路取对键：`jev` 通路的值在 `activeInjectDecisionPick`，
+  //       `chat` 通路在 `activeInjectModel`（两者是**不同的键**，别读混）。
+  void fillActiveModelSelect(
+    String(s.activeInjectChannel ?? 'chat'),
+    String((s.activeInjectChannel === 'jev' ? s.activeInjectDecisionPick : s.activeInjectModel) ?? ''),
+  )
 }
 
 /** 打开设置面板（拉当前值 → 预填）。
@@ -3353,10 +3740,15 @@ async function openSettingsPage(sub = 'sink', { keepMessage = false } = {}) {
   // ⭐⭐ 决策 169：**不再是浮层** —— 切到哪个子页由 `state.setSub` 定，
   //    显隐交给 `renderTabs()`（与其它页同构）。
   if (SET_SUBTABS.includes(sub)) state.setSub = sub
-  // ⚠️ 只清**本页**那行保存结果（其它页的各自留着）。
+  // ⚠️ 只清**本页**那几行保存结果（别的页的各自留着）。
+  //    🔴 **必须清"本页的全部保存单元"**（2026-10-07）：沉淀页拆成 4 个单元后，
+  //       只清 `settings-msg-sink` 会**一个都没清到**（那个 id 已不存在）
+  //       ⇒ 切页回来还挂着上一次的结果（本项目同族坑：删了控件却留着读它的代码）。
   if (!keepMessage) {
-    const m = document.getElementById(`settings-msg-${state.setSub}`)
-    if (m) m.textContent = ''
+    for (const u of saveUnitsOf(state.setSub)) {
+      const m = document.getElementById(`settings-msg-${u}`)
+      if (m) m.textContent = ''
+    }
   }
   if (status) status.textContent = '读取中…'
 
@@ -3411,8 +3803,11 @@ async function openSettingsPage(sub = 'sink', { keepMessage = false } = {}) {
     // ⭐⭐ 通路口径 —— 与主动注入同一套：**先设通路，再按通路重填模型下拉框**。
     const hsChannel = document.getElementById('hs-channel')
     if (hsChannel) hsChannel.value = String(s.hotScoreChannel ?? 'chat')
-    // ⭐ 复盘模型（下拉框内容跟随通路）。
-    void fillScoreModelSelect(String(s.hotScoreChannel ?? 'chat'), String(s.hotScoreModel ?? ''))
+    // ⭐ 复盘模型（候选**不再随通路变**；但当前值要按通路取对键 —— 同上面那条）。
+    void fillScoreModelSelect(
+      String(s.hotScoreChannel ?? 'chat'),
+      String((s.hotScoreChannel === 'jev' ? s.hotScoreDecisionPick : s.hotScoreModel) ?? ''),
+    )
     // ⭐ 子代理模型：**始终是 chat 形态**（子代理只能走 DSH 模型路由 ⇒ 与通路无关）。
     void fillSubagentModelSelect(String(s.hotScoreSubagentProvider ?? ''), String(s.hotScoreSubagentModel ?? ''))
     // ⭐⭐ 英文召回索引（设计文档 §9）：⚠️ **没有开关**（必要功能，用户 2026-09-26 裁定）
@@ -3421,9 +3816,13 @@ async function openSettingsPage(sub = 'sink', { keepMessage = false } = {}) {
     if (trTpl) trTpl.value = String(s.translateTemplate ?? 'instruct')
     const trConc = document.getElementById('tr-conc')
     if (trConc) trConc.value = String(s.translateConcurrency ?? '')
-    void fillModelSelect('tr-model', String(s.translateProvider ?? ''), String(s.translateModel ?? ''))
+    // ⭐⭐⭐ 配对警告要在**下拉框填完之后**算（它读的是下拉框的当前值）。
+    //    ⚠️ `fillModelSelect` 是 async 的 ⇒ 用 `.then` 保证顺序。
+    void fillModelSelect('tr-model', String(s.translateProvider ?? ''), String(s.translateModel ?? ''), '翻译模型')
+      .then(() => refreshTranslatePairingWarn())
     // ⭐⭐ 决策 162：标签裁决模型（同一份填充实现）。
-    void fillModelSelect('tag-model', String(s.tagNormalizeProvider ?? ''), String(s.tagNormalizeModel ?? ''))
+    //    ⚠️ **必须传 label** —— 失效时那条告警要说清"是哪一个模型坏了"（用户 2026-10-07）。
+    void fillModelSelect('tag-model', String(s.tagNormalizeProvider ?? ''), String(s.tagNormalizeModel ?? ''), '裁决模型')
     // ⭐ 决策 165：轮次结束自动规范化的开关（默认开 ⇒ 缺省当 true 显示）。
     const tagAuto = document.getElementById('tag-auto')
     if (tagAuto) tagAuto.checked = s.tagNormalizeOnHandoff !== false
@@ -3446,11 +3845,20 @@ async function openSettingsPage(sub = 'sink', { keepMessage = false } = {}) {
       const where = s.patchExists ? s.patchPath : '（文件尚不存在，保存时会新建）'
       // ⭐⭐ 用户 2026-09-28：*"所有那个示意的绿√的icon全都不要，文字提示足够了。"*
       //    ⇒ 去掉 `✅` / `⚠️`，只用文字说清"要不要重启"。
+      //
+      // 🔴🔴 **`unknown` 这一支只该在"路径都拿不到"时出现**（2026-10-07 实测纠正）：
+      //    以前"profile 的 package.json 里没写 `patchReload`"也回落到这里，
+      //    于是页头**常年**挂着「读不到…可能需要重启」——而实测 **10/10 项设置
+      //    都在 ~0.5–2.5 秒内热生效**（`scripts/probe-hotreload-matrix.mjs`）
+      //    ⇒ 界面在说谎，用户会去白重启一次。
+      //    ⭐ 根因在服务端（`settings.ts` 的 `readPatchReload`）：0.2.0-rc.2 **删掉了**
+      //      `patchReload` 字段、改成无条件热重载，而"没写"在两代里都等于 `live`。
+      //      ⇒ 已修成"没写 = live"，这里只是把**真·拿不到**时的措辞说准。
       const reload = s.patchReload === 'live'
         ? '本 profile 是 live 热重载：保存后数秒内自动生效，无需重启。'
         : s.patchReload === 'startup'
           ? '本 profile 是 startup：保存后需要重启才生效。'
-          : '读不到本 profile 的热重载策略：保存后可能需要重启才生效。'
+          : '读不到本 profile 的配置文件路径，无法判断热重载策略；保存后若未生效请重启。'
       // ⭐⭐ 决策 169：它现在是**页头一行小字**，不再是浮层里的一大段 ⇒ 只留最要紧的：
       //    「改完要不要重启」+ 配置文件在哪。⚠️ 具体各项当前值就在各页控件里，不必重复念。
       // ⭐⭐ 用户 2026-09-28：*"设置旁边描述和配置文件放到一行"* ⇒ **不再用 `\n` 断行**，
@@ -3476,6 +3884,572 @@ async function openSettingsPage(sub = 'sink', { keepMessage = false } = {}) {
   if (state.setSub === 'prompts') void openPromptsPage({ keepMessage: true })
   // ⭐⭐⭐ **【模板】页同理**：它的数据源是 `GET /templates`（不是 `/settings`）。
   if (state.setSub === 'templates') void openTemplatesPage()
+  // ⭐⭐⭐ **【决策模型配置】页**：状态来自 `GET /jev-status`（不是 `/settings`）——
+  //    因为"密钥有没有配"只在凭据 seam 里，`/settings` **看不到它**（也**不该**看到）。
+  if (state.setSub === 'jev') void openJevPage({ keepMessage: true })
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ⭐⭐⭐ **【决策模型配置】子页**（2026-10-07，用户要求）
+//
+// 用户原话：*"我还是需要能够在 dsh 前端去配置决策模型的。而不是这样，
+//   直接在环境里直连。哪怕是在插件的前端里面去配置。"*
+//
+// 🔴🔴 **为什么本插件必须自己给这一页**（不是重复建设）：
+//    JEV **不是 OpenAI 兼容协议**（`/v1/systemone`：请求 `{model,state,questions}`、
+//    响应 `{answers:{q0:{noul}}}`）⇒ **DSH 原生「模型」设置页装不下它** ——
+//    那页只支持 `openai-completions` / `openai-responses` / `anthropic-messages`
+//    （在 `dsh-llm-pi-ai` 里核过）。硬注册成 chat 模型 ⇒ 选它必 400（库内 `4a7b1931`）。
+//
+// 🔴 **三个动作分开**（语义与目标都不同，**不能**合成一个"保存"）：
+//    ① 保存配置 ⇒ 写 patch 文件；② 保存密钥 ⇒ 写凭据 seam（只写不回显）；
+//    ③ 测试连接 ⇒ 真发一次请求。合成一个按钮会分不清"存进去了"与"调通了"。
+// ══════════════════════════════════════════════════════════════════════════
+
+/**
+ * ⭐⭐⭐ **打开/刷新「决策模型配置」页**（读 `/jev-status` 拿 provider 清单并重画）。
+ *
+ * 🔴 **密钥输入框每次都被清空**（即使已经存过密钥）—— 这是**刻意的**：
+ *    · 服务端**从不回显**密钥（`/jev-status` 只回"有没有、能不能写"）；
+ *    · 空 = "保留原来那个"（服务端对空值的处置就是不动它）。
+ *    ⚠️ 若这里显示个假占位（如 `****`）反而会被误当真实值提交上去。
+ * @param opts.keepMessage - 保留各行结果（保存成功后刷新时用）。
+ */
+async function openJevPage({ keepMessage = false } = {}) {
+  const statusLine = document.getElementById('jev-status-line')
+  const emptyHint = document.getElementById('jev-empty-hint')
+  // ⚠️ 只清**本页**那几行结果（别的页的各自留着）。
+  if (!keepMessage) {
+    for (const id of ['jev-config-msg', 'jev-pick-msg']) {
+      const m = document.getElementById(id)
+      if (m) m.textContent = ''
+    }
+  }
+  if (statusLine) statusLine.textContent = '读取中…'
+  if (emptyHint) emptyHint.hidden = true
+  try {
+    const s = await getJson('/jev-status')
+    const rows = Array.isArray(s.providers) ? s.providers : []
+    jevState.rows = rows
+    // ── 状态行：一眼看出"一共几个 provider、有几个密钥就绪" ──
+    if (statusLine) {
+      const ready = rows.filter((r) => r.ready === true).length
+      statusLine.textContent = rows.length === 0
+        ? '还没有配置任何决策模型提供商。'
+        : `共 ${rows.length} 个提供商　|　密钥就绪 ${ready}/${rows.length}　|　`
+          + `主动注入选了 ${s.activeInjectPick || '(未选)'}　|　`
+          + `轮末评分选了 ${s.hotScorePick || '(未选)'}`
+    }
+    // ⚠️ 空列表要给**可执行的下一步**（不是空白）——本项目一贯"报错要能指引到修法"。
+    if (emptyHint && rows.length === 0) {
+      emptyHint.textContent = s.reason || '点下面的「添加提供商」加一个（决策模型需要端点 + 模型名）。'
+      emptyHint.hidden = false
+    }
+    renderJevProviderList()
+    renderJevPickSelects(rows, String(s.activeInjectPick ?? ''), String(s.hotScorePick ?? ''))
+  } catch (e) {
+    if (statusLine) statusLine.textContent = `读取失败：${e.message}`
+  }
+}
+
+/** 本页的**临时编辑态**（未保存的 provider 列表 + 当前展开的是哪一行）。 */
+const jevState = {
+  /** 从 `/jev-status` 拉回的 provider 清单（每项含 `keyRef` / `credential` / `ready`）。 */
+  rows: [],
+  /** 🔴 **一次只展开一张**（与 DSH 官方「模型」页同一交互）。 */
+  openId: '',
+}
+
+/**
+ * ⭐⭐⭐ **重画 provider 列表**（照 DSH 官方「模型」页的行形态）。
+ *
+ * 每行：`id`（+ 派生出的凭据名）+ 端点 + 模型数 + 密钥状态点 + 「编辑」。
+ * 展开后（只一张）出现那张卡片：显示名 / 端点 / 模型列表 / 密钥 / 测试 / 删除。
+ */
+function renderJevProviderList() {
+  const box = document.getElementById('jev-provider-list')
+  if (!box) return
+  box.replaceChildren()
+  const rows = jevState.rows
+  if (rows.length === 0) return
+  for (const r of rows) {
+    const open = jevState.openId === r.id
+    // ── 行 ──
+    const row = document.createElement('div')
+    row.className = 'jev-row'
+    const dot = document.createElement('span')
+    // ⭐ 实心点表示"密钥就绪"（与官方同一视觉语言）；⚠️ 只表示"有密钥"，**不代表通**。
+    dot.className = r.ready === true ? 'jev-dot ok' : 'jev-dot bad'
+    dot.title = r.ready === true ? '密钥已配置' : '密钥未配置'
+    const name = document.createElement('span')
+    name.className = 'jev-name'
+    name.textContent = (r.displayName && r.displayName !== '' ? r.displayName : r.id)
+    const meta = document.createElement('span')
+    meta.className = 'dim jev-meta'
+    meta.textContent = `${r.id}　|　${r.endpoint}　|　模型 ${r.models.length} 个`
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.className = 'dim-btn'
+    btn.textContent = open ? '收起' : '编辑'
+    btn.addEventListener('click', () => {
+      jevState.openId = open ? '' : r.id
+      renderJevProviderList()
+    })
+    row.append(dot, name, meta, btn)
+    box.appendChild(row)
+    if (open) box.appendChild(buildJevEditor(r))
+  }
+}
+
+/**
+ * ⭐⭐ **构造一张 provider 编辑卡片**（展开态）。
+ *
+ * 🔴 **凭据名只读显示**（`<ID>_API_KEY`）—— 与官方同规则，**不问用户**。
+ * ⚠️ 卡片里的控件**不用全局 id**（否则多张卡片会撞 id）⇒ 全部走闭包引用。
+ */
+function buildJevEditor(r) {
+  const card = document.createElement('div')
+  card.className = 'jev-card'
+  const mk = (label, value, ph = '') => {
+    const item = document.createElement('div')
+    item.className = 'set-item'
+    const row = document.createElement('div')
+    row.className = 'set-row'
+    const lb = document.createElement('span')
+    lb.className = 'set-label'
+    lb.textContent = label
+    const inp = document.createElement('input')
+    inp.type = 'text'
+    inp.value = value
+    inp.placeholder = ph
+    row.append(lb, inp)
+    item.appendChild(row)
+    return { item, inp }
+  }
+  // ⚠️ `id` 在本卡片里**不可改**（它是派生根，也是凭据名的词干）—— 只读展示。
+  const idItem = document.createElement('div')
+  idItem.className = 'set-item'
+  const idRow = document.createElement('div')
+  idRow.className = 'set-row'
+  const idLb = document.createElement('span')
+  idLb.className = 'set-label'
+  idLb.textContent = 'provider id'
+  const idVal = document.createElement('span')
+  idVal.className = 'mono'
+  idVal.textContent = r.id
+  idRow.append(idLb, idVal)
+  idItem.appendChild(idRow)
+  const idDesc = document.createElement('p')
+  idDesc.className = 'set-desc'
+  idDesc.textContent = `凭据名由它派生：${r.keyRef}（密钥存在这个名字下，不用你填）。`
+  idItem.appendChild(idDesc)
+
+  const dn = mk('显示名', r.displayName || '', r.id)
+  const dnDesc = document.createElement('p')
+  dnDesc.className = 'set-desc'
+  dnDesc.textContent = '只影响列表里显示什么，留空则显示 id。'
+  dn.item.appendChild(dnDesc)
+
+  const ep = mk('端点', r.endpoint || '', 'https://api.knox.chat/v1/systemone')
+  const epDesc = document.createElement('p')
+  epDesc.className = 'set-desc'
+  epDesc.textContent = '必须是 http/https URL。Knox 的形态是 /v1/systemone（不是 chat/completions —— 那个会 400）。'
+  ep.item.appendChild(epDesc)
+
+  // ── 模型列表（**每行一个模型名**；与官方那页一样可增删）──
+  const mItem = document.createElement('div')
+  mItem.className = 'set-item'
+  const mRow = document.createElement('div')
+  mRow.className = 'set-row'
+  const mLb = document.createElement('span')
+  mLb.className = 'set-label'
+  mLb.textContent = '模型列表'
+  mRow.appendChild(mLb)
+  mItem.appendChild(mRow)
+  const list = document.createElement('div')
+  list.className = 'jev-models'
+  const models = [...(r.models ?? [])]
+  const renderModels = () => {
+    list.replaceChildren()
+    models.forEach((m, i) => {
+      const line = document.createElement('div')
+      line.className = 'jev-model-line'
+      const inp = document.createElement('input')
+      inp.type = 'text'
+      inp.value = m
+      inp.placeholder = 'jev-latest'
+      inp.addEventListener('input', () => { models[i] = inp.value })
+      const del = document.createElement('button')
+      del.type = 'button'
+      del.className = 'dim-btn'
+      del.textContent = '删除'
+      del.addEventListener('click', () => {
+        models.splice(i, 1)
+        renderModels()
+      })
+      line.append(inp, del)
+      list.appendChild(line)
+    })
+    const add = document.createElement('button')
+    add.type = 'button'
+    add.className = 'dim-btn'
+    add.textContent = '加一个模型'
+    add.addEventListener('click', () => {
+      models.push('')
+      renderModels()
+    })
+    list.appendChild(add)
+  }
+  renderModels()
+  mItem.appendChild(list)
+  const mDesc = document.createElement('p')
+  mDesc.className = 'set-desc'
+  mDesc.textContent = '该端点下可用的决策模型名（网关下的纯名字，**没有** provider/ 前缀）。'
+  mItem.appendChild(mDesc)
+
+  // ── 保存这一条（写回整份列表）──
+  const foot = document.createElement('div')
+  foot.className = 'set-foot set-foot-inline'
+  const saveBtn = document.createElement('button')
+  saveBtn.type = 'button'
+  saveBtn.className = 'primary'
+  saveBtn.textContent = '保存这一条'
+  const msg = document.createElement('span')
+  msg.className = 'dim set-msg'
+  saveBtn.addEventListener('click', () => {
+    void saveJevProvider(r.id, {
+      id: r.id,
+      displayName: dn.inp.value,
+      endpoint: ep.inp.value,
+      models: models.map((x) => x.trim()).filter((x) => x !== ''),
+    }, msg)
+  })
+  foot.append(saveBtn, msg)
+  card.append(idItem, dn.item, ep.item, mItem, foot)
+
+  // ── 密钥 + 测试 + 删除（都在卡片里，与官方"展开后编辑密钥"一致）──
+  const keyItem = document.createElement('div')
+  keyItem.className = 'set-item'
+  const kRow = document.createElement('div')
+  kRow.className = 'set-row'
+  const kLb = document.createElement('span')
+  kLb.className = 'set-label'
+  kLb.textContent = 'API 密钥'
+  const kInp = document.createElement('input')
+  kInp.type = 'password'
+  kInp.autocomplete = 'new-password'
+  // ⭐⭐⭐ **已保存 ⇒ 用 `*` 占位**（用户 2026-10-07 要求："不然用户看着会很迷惑"）。
+  //    🔴🔴 **必须用 `placeholder`，绝不能用 `value`** —— 这是**数据安全**上的硬要求：
+  //       · `placeholder` 是**纯显示**，**不参与表单取值**、不被 JS 读成"用户输入的值"；
+  //       · 若塞进 `value`，那么"用户没动它就直接点保存"会把这一串 `***` **当成真密钥存进去**
+  //         ⇒ **把用户的密钥覆盖成星号**（不可逆的数据损坏，且极难排查）。
+  //    ⚠️ 空 `value` 才是对的：**空 = 保持原样**（服务端对空值的处置就是不动它）。
+  //    ⭐ 与官方「模型」页同一套语义：*"每个卡片打开时它都是空的，即使已经存了密钥；
+  //       空在那里表示保留原来那个。"*
+  kInp.placeholder = r.ready === true
+    // ⚠️ **固定 12 个星号**（不是按真实长度画）—— 免得顺带泄露"密钥多长"。
+    ? '************（已保存，留空则不改动）'
+    : '留空 = 不改动已保存的'
+  kRow.append(kLb, kInp)
+  keyItem.appendChild(kRow)
+  const kDesc = document.createElement('p')
+  kDesc.className = 'set-desc'
+  kDesc.textContent = r.ready === true
+    ? `已配置（凭据 ${r.keyRef}${r.credential?.source ? `，来源 ${r.credential.source}` : ''}）。只写不读：保存后永不回显。`
+    : `未配置（凭据 ${r.keyRef}）。只写不读：保存后永不回显，也不会写进配置文件。`
+  if (r.credential?.writable === false) {
+    kDesc.textContent += '⚠️ 当前被只读来源（如环境变量）遮蔽 ⇒ 在这里存不进去。'
+  }
+  keyItem.appendChild(kDesc)
+  const kFoot = document.createElement('div')
+  kFoot.className = 'set-foot set-foot-inline'
+  const kSave = document.createElement('button')
+  kSave.type = 'button'
+  kSave.className = 'primary'
+  kSave.textContent = '保存密钥'
+  const kMsg = document.createElement('span')
+  kMsg.className = 'dim set-msg'
+  kSave.addEventListener('click', () => {
+    void saveJevKey(r.id, kInp.value, kMsg, () => { kInp.value = '' })
+  })
+  const kClear = document.createElement('button')
+  kClear.type = 'button'
+  kClear.className = 'dim-btn'
+  kClear.textContent = '清除密钥'
+  kClear.addEventListener('click', () => { void clearJevKey(r.id, kMsg) })
+  const kTest = document.createElement('button')
+  kTest.type = 'button'
+  kTest.className = 'dim-btn'
+  kTest.textContent = '测试连接'
+  const tMsg = document.createElement('span')
+  tMsg.className = 'dim set-msg'
+  kTest.addEventListener('click', () => {
+    void testJevConnection(r.id, (r.models ?? [])[0] ?? '', kMsg, tMsg)
+  })
+  kFoot.append(kSave, kClear, kTest, kMsg, tMsg)
+  keyItem.appendChild(kFoot)
+  card.appendChild(keyItem)
+
+  // ── 删除这个 provider（⚠️ 有代价 ⇒ 先确认；官方那页也是确认后删）──
+  const delFoot = document.createElement('div')
+  delFoot.className = 'set-foot set-foot-inline'
+  const delBtn = document.createElement('button')
+  delBtn.type = 'button'
+  delBtn.className = 'dim-btn'
+  delBtn.textContent = '删除这个提供商'
+  const delMsg = document.createElement('span')
+  delMsg.className = 'dim set-msg'
+  delBtn.addEventListener('click', () => {
+    if (!window.confirm(`删除提供商「${r.id}」？它的配置会从配置文件里移除（密钥不会被动，但没人再引用它）。`)) return
+    void deleteJevProvider(r.id, delMsg)
+  })
+  delFoot.append(delBtn, delMsg)
+  card.appendChild(delFoot)
+  return card
+}
+
+/**
+ * ⭐ **把整份 provider 列表写回配置**（唯一写入口 —— 增/改/删都走它）。
+ * @param extras - ⭐ 额外一起提交的键（目前只有"删除时一并清空指向它的选集"）。
+ *   🔴 **必须同一次请求**：分两次写会在中间留下"选集指向不存在的 provider"
+ *      的窗口，而那个窗口里服务端**会拒**（校验要求 provider 存在）⇒ 反而写不干净。
+ *   ⚠️ 服务端处理顺序是 **先写 `decisionProviders`、再写选集** ⇒ 同请求里
+ *      清空选集时，磁盘上的列表**已经**是新的一份（校验看到的是新列表）。
+ */
+async function writeJevProviders(next, msg, okText = '已保存', extras = {}) {
+  if (msg) msg.textContent = '保存中…'
+  try {
+    const r = await postJson('/settings', { decisionProviders: next, ...extras })
+    if (msg) msg.textContent = r.needsRestart
+      ? `${okText}——需要重启才生效`
+      : `${okText}——热重载将生效`
+    toast(r.needsRestart ? '已保存；本 profile 需要重启才生效' : '已保存，数秒内热生效')
+    void openJevPage({ keepMessage: true })
+    return true
+  } catch (e) {
+    if (msg) msg.textContent = `保存失败：${e.message}`
+    toast(`保存失败：${e.message}`, true)
+    return false
+  }
+}
+
+/** 取出"去掉展示字段"的纯配置数组（⚠️ 只留配置认识的四个字段）。 */
+function jevPlainProviders() {
+  return jevState.rows.map((r) => ({
+    id: r.id, displayName: r.displayName ?? '', endpoint: r.endpoint ?? '',
+    models: [...(r.models ?? [])],
+  }))
+}
+
+/** ⭐ **保存某一条 provider 的编辑**（把整份列表替换成"这一条改过"的版本）。 */
+async function saveJevProvider(id, edited, msg) {
+  const next = jevPlainProviders().map((p) => (p.id === id ? edited : p))
+  await writeJevProviders(next, msg)
+}
+
+/** ⭐ **删除一个 provider**。 */
+async function deleteJevProvider(id, msg) {
+  // ⚠️ **草稿还没写盘 ⇒ 直接本地删掉、不发请求**（否则会拿一个不存在的 id 去写）。
+  const row = jevState.rows.find((r) => r.id === id)
+  if (row?.draft === true) {
+    jevState.rows = jevState.rows.filter((r) => r.id !== id)
+    jevState.openId = ''
+    if (msg) msg.textContent = '已丢弃这条未保存的草稿。'
+    renderJevProviderList()
+    return
+  }
+  // 🔴🔴 **删之前必须处理"选集正指着它"**（**实测踩到的静默坑**）：
+  //    删掉 knox 后，`activeInjectDecisionPick=knox/jev-latest` **不会报错**，
+  //    而是被 `resolveDecisionPick` **悄悄回落到另一个 provider**
+  //    （实测变成 `my-gw/dec-a`）—— 用户完全不知道"我选的那个没了"，
+  //    下一次召回就会拿一个**他没选过的模型**去跑。
+  //    ⭐ 处置：**同一次请求里把指向它的选集清空**（清空 = 该功能不生效，
+  //      是**显式**状态，用户能在界面上看见；比静默换一个模型好得多）。
+  //
+  //    ⚠️ 判据：**"指向已删除 provider"必须是显式的空，不能靠回落的巧合。**
+  const dangling = []
+  const activeNow = document.getElementById('jev-pick-active')?.value ?? ''
+  const scoreNow = document.getElementById('jev-pick-score')?.value ?? ''
+  if (activeNow.startsWith(`${id}/`)) dangling.push('activeInjectDecisionPick')
+  if (scoreNow.startsWith(`${id}/`)) dangling.push('hotScoreDecisionPick')
+  const next = jevPlainProviders().filter((p) => p.id !== id)
+  if (msg && dangling.length > 0) {
+    msg.textContent = `⚠️ 有选集正指向它（${dangling.length} 处）—— 将一并清空（否则会静默换用别的 provider）。`
+  }
+  const payload = { decisionProviders: next }
+  // ⚠️ 一起提交：**分两次写**会在中间留下"选集指向不存在的 provider"的窗口，
+  //    而那个窗口里服务端**会拒**（校验要求存在）⇒ 反而写不干净。
+  for (const k of dangling) payload[k] = ''
+  const ok = await writeJevProviders(next, msg, '已删除', dangling)
+  if (!ok && msg && dangling.length > 0) {
+    // ⚠️ 一起提交失败（例如选集清空那步被拒）⇒ **撤回删除**，别留下半套状态。
+    msg.textContent += '（删除未生效 —— 请先在上面把选集改成别的 provider 再删。）'
+  }
+  if (ok) jevState.openId = ''
+}
+
+/**
+ * ⭐⭐ **「添加提供商」**（用户 2026-10-07 要求"像 dsh 官方那样"）。
+ *
+ * 🔴🔴 **关键：新增时【不写盘】，只加一条本地草稿**（**实测踩到**）：
+ *    第一版是"先往配置里写一条空模板、再让用户填"，结果**被自己的校验拒了** ——
+ *    端点空 ⇒ `decisionProviders` 校验要求 http/https URL ⇒ **400**，
+ *    用户看到的是"点添加就报错"（体验像坏了）。
+ *    ⭐ 官方那页也是这个流程：**先开一张卡片让你填，填完才写**。
+ *    ⇒ 草稿行带 `draft: true`，由「保存这一条」触发**唯一那次写盘**
+ *      （那时端点已填好，校验自然过）。
+ * ⚠️ `id` 在草稿阶段就定下来、**之后不可改**（它派生了凭据名 —— 见卡片里的只读展示）。
+ * ⚠️ 本函数**不是 async**（它不发请求）；调用处的 `void` 只是习惯写法。
+ */
+function addJevProvider(msg) {
+  // ⚠️ 生成一个**不撞车**的 id（与已有行、以及其它未保存的草稿都比一遍）。
+  let n = jevState.rows.length + 1
+  let id = `decision${n}`
+  while (jevState.rows.some((r) => r.id === id)) { n += 1; id = `decision${n}` }
+  jevState.rows.push({
+    id,
+    displayName: '',
+    endpoint: '',
+    models: [],
+    // ⚠️ 展示字段（`keyRef`/`credential`/`ready`）平时由服务端算；
+    //    草稿这一份**本地先给等价物**，免得渲染时读到 `undefined`。
+    keyRef: `${id.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '')}_API_KEY`,
+    credential: undefined,
+    ready: false,
+    draft: true,
+  })
+  jevState.openId = id
+  if (msg) msg.textContent = '已加一条草稿 —— 填好端点与模型后点「保存这一条」才会写盘。'
+  renderJevProviderList()
+}
+
+/** ⭐⭐ **重填两个通路的选择下拉框**（内容 = **全部 provider × 全部模型**平铺）。 */
+function renderJevPickSelects(rows, activePick, scorePick) {
+  for (const [elId, cur] of [
+    ['jev-pick-active', activePick],
+    ['jev-pick-score', scorePick],
+  ]) {
+    const sel = document.getElementById(elId)
+    if (!sel) continue
+    sel.replaceChildren()
+    const none = document.createElement('option')
+    none.value = ''
+    none.textContent = '（未选 ⇒ 该功能不生效）'
+    sel.appendChild(none)
+    // ⭐⭐⭐ 用户明确要求：**不按通路筛选、也不分组过滤** —— 全部平铺，
+    //    "让用户判断是否是决策性模型，是否匹配通路"。
+    for (const r of rows) {
+      for (const m of (r.models ?? [])) {
+        const o = document.createElement('option')
+        o.value = `${r.id}/${m}`
+        o.textContent = `${r.displayName && r.displayName !== '' ? r.displayName : r.id} ／ ${m}`
+        sel.appendChild(o)
+      }
+    }
+    // ⚠️ 当前值若已不在列表里（provider 被删/模型被删）⇒ **补一项显示出来**，
+    //    否则用户会以为"配置丢了"（与模型下拉框同款处置）。
+    sel.value = cur
+    if (sel.value !== cur && cur !== '') {
+      const o = document.createElement('option')
+      o.value = cur
+      o.textContent = `${cur}（当前配置，已不在列表里）`
+      sel.appendChild(o)
+      sel.value = cur
+    }
+  }
+}
+
+/** ⭐ **保存两条通路的选择**（`<providerId>/<modelName>`）。 */
+async function saveJevPicks() {
+  const btn = document.getElementById('jev-save-picks')
+  const msg = document.getElementById('jev-pick-msg')
+  if (btn) btn.disabled = true
+  if (msg) msg.textContent = '保存中…'
+  try {
+    const r = await postJson('/settings', {
+      activeInjectDecisionPick: document.getElementById('jev-pick-active')?.value ?? '',
+      hotScoreDecisionPick: document.getElementById('jev-pick-score')?.value ?? '',
+    })
+    if (msg) msg.textContent = r.needsRestart ? '已保存——需要重启才生效' : '已保存——热重载将生效'
+    toast(r.needsRestart ? '已保存；本 profile 需要重启才生效' : '已保存，数秒内热生效')
+    void openJevPage({ keepMessage: true })
+  } catch (e) {
+    if (msg) msg.textContent = `保存失败：${e.message}`
+    toast(`保存失败：${e.message}`, true)
+  } finally {
+    if (btn) btn.disabled = false
+  }
+}
+
+/**
+ * ⭐⭐ **保存某个 provider 的密钥**（写凭据 seam；**只发不收**）。
+ *
+ * 🔴 四条纪律：
+ *   ① **收 provider id**（不收凭据名 —— 名字由 id 派生，与官方同规则）；
+ *   ② 空值**不发请求**（留空 = 保持原样，不是"清空"——清空是另一个按钮）；
+ *   ③ 回执**只说成了**（服务端也不回值/长度/前几位）；
+ *   ④ 成功后**立刻把输入框清掉**（别让密钥留在 DOM 里）。
+ */
+async function saveJevKey(providerId, value, msg, clearInput) {
+  if (String(value).trim() === '') {
+    if (msg) msg.textContent = '未填新密钥 —— 留空表示保持原样（要清掉请点「清除密钥」）。'
+    return
+  }
+  if (msg) msg.textContent = '保存中…'
+  try {
+    const r = await postJson('/jev/key', { providerId, key: value })
+    if (msg) msg.textContent = r.message ?? '已保存。'
+    toast('密钥已保存（只写，不会回显）')
+    if (typeof clearInput === 'function') clearInput() // ⚠️ 别把密钥留在 DOM 里
+    void openJevPage({ keepMessage: true })
+  } catch (e) {
+    if (msg) msg.textContent = `保存失败：${e.message}`
+    toast(`保存密钥失败：${e.message}`, true)
+  }
+}
+
+/** ⭐ **清除某个 provider 的密钥**（走 seam 的 `unset`；⚠️ 有代价 ⇒ 先确认）。 */
+async function clearJevKey(providerId, msg) {
+  if (!window.confirm(`清除「${providerId}」的密钥？之后选了它会在运行期调用失败（除非环境变量里还有一份）。`)) return
+  if (msg) msg.textContent = '清除中…'
+  try {
+    const r = await postJson('/jev/key/clear', { providerId })
+    if (msg) msg.textContent = r.message ?? '已清除。'
+    toast('已清除')
+    void openJevPage({ keepMessage: true })
+  } catch (e) {
+    if (msg) msg.textContent = `清除失败：${e.message}`
+    toast(`清除失败：${e.message}`, true)
+  }
+}
+
+/**
+ * ⭐⭐⭐ **测试连接**（真发一次最小请求）。
+ *
+ * 🔴 **为什么不能只看 `/jev-status`**：那只查"凭据**存不存在**"、**不发请求**
+ *    ⇒ "配了密钥"与"真能调通"是两件事（端点写错 / 密钥失效 / 网关不通都过不了）。
+ *    ⭐ 本项目一贯判据：**"配置读到了"不等于"功能能工作"**。
+ * ⚠️ 连不上**不是**接口错误（服务端回 200 + `ok:false`）⇒ 这里当"测试结果"显示。
+ */
+async function testJevConnection(providerId, model, msg, tMsg) {
+  if (msg) msg.textContent = '正在测试（最多 15 秒）…'
+  if (tMsg) tMsg.textContent = ''
+  try {
+    const r = await postJson('/jev/test', { providerId, model })
+    if (msg) msg.textContent = r.message ?? (r.ok ? '连接正常。' : '连接失败。')
+    toast(r.ok ? 'JEV 连接正常' : 'JEV 连接失败', !r.ok)
+    // ⭐ 明细用**两列网格**摊开（与英文索引页同一套 `.idx-rows` 样式，不另造）。
+    if (tMsg) {
+      const parts = [r.ok ? '通' : '不通']
+      if (r.ms !== undefined) parts.push(`${r.ms}ms`)
+      if (r.upstream !== undefined) parts.push(`上游 ${r.upstream}`)
+      if (r.noul !== undefined) parts.push(`noul=${r.noul}`)
+      tMsg.textContent = parts.join('　|　')
+    }
+  } catch (e) {
+    if (msg) msg.textContent = `测试失败：${e.message}`
+    toast(`测试失败：${e.message}`, true)
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -3862,179 +4836,85 @@ async function checkEnIndex(force = false, silent = false) {
 }
 
 /**
- * ⭐⭐ 保存**某一页**的设置（决策 169）。
+ * ⭐⭐ 保存**某一页 / 某一个版块**的设置（决策 169 + 2026-10-07 拆分）。
  *
- * 🔴 **只提交本页那几个键** —— 旧版一次提交全部 40 个键，
- *    任一页的读取 bug 都可能写坏别的页；分页后**越权提交 = 写坏别人的数据**。
+ * 🔴 **只提交本单元那几个键** —— 旧版一次提交全部 40 个键，
+ *    任一处的读取 bug 都可能写坏别处；分页后**越权提交 = 写坏别人的数据**。
  *    ⚠️ 服务端契约**不变**（键全部可选、逐项写入）——裁剪只发生在前端。
- * @param page - 'sink' | 'hot' | 'active' | 'index'
+ * @param unit - 保存单元 id（**一个设置版块一个**，共 14 个）。
+ *   ⚠️ **别再往这里抄单元清单**——唯一出处是 `SAVE_UNITS`（抄第二遍必然漂开）。
  */
-async function saveSettings(page = state.setSub) {
-  const btn = document.querySelector(`.set-save[data-savepage="${page}"]`)
-  const msg = document.getElementById(`settings-msg-${page}`)
-  // ⚠️ **只取本页要用到的元素**（别的页可能是 hidden，但值仍然读得到 —— 那正是要避免的）。
+async function saveSettings(unit = state.setSub) {
+  // ⚠️ **单元的粒度比子页细**（2026-10-07）：**每个设置版块一个单元**。
+  const page = SAVE_UNITS[unit] ?? unit
+  const btn = document.querySelector(`.set-save[data-savepage="${unit}"]`)
+  const msg = document.getElementById(`settings-msg-${unit}`)
+  // ⚠️ **只取本单元要用到的元素**（别的单元可能是 hidden，但值仍然读得到 —— 那正是要避免的）。
   const picked = document.querySelector('input[name="themeCreation"]:checked')
-  // ⭐⭐ **按页裁剪**（决策 169）：只有 sink 页才校验/提交这几个键。
-  const onSink = page === 'sink'
-  if (onSink && !picked) {
+  if (unit === 'sink-theme' && !picked) {
     toast('请先选择一个模式', true)
     if (msg) msg.textContent = '请先选择一个模式。'
     return
   }
-  // ⭐ 两个数值：前端先做一次范围校验，把明显不合法的值挡在请求前
-  //    （服务端**仍会再校验一遍**——前端校验只是体验，不是契约）。
-  const warnInput = document.getElementById('progress-warn')
-  const warnRaw = (warnInput?.value ?? '').trim()
-  const warn = Number(warnRaw)
-  if (onSink && (warnRaw === '' || !Number.isInteger(warn) || warn < 1000 || warn > 1000000)) {
-    toast('截断阈值必须是 1000–1000000 之间的整数', true)
-    if (msg) msg.textContent = '截断阈值不合法：请输入 1000–1000000 之间的整数。'
-    return
+
+  /**
+   * ⭐⭐ **只读本单元那几个数值控件**（决策 169 的核心纪律）。
+   *
+   * 🔴🔴 **为什么必须按单元裁剪**：这些 `num(...)` 原来是**无条件全跑**的 ⇒
+   *    在 A 版块点保存时它仍去读 B 版块的输入框；B 那些框此刻可能是空的
+   *    ⇒ 报「某某必须是 1–50 之间的整数」，而**那个字段在 A 版块界面上根本不存在**。
+   *    ⚠️ **只裁一半比不裁更隐蔽**：写入那半是对的、代码审查看着完全正常，
+   *       只有真去点那个按钮才暴露（本项目踩过两次）。
+   *    ⭐ 判据：**"拆分"必须同时裁【写】与【读】两条路径**。
+   * @returns `{ 配置键: Number }`；不合法时回 `null`（调用方直接 return）。
+   */
+  const readNumKeys = () => {
+    const out = {}
+    for (const [id, key, label, min, max, integer] of NUM_KEYS[unit] ?? []) {
+      // ⚠️ **必须带 `if (el)` 语义**：控件被删了而这里还留着 ⇒ 读到空串 ⇒
+      //    整块存不了，且报错指向一个**界面上根本没有的字段**。
+      //    ⇒ 元素不存在就**直接跳过这个键**（不提交、也不拦路）。
+      const el = document.getElementById(id)
+      if (!el) continue
+      const raw = (el.value ?? '').trim()
+      const n = Number(raw)
+      const bad = raw === ''
+        || !Number.isFinite(n)
+        || n < min
+        || n > max
+        || (integer && !Number.isInteger(n))
+      if (bad) {
+        const tip = `${label}必须是 ${min}–${max} 之间的${integer ? '整数' : '数'}`
+        toast(tip, true)
+        if (msg) msg.textContent = `${tip}。`
+        return null
+      }
+      out[key] = n
+    }
+    return out
   }
-  const keepInput = document.getElementById('progress-keep')
-  const keepRaw = (keepInput?.value ?? '').trim()
-  const keep = Number(keepRaw)
-  if (onSink && (keepRaw === '' || !Number.isInteger(keep) || keep < 1000 || keep > 1000000)) {
-    toast('截断目标必须是 1000–1000000 之间的整数', true)
-    if (msg) msg.textContent = '截断目标不合法：请输入 1000–1000000 之间的整数。'
-    return
-  }
+  const nums = readNumKeys()
+  if (nums === null) return
   // ⚠️ **截断目标必须 ≤ 触发阈值**——否则"超过阈值就截"会变成"截完仍超阈"
   //    ⇒ 下一轮又截，来回震荡。**这是跨键约束，前端能做就先做**（服务端分两次提交时做不到）。
-  if (onSink && keep > warn) {
+  //    ⚠️ 两个数值**同属一个保存单元**（`sink-progress`）⇒ 这条约束照样成立
+  //       （它们永远一起提交；⭐ 若哪天把它们拆到两个单元，这里必须重新审 ——
+  //         拆开后前端**做不到**这个检查，得挪到服务端）。
+  if (unit === 'sink-progress' && nums.progressCharsKeep > nums.progressCharsWarn) {
     toast('截断目标不能大于触发阈值', true)
     if (msg) msg.textContent = '截断目标必须 ≤ 触发阈值（否则每轮都会震荡）。'
     return
   }
-  // ⭐⭐ **按页裁剪：只读本页要用的值**（决策 169）。
-  //
-  // 🔴🔴 **这是本次改造最容易漏的一处**（我第一版就漏了，实测抓到）：
-  //    这些 `num(...)` 与校验循环原来是**无条件全跑**的 ⇒
-  //    在 sink 页点保存时，它**仍去读 active 页的 `ai-rounds`**
-  //    ⇒ 那些输入框在别页是空的 ⇒ 报「**上下文轮数必须是 1–50 之间的整数**」
-  //    ⇒ **sink 页根本存不了**（而这个错误信息指向一个本页根本没有的字段）。
-  //    ⭐ 判据：**"按页裁剪"不只裁提交体，也要裁"读值与校验"** ——
-  //      只裁后者（或只裁前者）都会让别页的字段变成拦路虎。
-  const onHot = page === 'hot'
-  const onIndex = page === 'index'
-  const onActive = page === 'active'
-
-  // ⭐⭐ 热知识旋钮（仅 hot 页）。
-  const hotInjectBox = document.getElementById('hot-inject-enabled')
-  const wantHotInject = !!(hotInjectBox && hotInjectBox.checked)
-  const num = (id, label, min, max, integer) => {
-    const raw = (document.getElementById(id)?.value ?? '').trim()
-    const n = Number(raw)
-    const bad = raw === '' || !Number.isFinite(n) || n < min || n > max || (integer && !Number.isInteger(n))
-    return bad ? { bad: true, label, min, max, integer } : { bad: false, value: n }
-  }
-  /** 占位值：**非本页**的数值键不去读 DOM（避免读到空值）。 */
-  const SKIP = { bad: false, value: 0 }
-  const hotRatioR = onHot ? num('hot-ratio', '注入上限比例', 0, 100, false) : SKIP
-  const hotCptR = onHot ? num('hot-cpt', '字符/token 换算', 0.1, 10, false) : SKIP
-  const hotBudgetR = onHot ? num('hot-budget', '窗口未知时的上限', 1000, 10000000, true) : SKIP
-  const hotFullWarnR = onHot ? num('hot-full-warn', '单条正文提醒阈值', 1, 1000000, true) : SKIP
-  const hotKeepR = onHot ? num('hot-keep', '会话绑定保留数', 1, 10000, true) : SKIP
-  // ⭐⭐⭐ 知识评分（决策 177）—— ⚠️ **只在本页读**（同上面几条的纪律：
-  //     非本页的输入框没预填 ⇒ 读了就是空串 ⇒ 报错会指向"本页根本没有的字段"）。
-  const hsThresholdR = onHot ? num('hs-threshold', '加分阈值', 0, 1, false) : SKIP
-  const hsWindowR = onHot ? num('hs-window', '滚动窗口小时数', 0.1, 10000, false) : SKIP
-  const hsTopNR = onHot ? num('hs-topn', '注入前几名', 1, 200, true) : SKIP
-  // ⭐ 决策 180：每轮最多选几条（**写入侧**，与 `hs-topn` 那个读取侧不是一回事）。
-  const hsMaxPicksR = onHot ? num('hs-maxpicks', '每轮最多选几条', 1, 200, true) : SKIP
-  // ⭐ 决策 182：入围门槛分数（⚠️ 1–1000，不是 0–1 —— 它比的是**累计分**）。
-  const hsGateMinR = onHot ? num('hs-gate-min', '入围门槛：至少几分', 1, 1000, true) : SKIP
-  const hsMinCharsR = onHot ? num('hs-minchars', '低于多少字符不评分', 0, 1000000, true) : SKIP
-  const hsTimeoutR = onHot ? num('hs-timeout', '复盘超时', 1000, 300000, true) : SKIP
-  // ⭐⭐ 英文召回索引（设计文档 §9）：翻译并发（仅 index 页）。
-  const trConcR = onIndex ? num('tr-conc', '翻译并发', 1, 20, true) : SKIP
-  // ⭐⭐ 主动注入（设计文档 §10.1）：同样**前端先挡明显不合法的值**（体验），
-  //    服务端**仍会再校验一遍**（那才是契约）。
-  //
-  // 🔴🔴 **按【键名】取，不按【下标】取**（2026-09-26 实测踩到两次，第二次直接报错）：
-  //    原来是一个数组 + `aiR[1].value` / `aiR[7].value` 这样按下标提交配置。
-  //    ⚠️ 本轮我**只在中间插入了 3 个新控件**（预算/比例/下限），
-  //    就足以让**后面所有键错位** —— 而它**不报错在插入处**，只是把值写到别的配置键上：
-  //      · `activeInjectBand: aiR[1]` 碰巧还对；
-  //      · `activeInjectSufficientMin: aiR[7]` 拿到的却是 **`ai-poolmin`（1–500）**
-  //        ⇒ 服务端校验 0–1 ⇒ 报 *"activeInjectSufficientMin 必须是 0–1 之间的数"*。
-  //    ⭐ 判据：**"按下标引用一组同类东西"是脆弱写法** ——
-  //    任何一次插入/删除都会静默错位；改成按**键名**取，插入就不再有影响。
-  //    ✅ 配套静态断言（`test-active-inject.mjs`）：**提交处不得出现 `aiR[n]`**。
-  // ⭐⭐⭐ **按【键名】取，不按【下标】取**（2026-09-26 实测踩到两次，第二次直接报错）：
-  //    原来是一个数组 + `aiR[1].value` / `aiR[7].value` 这样按下标提交配置。
-  //    ⚠️ 本轮我**只在中间插入了 3 个新控件**（预算/比例/下限），
-  //    就足以让**后面所有键错位** —— 而它**不报错在插入处**，只是把值写到别的配置键上：
-  //      · `activeInjectBand: aiR[1]` 碰巧还对；
-  //      · `activeInjectSufficientMin: aiR[7]` 拿到的却是 **`ai-poolmin`（1–500）**
-  //        ⇒ 服务端校验 0–1 ⇒ 报 *"activeInjectSufficientMin 必须是 0–1 之间的数"*。
-  //    ⭐ 判据：**"按下标引用一组同类东西"是脆弱写法** ——
-  //    任何一次插入/删除都会静默错位；改成按**键名**取，插入就不再有影响。
-  //    ✅ 配套静态断言（`test-active-inject.mjs`）：**提交处不得出现 `aiR[n]`**。
-  //
-  // 🔴🔴 **决策 169 顺带清掉三个"已作废"键**（`ai-rounds` / `ai-pool` / `ai-poolmin`）：
-  //    它们原来**仍在 UI 上渲染**（灰着、标着"已作废"），而我在重做设置页时**把控件删了**
-  //    ⇒ 这个列表若还留着它们，就会**读到一个不存在的元素** ⇒ 拿到空串
-  //    ⇒ 报「**上下文轮数必须是 1–50 之间的整数**」⇒ **整个 active 页存不了**
-  //    （实测抓到：那个错误信息指向一个**本页界面上根本没有的字段**）。
-  //    ⭐ 判据：**删控件时必须同步删"读它的代码"** ——
-  //      "已作废但还留着"是最容易漏的一类（它看起来无害）。
-  //    ⚠️ 对应的配置键（`activeInjectContextRounds` / `PoolMax` / `PoolMin`）
-  //      **不提交、也不删除**：配置文件里可能已有值，提交空值会写坏它。
-  const aiDefs = [
-    ['ai-topk', 'activeInjectTopK', '最多注入条数', 1, 50, true],
-    // ⭐⭐ 2026-09-29：原来的 `ai-band`（一个键兼两个语义）拆成两个控件。
-    //    · need-min  = 「要不要注入」（总控分）
-    //    · item-min  = 「哪几条候选够格」（逐条候选分）
-    //    ⚠️ 键名与 id 只差一个词，**别写反** —— 写反的后果是"两个阈值被换掉"，
-    //       而它**不报错**（两个都是 0–1 的合法分数），只表现为筛选行为莫名改变。
-    ['ai-need-min', 'activeInjectNeedMin', '需求阈值（要不要注入）', 0, 1, false],
-    ['ai-item-min', 'activeInjectItemMin', '入选阈值（哪几条够格）', 0, 1, false],
-    ['ai-timeout', 'activeInjectTimeoutMs', '召回超时', 500, 120000, true],
-    ['ai-calls', 'activeInjectMaxInjectionsPerTurn', '每 turn 注入上限', 0, 50, true],
-    ['ai-reasoncap', 'activeInjectReasoningMaxChars', '思考段字符上限', 100, 100000, true],
-    // ⭐⭐⭐ 预算与拆批（用户 2026-09-26 方案；**已替代"裁候选池"**）
-    ['ai-budgettok', 'activeInjectBudgetTokens', 'JEV 预算(token)', 1000, 200000, true],
-    ['ai-ctxtok', 'activeInjectContextTokens', '上下文名义预算', 1000, 200000, true],
-    ['ai-conc', 'activeInjectConcurrency', '并发批数上限', 1, 16, true],
-    // ⚠️ **小数键** ⇒ integer=false（写成 true 会把 0.6 拒掉）
-    ['ai-chatratio', 'activeInjectChatWindowRatio', 'chat 占窗口比例', 0.1, 1, false],
-    ['ai-suff-min', 'activeInjectSufficientMin', '已有知识充足阈值', 0, 1, false],
-    ['ai-intent-min', 'activeInjectSearchIntentMin', '检索意图阈值', 0, 1, false],
-  ]
-  /** `{ 配置键: Number }` —— 校验失败时整体放弃保存。⚠️ **只在 active 页读**（见上）。 */
-  const aiVals = {}
-  if (onActive) {
-    for (const [id, key, label, min, max, integer] of aiDefs) {
-      const r = num(id, label, min, max, integer)
-      if (r.bad) {
-        const tip = `${label}必须是 ${min}–${max} 之间的${integer ? '整数' : '数'}`
-        toast(tip, true)
-        if (msg) msg.textContent = `${tip}。`
-        return
-      }
-      aiVals[key] = r.value
-    }
-  }
-  // ⚠️ 只校验**本页**读到的那些（`SKIP` 的不会 bad）—— 保留这个循环是因为
-  //    放在这里能一次覆盖 hot 与 index 两页，且不必写两遍。
-  for (const r of [hotRatioR, hotCptR, hotBudgetR, hotFullWarnR, hotKeepR, trConcR]) {
-    if (r.bad) {
-      const tip = `${r.label}必须是 ${r.min}–${r.max} 之间的${r.integer ? '整数' : '数'}`
-      toast(tip, true)
-      if (msg) msg.textContent = `${tip}。`
-      return
-    }
-  }
   // ⭐⭐ 主动注入开着却**没选模型** ⇒ 拦住（服务端会存下一个空模型，
   //    表现为"开关是开的、但一次判断都不做" —— 那是**看起来在工作、实际没工作**）。
-  if (page === 'active' && document.getElementById('ai-on')?.checked) {
-    const chNow = document.getElementById('ai-channel')?.value || 'chat'
-    const pairNow = readActiveModel(chNow)
-    const hasModel = chNow === 'jev' ? pairNow.model !== '' : (pairNow.provider !== '' && pairNow.model !== '')
-    if (!hasModel) {
-      toast('请先选一个召回模型（空模型 ⇒ 功能不生效）', true)
-      if (msg) msg.textContent = '未选召回模型：请在上面的「召回模型」里挑一个，或先关掉总开关。'
+  // 🔴 2026-10-07：总开关已改成**即时生效**（见 `bindInstantToggles`）⇒ 这里只剩
+  //    `active-recall` 一条路径。**两道门都要有**（同一判据，见 `instantToggleGuard`）：
+  //    从"模型"这一侧保存时也要能发现"开着但没模型"。
+  if (unit === 'active-recall' && document.getElementById('ai-on')?.checked) {
+    const bad = activeModelMissing()
+    if (bad !== '') {
+      toast(bad, true)
+      if (msg) msg.textContent = bad
       return
     }
   }
@@ -4048,7 +4928,9 @@ async function saveSettings(page = state.setSub) {
     //    ⇒ **开关在说谎**。用户明确裁定过：环境不通时**拒绝开启**。
     //    ⚠️ 失败的处置：**把开关回弹到关**，并显示失败的那一步与可执行的下一步。
     const gitBox = document.getElementById('backup-git')
-    const wantGit = onSink && !!(gitBox && gitBox.checked)
+    // ⚠️ 只在**版本维护那个单元**才去探 git 环境（判据：只做本单元的事）——
+    //    以前整页保存时，改个主题模式也会顺带探一次 git。
+    const wantGit = unit === 'sink-git' && !!(gitBox && gitBox.checked)
     if (wantGit) {
       if (msg) msg.textContent = '正在准备 git 环境…'
       const setup = await postJson('/backup/setup', {})
@@ -4065,53 +4947,7 @@ async function saveSettings(page = state.setSub) {
       }
     }
 
-    // ⭐⭐ 英文召回索引（设计文档 §9）：控件值（`trConcR` 已在上面用 `num()` 校过）。
-    //    ⚠️ 模型 value 是 **JSON 数组** `[provider, model]`（见 `fillModelSelect`）。
-    const trModelR = document.getElementById('tr-model')
-    const trTplR = document.getElementById('tr-template')
-    let trProviderR = ''
-    let trModelIdR = ''
-    if (trModelR && trModelR.value) {
-      try {
-        const pair = JSON.parse(trModelR.value)
-        trProviderR = String(pair[0] ?? '')
-        trModelIdR = String(pair[1] ?? '')
-      } catch {
-        /* 值不是 JSON ⇒ 视为"跟随主会话" */
-      }
-    }
-
-    // ⭐⭐ 决策 162：标签裁决模型（与翻译模型**同一套编码**：value 是 JSON 数组）。
-    //    🔴 与翻译模型**分开存**：翻译模型只会翻，裁决模型要会判断。
-    const tagModelR = document.getElementById('tag-model')
-    let tagProviderR = ''
-    let tagModelIdR = ''
-    if (tagModelR && tagModelR.value) {
-      try {
-        const pair = JSON.parse(tagModelR.value)
-        tagProviderR = String(pair[0] ?? '')
-        tagModelIdR = String(pair[1] ?? '')
-      } catch {
-        /* 值不是 JSON ⇒ 视为"跟随主会话" */
-      }
-    }
-
-    // ⭐⭐ 主动注入（设计文档 §10.1）：从通路 + 模型下拉框拼出 `provider/model`。
-    //    🔴 **两条通路的拼法不同**（JEV 是纯模型名）⇒ 必须先读通路再读模型。
-    //    ⚠️ **chat 通路必须拼回 `provider/model`**（实测踩到：下拉框的 value 是
-    //       JSON 数组，我第一版只把 model 部分写进配置 ⇒ 存成 `deepseek-v4.1-flash`
-    //       少了 `workbuddy/` 前缀 ⇒ 召回直接报"模型要写成 provider/model"。
-    //       ⚠️ 更坏的是：**用 API 直接写配置时是对的**，只有"从面板点保存"才坏
-    //       ⇒ 端到端脚本若只走 API 就发现不了）。
-    const aiChannelR = document.getElementById('ai-channel')?.value || 'chat'
-    const aiPair = readActiveModel(aiChannelR)
-    const aiModelR = {
-      model: aiChannelR === 'jev'
-        ? aiPair.model
-        : (aiPair.provider !== '' && aiPair.model !== '' ? `${aiPair.provider}/${aiPair.model}` : ''),
-    }
-
-    // ⭐⭐⭐ **按页拼 payload**（决策 169）——只提交本页的键。
+    // ⭐⭐⭐ **按【保存单元】拼 payload**（决策 169 + 2026-10-07 全量拆分）——只提交本单元的键。
     //
     // 🔴 **两条铁律**（本项目各踩过一次）：
     //   ① **布尔值必须原样传 false**（不能省略）——省略 = "没给" = 不写这个键
@@ -4119,86 +4955,141 @@ async function saveSettings(page = state.setSub) {
     //   ② **数值必须是 Number**（DOM 的 `.value` 是字符串 "3"）⇒ 服务端
     //      `typeof n !== 'number'` 会拒掉，报"必须是 1–20 之间的整数"。
     //
-    // ⚠️ 各页只提交自己那几项；**没列到的键一律不碰**（别页的数据由别页负责）。
+    // ⚠️ 各单元只提交自己那几项；**没列到的键一律不碰**（别单元的数据由别单元负责）。
+    //    ⭐ 数值键统一由 `nums` 展开（它来自 `NUM_KEYS[unit]`，与校验同一份来源）。
+    //
+    // ⭐⭐⭐ 用户 2026-10-07：**全部设置页都按板块保存**。下面每个分支都很小，
+    //    这是**有意的**：一个分支越大，越容易把"不该我管的键"卷进来
+    //    （那正是"改个阈值顺带写坏模型配置"的成因）。
+    /** 小工具：读一个复选框的勾选态（缺元素 ⇒ false，但**只在确实该提交时才用**）。 */
+    const chk = (id) => !!(document.getElementById(id)?.checked)
+    const val = (id, dflt = '') => document.getElementById(id)?.value ?? dflt
+
     let payload = {}
-    if (page === 'sink') {
-      payload = {
-        themeCreation: picked.value,
-        progressCharsWarn: warn,
-        progressCharsKeep: keep,
-        backupGit: wantGit,
-        // ⭐⭐ 2026-09-28：**标签规范化搬到了本页**（用户要求）⇒ 这四键随页走。
-        //    ⚠️ 与 index 页一样的两条铁律：布尔原样传 false；空串是合法值（= 不传档位）。
-        tagNormalizeProvider: tagProviderR,
-        tagNormalizeModel: tagModelIdR,
-        tagNormalizeOnHandoff: document.getElementById('tag-auto')?.checked === true,
-        tagNormalizeReasoningEffort: document.getElementById('tag-effort')?.value ?? 'off',
-      }
-    } else if (page === 'hot') {
-      payload = {
-        hotInject: wantHotInject,
-        hotInjectRatio: hotRatioR.value,
-        hotCharsPerToken: hotCptR.value,
-        hotBudgetCharsFallback: hotBudgetR.value,
-        hotFullWarnChars: hotFullWarnR.value,
-        hotSessionKeep: hotKeepR.value,
-        // ⭐⭐⭐ 知识评分（决策 177）—— 同样是**本页的键**。
-        hotScoreOnTurnEnd: !!(document.getElementById('hs-on')?.checked),
-        hotScoreThreshold: hsThresholdR.value,
-        hotScoreWindowHours: hsWindowR.value,
-        hotScoreTopN: hsTopNR.value,
-        // ⭐ 决策 180：写入侧的上限（与 `hotScoreTopN` 读取侧不同）。
-        hotScoreMaxPicks: hsMaxPicksR.value,
-        // ⭐ 决策 182：入围门槛（分数 + 上一轮那道门）。
-        hotScoreGateMinScore: hsGateMinR.value,
-        hotScoreGateLastTurn: !!(document.getElementById('hs-gate-last')?.checked),
-        hotScoreMinChars: hsMinCharsR.value,
-        hotScoreTimeoutMs: hsTimeoutR.value,
-        // ⭐⭐⭐ 通路口径 + 模型（与主动注入同一套：模型**形态跟着通路**）。
-        hotScoreChannel: document.getElementById('hs-channel')?.value || 'chat',
-        // ⚠️ 用 `readChannelModel` 编码成 `provider/model`（jev 通路下是纯模型名）——
-        //    与「召回模型」**共用同一个读法**，避免两处算法漂移。
-        hotScoreModel: (() => {
-          const ch = document.getElementById('hs-channel')?.value || 'chat'
-          const r = readChannelModel('hs-model', ch)
-          return r.provider !== '' ? `${r.provider}/${r.model}` : r.model
-        })(),
-        // ⭐ 子代理模型：**始终是 `provider/model`**（它只能走 DSH 模型路由）。
-        hotScoreSubagentProvider: (() => {
-          const r = readChannelModel('hs-subagent-model', 'chat')
-          return r.provider
-        })(),
-        hotScoreSubagentModel: (() => {
-          const r = readChannelModel('hs-subagent-model', 'chat')
-          return r.model
-        })(),
-      }
-    } else if (page === 'index') {
-      payload = {
-        // ⚠️ **不提交 `enIndex`**：它是必要功能、没有开关（用户 2026-09-26 裁定）
-        //    ⇒ 提交它会**覆盖掉配置文件里可能存在的值**。
-        translateProvider: trProviderR,
-        translateModel: trModelIdR,
-        translateTemplate: trTplR ? trTplR.value : 'instruct',
-        translateConcurrency: trConcR.value,
-      }
-    } else if (page === 'active') {
-      payload = {
-        activeInject: !!(document.getElementById('ai-on')?.checked),
-        activeInjectChannel: document.getElementById('ai-channel')?.value || 'chat',
-        activeInjectModel: aiModelR.model,
-        activeInjectScope: document.getElementById('ai-scope')?.value || 'project+themes',
-        activeInjectJevNarrowScope: !!(document.getElementById('ai-jev-narrow')?.checked),
-        activeInjectStrict: !!(document.getElementById('ai-strict')?.checked),
-        activeInjectSufficientGate: !!(document.getElementById('ai-suff-gate')?.checked),
-        activeInjectSearchIntentGate: !!(document.getElementById('ai-intent-gate')?.checked),
-        activeInjectExplain: !!(document.getElementById('ai-explain')?.checked),
-        activeInjectBudget: !!(document.getElementById('ai-budget')?.checked),
-        activeRecallLogRequest: !!(document.getElementById('ai-recall-log-req')?.checked),
-        // ⚠️ 数值键**按名字展开**（`aiVals`），不按下标 —— 见上方 `aiDefs` 的注释。
-        //    🔴 **只在这里展开**：13 个数值键全属于本页。
-        ...aiVals,
-      }
+    switch (unit) {
+      // ══════════════ 沉淀 ══════════════
+      case 'sink-theme':
+        payload = { themeCreation: picked.value }
+        break
+      case 'sink-progress':
+        payload = nums
+        break
+      case 'sink-git':
+        // ⚠️ **布尔原样传**（不能因为 false 就省略 —— 省略 = 关不掉这个开关）。
+        payload = { backupGit: wantGit }
+        break
+      case 'sink-tag':
+        payload = {
+          // ⚠️ 两条铁律：布尔原样传 false；空串是合法值（= 不传档位）。
+          tagNormalizeProvider: readModelPair('tag-model').provider,
+          tagNormalizeModel: readModelPair('tag-model').model,
+          tagNormalizeOnHandoff: chk('tag-auto'),
+          tagNormalizeReasoningEffort: val('tag-effort', 'off'),
+        }
+        break
+
+      // ══════════════ 热知识注入 ══════════════
+      // ⚠️ `hot-inject`（启用热知识注入）**不在这里** —— 它是即时生效项
+      //    （见 `INSTANT_TOGGLES` 与 `bindInstantToggles`）。
+      case 'hot-budget':
+        payload = nums
+        break
+      case 'hot-score':
+        payload = {
+          ...nums,
+          hotScoreOnTurnEnd: chk('hs-on'),
+          // ⭐ 决策 182：入围门槛的"上一轮那道门"。
+          hotScoreGateLastTurn: chk('hs-gate-last'),
+          // ⭐⭐⭐ 通路口径 + 模型。
+          //    🔴 **2026-10-07 多 provider 化**：`jev` 通路的模型要写进
+          //       `hotScoreDecisionPick`（`providerId/modelName`），
+          //       **不是** `hotScoreModel`（那在 jev 下是旧的裸模型名键）。
+          hotScoreChannel: val('hs-channel', 'chat'),
+          ...(() => {
+            const ch = val('hs-channel', 'chat')
+            const r = readChannelModel('hs-model', ch)
+            const full = r.provider !== '' ? `${r.provider}/${r.model}` : r.model
+            // ⚠️ `chat` 通路照旧写 `hotScoreModel`（它本来就是 provider/model，没变）。
+            return ch === 'jev'
+              ? { hotScoreDecisionPick: full }
+              : { hotScoreModel: full }
+          })(),
+          // ⭐ 子代理模型：**始终是 `provider/model`**（它只能走 DSH 模型路由）。
+          hotScoreSubagentProvider: readChannelModel('hs-subagent-model', 'chat').provider,
+          hotScoreSubagentModel: readChannelModel('hs-subagent-model', 'chat').model,
+        }
+        break
+
+      // ══════════════ 主动注入 ══════════════
+      // ⚠️ `active-on`（启用主动注入）**不在这里** —— 它是即时生效项（见 `INSTANT_TOGGLES`）。
+      case 'active-recall':
+        // ⭐⭐ 召回模型这一块：**通路必须先于模型读**（两条通路的编码不同）。
+        //    🔴 **chat 通路必须拼回 `provider/model`**（实测踩到：下拉框的 value 是
+        //       JSON 数组，第一版只把 model 部分写进配置 ⇒ 存成 `deepseek-v4.1-flash`
+        //       少了 `workbuddy/` 前缀 ⇒ 召回直接报"模型要写成 provider/model"。
+        //       ⚠️ 更坏的是：**用 API 直接写配置时是对的**，只有"从面板点保存"才坏
+        //       ⇒ 端到端脚本若只走 API 就发现不了）。
+        payload = {
+          activeInjectChannel: val('ai-channel', 'chat'),
+          // 🔴 **2026-10-07 多 provider 化**：两条通路的值形态**已统一**为
+          //    `provider/model`（决策模型也编码成 `[providerId, modelName]`）。
+          //    ⇒ `chat` 写 `activeInjectModel`、`jev` 写 `activeInjectDecisionPick`。
+          //    ⚠️ 别把两者混写：`activeInjectModel` 在 jev 通路是**旧键**（裸模型名）。
+          ...(() => {
+            const ch = val('ai-channel', 'chat')
+            const pair = readActiveModel(ch)
+            const full = pair.provider !== '' && pair.model !== ''
+              ? `${pair.provider}/${pair.model}`
+              : pair.model
+            return ch === 'jev'
+              ? { activeInjectDecisionPick: full }
+              : { activeInjectModel: full }
+          })(),
+          activeInjectScope: val('ai-scope', 'project+themes'),
+          activeInjectJevNarrowScope: chk('ai-jev-narrow'),
+          // ⚠️ 「严格触发口径」的控件**就渲染在本版块里**（保持用户原有的版面）⇒ 随本单元提交。
+          activeInjectStrict: chk('ai-strict'),
+        }
+        break
+      case 'active-judge':
+        payload = nums
+        break
+      case 'active-budget':
+        payload = { ...nums, activeInjectBudget: chk('ai-budget') }
+        break
+      case 'active-gate':
+        payload = {
+          ...nums,
+          activeInjectSufficientGate: chk('ai-suff-gate'),
+          activeInjectSearchIntentGate: chk('ai-intent-gate'),
+        }
+        break
+      case 'active-debug':
+        payload = {
+          activeRecallLogRequest: chk('ai-recall-log-req'),
+          activeInjectExplain: chk('ai-explain'),
+        }
+        break
+
+      // ══════════════ 英文索引 ══════════════
+      case 'index-en':
+        payload = {
+          ...nums,
+          // ⚠️ **不提交 `enIndex`**：它是必要功能、没有开关（用户 2026-09-26 裁定）
+          //    ⇒ 提交它会**覆盖掉配置文件里可能存在的值**。
+          translateProvider: readModelPair('tr-model').provider,
+          translateModel: readModelPair('tr-model').model,
+          translateTemplate: val('tr-template', 'instruct'),
+        }
+        break
+
+      default:
+        // 🔴 **不静默提交空 body**：服务端对空 payload 返 400（"至少要给一个键"），
+        //    但那时错误信息会很难懂。这里直接说清是**前端的单元没登记**。
+        if (msg) msg.textContent = `内部错误：保存单元「${unit}」没有提交分支（请报告）。`
+        toast(`保存单元「${unit}」没有提交分支`, true)
+        btn.disabled = false
+        return
     }
     const r = await postJson('/settings', payload)
     if (msg) msg.textContent = r.needsRestart ? '已保存——需要重启才生效' : '已保存——热重载将生效'
@@ -4213,6 +5104,58 @@ async function saveSettings(page = state.setSub) {
     toast(`保存失败：${e.message}`, true)
   } finally {
     btn.disabled = false
+  }
+}
+
+/**
+ * ⭐⭐⭐ **即时生效的开关**（用户 2026-10-07 裁定）：勾选/取消**立刻写配置**。
+ *
+ * 🔴 **为什么这两个不配保存按钮**：它们是"**一个勾选就是全部语义**"的独立开关
+ *    （启用热知识注入 / 启用主动注入）—— 点了却还要再点一次"保存"是多余的。
+ *    ⚠️ **反过来说，带配套参数的版块不能这么干**（见 `INSTANT_TOGGLES` 的注释）：
+ *       那样会变成"每敲一个字符写一次盘"，且**半成品配置会被热重载吃进去**。
+ *
+ * 🔴🔴 **失败必须把勾选态弹回去**（与 `sink-git` 那条同一纪律）：
+ *    写盘失败却让界面停在"已开启"⇒ **开关在说谎**，用户以为功能开了、其实没开。
+ *    ⭐ 本项目既有裁定：环境不允许时**拒绝开启**，而不是"先记着、以后再试"。
+ *
+ * ⚠️ 成功/失败**都写回执行**（`settings-msg-<控件id>`）——与保存按钮同一套反馈位，
+ *    这样用户不必猜"我刚才那下到底成没成"。
+ */
+function bindInstantToggles() {
+  for (const [id, key] of INSTANT_TOGGLES) {
+    const box = document.getElementById(id)
+    if (!box) continue
+    box.addEventListener('change', async () => {
+      const want = box.checked
+      const msg = document.getElementById(`settings-msg-${id}`)
+      // ⭐⭐ **开之前先过守卫**（与"召回模型"保存时同一份判据，见 `activeModelMissing`）：
+      //    主动注入开着却没选模型 = "看着在工作、其实一次都不判" ⇒ **拒绝开启**，
+      //    并把勾选弹回去（不能让开关显示成已开启而功能不生效）。
+      if (want && id === 'ai-on') {
+        const bad = activeModelMissing()
+        if (bad !== '') {
+          box.checked = false
+          if (msg) msg.textContent = bad
+          toast(bad, true)
+          return
+        }
+      }
+      box.disabled = true
+      if (msg) msg.textContent = '保存中…'
+      try {
+        const r = await postJson('/settings', { [key]: want })
+        if (msg) msg.textContent = r.needsRestart ? '已保存——需要重启才生效' : '已保存——热重载将生效'
+        toast(r.needsRestart ? '已保存；本 profile 需要重启才生效' : '已保存，数秒内热生效')
+      } catch (e) {
+        // ⚠️ **弹回原状**（不能让开关显示成"已开启"而配置里没写进去）。
+        box.checked = !want
+        if (msg) msg.textContent = `保存失败：${e.message}`
+        toast(`保存失败：${e.message}`, true)
+      } finally {
+        box.disabled = false
+      }
+    })
   }
 }
 
@@ -4261,11 +5204,23 @@ document.getElementById('settings-subtabs').addEventListener('click', (e) => {
   state.setSub = btn.dataset.setsub
   navigate(`#/settings/${state.setSub}`)
 })
-// ⭐⭐ **每个子页各有一个保存按钮**（决策 169）——只提交本页的键。
+// ⭐⭐ **每个设置版块各有一个保存按钮**——只提交本单元的键。
+//    ⚠️ 单元粒度比子页细（见 `SAVE_UNITS`）；页级按钮已全部删除。
 for (const b of document.querySelectorAll('.set-save')) {
   b.addEventListener('click', () => void saveSettings(b.dataset.savepage))
 }
-// ⭐⭐ 英文召回索引：「检查并补全」与「强制重建」（用户 2026-09-26 要求）。
+// ⭐⭐⭐ **总开关即时生效**（用户 2026-10-07）——两个总开关**没有保存按钮**。
+bindInstantToggles()
+// ⭐⭐⭐ **【决策模型配置】页的按钮绑定**（用户 2026-10-07，多 provider 化）。
+//    🔴 **"保存密钥/测试连接/删除"都是每张卡片自己的按钮**（在 `buildJevEditor` 里
+//       就地绑）—— 这里只绑**页面级**的两个：添加提供商、保存两条通路的选择。
+//    理由：那三个动作**必须带上 provider id**，而 id 在卡片里；挂在页面级就得
+//    再搞一个"当前选中谁"的状态（多一处可能与界面不一致的真相）。
+document.getElementById('jev-add-provider')?.addEventListener('click', () => {
+  void addJevProvider(document.getElementById('jev-config-msg'))
+})
+document.getElementById('jev-save-picks')?.addEventListener('click', () => void saveJevPicks())
+// ⭐⭐⭐ 英文召回索引：「检查并补全」与「强制重建」（用户 2026-09-26 要求）。
 //    ⚠️ 两个按钮**不是同一件事**：前者"有问题才补"，后者"无论如何都重建一次"。
 //       ⇒ 分开两个按钮，避免把"检查"变成"每次点击都花钱翻译"。
 document.getElementById('idx-check-btn')?.addEventListener('click', () => void checkEnIndex(false))
@@ -4275,6 +5230,12 @@ document.getElementById('idx-rebuild-btn')?.addEventListener('click', () => {
     void checkEnIndex(true)
   }
 })
+// ⭐⭐⭐ **「翻译模型 ↔ 翻译模板」改任一个都立刻重算配对警告**（用户 2026-10-07 要求：
+//    *"如果选对应比如 mt 模版，但是没有响应的 mt 模型就要警告"*）。
+//    ⚠️ 两个控件都要挂 —— 只挂模板那个的话，"先选模板再换模型"就看不到警告了。
+for (const id of ['tr-model', 'tr-template']) {
+  document.getElementById(id)?.addEventListener('change', () => refreshTranslatePairingWarn())
+}
 // ⭐⭐ 主动注入：**切通路就重填模型下拉框**（用户 2026-09-26）。
 //    🔴 为什么必须重填：两条通路的候选**来源不同**（chat 走 DSH 模型路由、
 //       jev 走 Knox 的 /v1/systemone）—— 留着上一个通路的模型名会**静默走错端点**。
