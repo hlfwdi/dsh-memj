@@ -100,6 +100,10 @@ import {
   stripSpecBlock,
   stripAllSpecBlocks,
   truncateTitlesFromBlocks,
+  // ⭐⭐ 决策 220：规范块的**读改通道**（人侧就地编辑规范用）。
+  sectionSpecsOf,
+  setSectionSpecBlock,
+  renderSpecBlockLines,
 } from './sections.ts'
 
 export {
@@ -125,6 +129,9 @@ export {
   stripSpecBlock,
   stripAllSpecBlocks,
   truncateTitlesFromBlocks,
+  sectionSpecsOf,
+  setSectionSpecBlock,
+  renderSpecBlockLines,
 }
 
 /** 一个项目在库里的全貌。 */

@@ -264,6 +264,161 @@ export function truncateTitlesFromBlocks(narrative: string): string[] {
   return out
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// ⭐⭐⭐ **规范块的读改通道**（决策 220）—— 「人侧就地编辑规范」的数据层
+//
+// ── 为什么要收成一组（而不是让调用方自己切节）──────────────────────────────
+//   🔴 `sectionSpecsOf()`（读：回给页面显示与预填）与 `setSectionSpecBlock()`
+//      （写：落盘）**必须定位到同一节、同一个块**。否则会出现
+//      "界面显示的是 A 节的规范、保存却写进了 B 节"这类**静默错位**
+//      —— 那正是本项目最忌的一类失败（错位不报错、只是把内容挪了地方）。
+//   ⇒ 两者共用下面的 `topHeadingLines()`（本模块**唯一**的顶层节切分实现）。
+//
+// ── 🔴 三条硬边界（都来自既有裁定，不是新发明）──────────────────────────────
+//   1. **绝不替任何一节合成规范** —— 「已有文档没有规范 ⇒ 什么都不写」是决策 207 的
+//      裁定（不知道它该有哪几节 ⇒ 硬贴一份默认规范是**主动误导**）。
+//      ⇒ 该节没有规范块时，本组函数只回 `no-block`，**不插入**。
+//   2. **只改「这一节自己的那个块」** —— 不碰该节正文、不碰其它节、不碰封面。
+//      （与 `edit.ts` 的既有边界一致：正文的增删改查仍归 `memj_handoff`。）
+//   3. **读写同源** —— 围栏语法全部取自本模块的 `SPEC_BLOCK_FENCE` /
+//      `specBlockRange()`，不在这里另造一套（"同一语义两条实现"必然漂开）。
+// ══════════════════════════════════════════════════════════════════════════
+
+/**
+ * 裸反引号围栏那一串。
+ *
+ * ⚠️ **不写成字面量**：本项目对"源码/提示词里出现裸围栏"有过多次教训
+ * （`gen-context.mjs` 会拒绝含两个围栏的提示词块），用 `fromCharCode` 最保险。
+ */
+const FENCE_BARE = String.fromCharCode(96, 96, 96)
+
+/**
+ * ⭐ **顶层 `## ` 标题的行号表**（本模块内部唯一实现；**跳过围栏内的伪标题**）。
+ *
+ * ⚠️ **两处必须同源**：读（`sectionSpecsOf`）与写（`setSectionSpecBlock`）。
+ * ⚠️ 与 `sectionsFromNarrative()` **同规**：排除工具维护的两节
+ *    （`沉淀知识` / `本档写作规范`）—— 它们不是叙事节、也没有"自己的规范块"。
+ * @param lines - 文档的行数组。
+ * @returns `{ title, line }[]`（按出现顺序）。
+ */
+function topHeadingLines(lines: readonly string[]): Array<{ title: string; line: number }> {
+  const out: Array<{ title: string; line: number }> = []
+  let inFence = false
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i] ?? ''
+    // 🔴 判据是「任意围栏行」（`^\s*````），与 `sectionsFromNarrative` 同规 ——
+    //    若像 `truncateTitlesFromBlocks` 那样只认"规范起始行或裸闭合行"，
+    //    正文里的普通代码块（```js … ```）会被漏判 ⇒ 它内部的 `## 示例` 会变成"一节"。
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence
+      continue
+    }
+    if (inFence) continue
+    const m = /^##\s+(.+?)\s*$/.exec(line)
+    if (m === null) continue
+    const title = (m[1] ?? '').trim()
+    if (title === '' || title === KNOWLEDGE_TITLE || title === SPEC_TITLE) continue
+    out.push({ title, line: i })
+  }
+  return out
+}
+
+/** 一节自己的规范块（**读出来的形态**：供人侧页面显示与预填）。 */
+export interface SectionSpec {
+  /** 节名（顶层 `## ` 的文本）。 */
+  title: string
+  /** 规范正文（围栏内的内容，已 trim；**可能为空**——手写的空块是合法的）。 */
+  spec: string
+  /** 该节的围栏起始行有没有 `truncate` 标记（= 这一节参与自动截断归档）。 */
+  truncate: boolean
+}
+
+/**
+ * ⭐⭐ **取"这份文档里每一节自己的规范块"**（只回**真的有块**的节）。
+ *
+ * 🔴 **没有块的节不出现在结果里** —— 见本组开头的边界 1（绝不合成）。
+ *    调用方据此就能判断"这一节能不能编辑"：**在结果里 ⇒ 能**。
+ * @param narrative - 纯叙事文本（可传 `''`）。
+ * @returns 各节的规范块（按文档顺序）。
+ */
+export function sectionSpecsOf(narrative: string): SectionSpec[] {
+  const lines = narrative.split(/\r?\n/)
+  const heads = topHeadingLines(lines)
+  const out: SectionSpec[] = []
+  for (let i = 0; i < heads.length; i += 1) {
+    const h = heads[i]
+    if (h === undefined) continue
+    const end = i + 1 < heads.length ? (heads[i + 1]?.line ?? lines.length) : lines.length
+    const seg = lines.slice(h.line, end)
+    const r = specBlockRange(seg)
+    if (r === undefined) continue
+    out.push({ title: h.title, spec: extractSpecBlock(seg), truncate: r.truncate })
+  }
+  return out
+}
+
+/**
+ * ⭐ **把一段规范文字渲染成围栏块的行**（写侧的**唯一**渲染点）。
+ *
+ * 🔴 **闭合行必须是裸围栏**，不是带语言标记的那一串 —— 写成一样会让
+ *    `specBlockRange()` **认不出闭合** ⇒ 规范块"不闭合" ⇒ 反解为空
+ *    （决策 209 实测踩过，见 `handoff.ts` 的 `insertSpecBlocks`）。
+ * @param spec - 规范正文（可多行；空串 ⇒ 渲染出一个只有围栏的块）。
+ * @param truncate - 该节是否声明可自动截断。
+ * @returns 行数组（含起始围栏与闭合围栏）。
+ */
+export function renderSpecBlockLines(spec: string, truncate: boolean): string[] {
+  const out = [`${FENCE_BARE}${SPEC_BLOCK_FENCE}${truncate ? ' truncate' : ''}`]
+  const body = spec.replace(/\r\n/g, '\n').trim()
+  if (body !== '') out.push(...body.split('\n'))
+  out.push(FENCE_BARE)
+  return out
+}
+
+/**
+ * ⭐⭐⭐ **替换某一节自己的规范块**（该节正文一字不动）。
+ *
+ * 🔴 **三态返回，调用方必须区分**（它们的后果完全不同）：
+ *   · `ok`         —— 换了；
+ *   · `no-section` —— 文档里没有这一节（多半是节名写错）；
+ *   · `no-block`   —— 有这一节，但它**没有规范块** ⇒ **不插入**（边界 1）。
+ *
+ * ⚠️ **同名多节取第一个** —— 与 `read.ts` 的按节读取一致（那边是子串匹配，
+ *    这里是精确匹配；精确匹配仍可能撞上两节同名，而模板校验禁止重复节名）。
+ * @param narrative - 纯叙事文本。
+ * @param title - 节名（**精确匹配**，已 trim）。
+ * @param spec - 新的规范正文。
+ * @param truncate - 新的截断标记。
+ * @returns 新叙事与状态。
+ */
+export function setSectionSpecBlock(
+  narrative: string,
+  title: string,
+  spec: string,
+  truncate: boolean,
+): { narrative: string; status: 'ok' | 'no-section' | 'no-block' } {
+  const key = title.trim()
+  const lines = narrative.split(/\r?\n/)
+  const heads = topHeadingLines(lines)
+  const idx = heads.findIndex((h) => h.title === key)
+  if (idx === -1) return { narrative, status: 'no-section' }
+  const start = heads[idx]?.line ?? 0
+  const end = idx + 1 < heads.length ? (heads[idx + 1]?.line ?? lines.length) : lines.length
+  const seg = lines.slice(start, end)
+  const r = specBlockRange(seg)
+  if (r === undefined) return { narrative, status: 'no-block' }
+  // ⚠️ 拼接顺序：节前原文 → 本节标题行与"块之前"的那部分 → **新块** → 块之后的正文 → 文档其余。
+  //    `r.open` 是**相对 seg** 的下标（≥1，因为 `specBlockRange` 默认跳过标题行）。
+  const next = [
+    ...lines.slice(0, start),
+    ...seg.slice(0, r.open),
+    ...renderSpecBlockLines(spec, truncate),
+    ...seg.slice(r.close + 1),
+    ...lines.slice(end),
+  ]
+  return { narrative: next.join('\n'), status: 'ok' }
+}
+
 /**
  * ⭐ **剥掉整份文档里所有节内规范块**（模型回传的 `doc` 走这条）。
  *

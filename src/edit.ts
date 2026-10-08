@@ -52,9 +52,14 @@ import {
   syncEntryFrontmatter,
   writeProjectDoc,
   writeThemeDoc,
+  // ⭐⭐ 决策 220：改完规范后，`truncateSections` **从正文反解**再回写
+  //    （与 handoff 落盘同一条纪律：**正文权威、frontmatter 跟随**）。
+  truncateTitlesFromBlocks,
 } from './store.ts'
 import { validateCoverShape } from './parse.ts'
 import type { Cover, EntryKind } from './schema.ts'
+// ⭐⭐⭐ 决策 220：规范块的**读写通道**（`sections.ts` 是零依赖叶子模块，直接引它）。
+import { sectionSpecsOf, setSectionSpecBlock } from './sections.ts'
 
 /** 一次删改的结果。 */
 export interface EditResult {
@@ -820,6 +825,108 @@ export async function setProjectFields(
  */
 export async function setProjectDesc(id: string, desc: string): Promise<EditResult> {
   return await setProjectFields(id, { desc })
+}
+
+/**
+ * ⭐⭐⭐ **改某一节的「书写规范」**（决策 220 —— 用户 2026-10-12 要求可编辑）。
+ *
+ * ── 它改的是什么 ────────────────────────────────────────────────────────────
+ * `## <节名>` 下那个 ```memj:spec 围栏块（**块内文字 + 起始行的 `truncate` 标记**）。
+ * 用户原话：*"就 memj 存量的项目文档，章节下的章节规范，我希望也变成可编辑的。
+ * 编辑入口就放在…右侧详情页，书写规范块上给一下编辑按钮。"*
+ *
+ * ── 🔴🔴 四条设计边界（都是既有裁定，不是这次新定的）────────────────────────
+ * 1. **只改这一节自己的块** —— 该节正文、其它节、封面、（末尾那个旧的）
+ *    「本档写作规范」节**一字不动**。本项目既有分工是"正文的增删改查归 `memj_handoff`"，
+ *    本函数只碰**工具自己生成的**那一块。
+ * 2. **没有块就拒绝（`no-block`），绝不合成** —— 决策 207：
+ *    "已有文档没有规范就绝不替它合成"（不知道它该有哪几节，硬贴默认规范是主动误导）。
+ * 3. **`truncate` 标记改完要回写 frontmatter 镜像** —— 正文是权威
+ *    （`truncateTitlesFromBlocks`），而 `frontmatter.truncateSections` 是它的镜像；
+ *    ⚠️ **不跟手会把"哪节能自动截断"两处写成两样**（本项目最忌的"同一事实两份值"）。
+ *    ⇒ 这里**从新正文反解**再写，而不是"在旧数组上加减一个名字"
+ *      （后者在"旧镜像本来就与正文不一致"时会把错的那份固化下来）。
+ * 4. **走同一道归档守卫** —— 归档项目不可编辑（决策 133），与其它项目级写通道一致。
+ *
+ * ⚠️ **`metaOnly` 与正文长度无关**：不设上限（与模板那句"不限"一致）——
+ *    它不吃截断配额（`sectionCharCount` 把整块剔除），写长没有副作用。
+ * @param id - 项目 id。
+ * @param title - 节名（**精确匹配**）。
+ * @param spec - 新的规范正文。
+ * @param truncate - 新的截断标记（该节是否参与自动截断归档）。
+ * @returns 结果。
+ */
+export async function setSectionSpec(
+  id: string,
+  title: string,
+  spec: string,
+  truncate: boolean,
+): Promise<EditResult> {
+  const blocked = await guardProjectEditable(id)
+  if (blocked !== null) return blocked
+
+  const name = title.trim()
+  if (name === '') return no('缺少节名。')
+
+  const doc = await loadProjectDoc(id)
+  if (doc === undefined) return no(`项目 \`${id}\` 不存在。`)
+
+  const before = sectionSpecsOf(doc.narrative).find((s) => s.title === name)
+  // ⚠️ **只调一次**（读 status 与 narrative 都从这一次拿）——调两次是白算一遍、
+  //    且两处若传入参数不一致就会静默分叉（本项目"同一件事两条实现"的老坑）。
+  const applied = setSectionSpecBlock(doc.narrative, name, spec, truncate)
+  if (applied.status === 'no-section') {
+    return no(`项目 \`${id}\` 的文档里没有「${name}」这一节（节名必须与正文的 \`## \` 标题逐字相同）。`)
+  }
+  if (applied.status === 'no-block') {
+    // 🔴 与决策 207 一致：**不合成**。如实说明"为什么没有这个按钮该出现的地方"。
+    //    ⚠️ 提示里那串围栏**不能写成字面量裸反引号**（本文件/上游对"裸围栏"有过教训）
+    //       ⇒ 用 `\u0060` 转义写出来，读起来仍是三个反引号。
+    return no(
+      `「${name}」这一节**没有书写规范块**——本项目不会替已有文档合成规范` +
+        '（不知道它该有哪几节，硬贴一份默认规范是主动误导）。' +
+        '要给它加规范，请直接在该项目的交接文档里手写一个 \u0060\u0060\u0060memj:spec 围栏块。',
+    )
+  }
+  if (before !== undefined && before.spec === spec.trim() && before.truncate === truncate) {
+    return ok(`「${name}」的规范没有变化，未写入。`)
+  }
+
+  // 🔴🔴 **只换那一节的那个块** —— `setSectionSpecBlock()` 是**局部替换**：
+  //    除目标块以外的字节**逐字不动**（含其它节、正文、封面）。
+  //    ⚠️ 为什么不能用"整篇重渲染"：本项目吃过那个亏 —— `fixCoverBlock` 的头注释记着
+  //       那次真实事故（整篇重渲染把**同文档里其它解析失败的块静默删掉**）。
+  //    ⚠️ 也不能借 `mergeNarrative`：它的语义是"用补丁合并旧文档"，
+  //       没写正文的节会被清空（"插入 ≠ 合并"，本项目已记过这条）。
+  const narrative = applied.narrative
+
+  const nowIso = new Date().toISOString()
+  await writeProjectDoc(
+    id,
+    {
+      ...doc.frontmatter,
+      createdAt: (doc.frontmatter.createdAt ?? '') !== '' ? doc.frontmatter.createdAt : nowIso,
+      updatedAt: nowIso,
+      // ⭐ 边界 3：**从新正文反解**截断目标（正文权威），而不是在旧数组上加减。
+      //    ⚠️ 旧镜像本来就与正文不一致时，"加减一个名字"会把错的那份固化下来。
+      truncateSections: truncateTitlesFromBlocks(narrative),
+    },
+    narrative,
+    doc.covers,
+    doc.orphans,
+  )
+  await rebuildDerivedLayers()
+
+  const marks: string[] = []
+  if (before !== undefined && before.spec !== spec.trim()) {
+    marks.push(`规范 ${[...before.spec].length} → ${[...spec.trim()].length} 字符`)
+  }
+  if (before !== undefined && before.truncate !== truncate) {
+    marks.push(`可自动截断：${before.truncate ? '是' : '否'} → ${truncate ? '是' : '否'}`)
+  }
+  return ok(
+    `已更新项目 \`${id}\` 的「${name}」规范${marks.length > 0 ? `（${marks.join('；')}）` : ''}。`,
+  )
 }
 
 /**

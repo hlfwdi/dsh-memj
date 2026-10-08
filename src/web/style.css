@@ -2491,6 +2491,61 @@ dialog.prompt-dlg:not([open]) { display: none; }
 .tpl-sec input[type="text"] { width: 100%; min-width: 0; }
 .tpl-sec-trunc { display: flex; align-items: center; gap: 4px; font-size: 12px; white-space: nowrap; }
 
+/* ══════════════════════════════════════════════════════════════════════
+   ⭐⭐⭐ **规范块的就地编辑**（决策 220，2026-10-12 用户要求）
+   —— 项目详情页里，每节标题下那个 ```memj:spec 灰色块右上角的「编辑」按钮，
+      以及点开后挂在它下面的那个编辑器。
+   ⚠️ 全部走既有设计令牌（`--fg` / `--fg-dim` / `--border` / `--accent` /
+      `--bg-2`），**不写死颜色** —— 暗色主题下要自动适配（本项目样式约定）。
+   ====================================================================== */
+
+/* ⭐ 包住规范块的那一层：**只是给按钮提供定位锚点**，本身不参与布局
+   （`position: relative` + 不设尺寸 ⇒ 它正好等于 pre 的盒子）。
+   🔴 为什么必须包一层：按钮要绝对定位在**块的右上角**，
+      而 `.md` 下那个 `pre` 是 marked 直接产出的，往上加 `position: relative`
+      要动它的内联样式（改渲染库产物）⇒ 另包一层最干净、也不影响 pre 自身的样式。 */
+.spec-block { position: relative; }
+
+/* 「编辑」按钮：贴着块右上角，**默认半透明**（不喧宾夺主），
+   鼠标进到这一节时才变实 —— 一屏里可能有 6 个块，全亮会像一排主按钮。 */
+.spec-edit-btn {
+  position: absolute; top: 6px; right: 8px;
+  padding: 2px 10px; font-size: 12px; line-height: 1.7;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg, #fff); color: var(--fg-dim);
+  cursor: pointer; opacity: .55;
+}
+.spec-block:hover .spec-edit-btn,
+.spec-edit-btn:focus-visible { opacity: 1; }
+.spec-edit-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+/* 编辑器：挂在规范块**后面**（不遮挡它）—— 这样对照着改，也不会把正文挤走。 */
+.spec-editor {
+  display: flex; flex-direction: column; gap: 8px;
+  margin: 8px 0 14px; padding: 10px 12px;
+  border: 1px solid var(--border); border-left: 3px solid var(--accent);
+  border-radius: 8px; background: var(--bg-2);
+}
+.spec-editor-head { display: flex; flex-direction: column; gap: 2px; }
+/* ⚠️ 输入框必须通栏 + 显式 `box-sizing`（否则 100% + padding 会溢出，
+   本项目在模板页那一格上实测踩过）。 */
+.spec-editor-text {
+  box-sizing: border-box; width: 100%; min-width: 0;
+  resize: vertical; overflow: hidden;
+  font: inherit; line-height: 1.6; padding: 6px 8px;
+}
+/* 「可自动截断」勾选：**一行一句说明**，不能只放个裸勾选框
+   （它的语义是"这节会自动瘦身"，不解释没人知道勾了会发生什么）。 */
+.spec-editor-trunc {
+  display: flex; align-items: flex-start; gap: 6px;
+  font-size: 12.5px; color: var(--fg-dim); cursor: pointer;
+}
+.spec-editor-trunc input { margin-top: 2px; flex: 0 0 auto; }
+.spec-editor-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.spec-editor-foot .primary { margin-left: auto; }
+.spec-editor-msg { font-size: 12.5px; min-width: 0; }
+.spec-editor-msg.err { color: var(--dsw-alias-state-error-primary, var(--danger)); }
+
 /* 校验错误清单（保存失败时显示）。 */
 .tpl-errors {
   margin-top: 8px; padding: 8px 10px; border-radius: 6px;

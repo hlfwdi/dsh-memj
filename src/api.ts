@@ -58,6 +58,8 @@ import {
   approveNomination,
   rejectNomination,
   writeNominations,
+  // ⭐⭐ 决策 220：项目详情页的「各节规范块」（读侧）。
+  sectionSpecsOf,
 } from './store.ts'
 import { themeDocPath } from './paths.ts'
 import { isAbsolutePath, parseCovers } from './parse.ts'
@@ -89,6 +91,7 @@ import {
   setEntryGlobal,
   setProjectDesc,
   setProjectFields,
+  setSectionSpec,
   setThemeDesc,
   setThemeFields,
   unarchiveEntry,
@@ -1432,6 +1435,17 @@ export async function handleApi(
           frontmatter: doc.frontmatter,
           /** 项目详情显示的是**六节叙事**（不含封面区，§8.2）。 */
           narrative: doc.narrative,
+          /**
+           * ⭐⭐ **决策 220：各节自己的规范块**（供项目详情页就地编辑）。
+           *
+           * ⚠️ **只列"真的有规范块"的节** —— 没有块的节**不出现在这里**，
+           *    前端据此就不给它画「编辑」按钮。🔴 这条对应既有硬裁定
+           *    「已有文档没有规范就**绝不替它合成**」（决策 207）：
+           *    工具不知道那份文档该有哪几节规范 ⇒ 硬贴一份默认规范是**主动误导**。
+           * ⚠️ 与 `narrative` 同源（都从这份文档算），所以页面上"看到的"与
+           *    "能改的"**不可能是两回事**（本项目最忌的那种静默错位）。
+           */
+          sections: sectionSpecsOf(doc.narrative),
           coverCount: doc.covers.length,
           orphanCount: doc.orphans.length,
         },
@@ -1526,6 +1540,10 @@ export async function handleApi(
         moveTo?: string
         setGlobal?: boolean
         newId?: string
+        // ⭐⭐ 决策 220：改某一节的书写规范（`target: 'sectionSpec'`）。
+        section?: string
+        spec?: string
+        truncate?: boolean
       }
       try {
         payload = JSON.parse(rawBody) as typeof payload
@@ -1600,6 +1618,26 @@ export async function handleApi(
             ...(payload.fields?.desc !== undefined ? { desc: payload.fields.desc } : {}),
           })
           break
+        // ⭐⭐⭐ **改某一节的书写规范**（决策 220，2026-10-12 用户要求）——
+        //    入口在项目详情页每个规范块上的「编辑」按钮。
+        //    ⚠️ 与其它 target 不同，它**不走 `fields`**：改的是 `## 节名` 下那个
+        //       ```memj:spec 围栏块（块内文字 + 起始行的 `truncate` 标记），
+        //       而那两个值**必须一起给**（分开给会出现"只改了文字、截断标记还是旧的"这种
+        //       半套状态，而页面上是一次表单提交）。
+        case 'sectionSpec':
+          if (typeof payload.section !== 'string' || payload.section.trim() === '') {
+            return { status: 400, body: { ok: false, error: '缺少 section（要改哪一节）。' } }
+          }
+          if (typeof payload.spec !== 'string') {
+            return { status: 400, body: { ok: false, error: '缺少 spec（规范正文）。' } }
+          }
+          result = await setSectionSpec(
+            id,
+            payload.section,
+            payload.spec,
+            payload.truncate === true,
+          )
+          break
         case 'renameProject':
           result = await renameProject(id, payload.newId ?? '')
           break
@@ -1629,7 +1667,7 @@ export async function handleApi(
               ok: false,
               error:
                 '`target` 必须是：entry / deleteEntry / archiveEntry / unarchiveEntry / ' +
-                'projectFields / projectDesc / renameProject / deleteProject / archiveProject / ' +
+                'projectFields / projectDesc / sectionSpec / renameProject / deleteProject / archiveProject / ' +
                 'unarchiveProject / themeFields / themeDesc / renameTheme / deleteTheme。',
             },
           }

@@ -229,6 +229,17 @@ check('⭐ 叙事不含一级标题', !/^#\s+HANDOFF/m.test(r.body.narrative))
 check('⭐ 叙事不含「沉淀知识」节', !/^##\s+沉淀知识/m.test(r.body.narrative))
 check('报了封面数', r.body.coverCount === 3, `实际 ${r.body.coverCount}`)
 check('⭐ 报了保留的非法块数 = 1', r.body.orphanCount === 1, `实际 ${r.body.orphanCount}`)
+// ⭐⭐ 决策 220：`/project` 还要回**各节自己的规范块**（项目详情页据此画「编辑」按钮）。
+//    🔴 这条守的是"前端不再自己解析 markdown"——
+//       能不能编辑**只能由服务端说了算**，否则就有了第二份实现（迟早与后端漂开）。
+//    ⚠️ fixture 里 `## 目标` 下**没有** `memj:spec` 块 ⇒ 必须是空数组
+//       （"没有块 ⇒ 不在清单里 ⇒ 前端根本不画按钮"，这正是决策 207 的裁定形态）。
+{
+  const ps = await call('GET', '/plugins/dsh-memj/api/project?id=p1')
+  check('⭐⭐ `/project` 回 `sections` 字段（决策 220），且只含**真的有规范块**的节',
+    Array.isArray(ps.body.sections) && ps.body.sections.length === 0,
+    JSON.stringify(ps.body.sections))
+}
 
 r = await call('GET', '/plugins/dsh-memj/api/project?id=nope')
 check('未知项目 ⇒ 404', r.status === 404, `实际 ${r.status}`)

@@ -1812,10 +1812,167 @@ async function renderProjectDetail(id, opts = {}) {
     )
   }
   const md = renderBody(data.narrative ?? '')
+  // ⭐⭐⭐ **规范块就地编辑**（决策 220，2026-10-12 用户要求）——
+  //    用户原话：*"就 memj 存量的项目文档，章节下的章节规范，我希望也变成可编辑的。
+  //    编辑入口就放在…右侧详情页，书写规范块上给一下编辑按钮。"*
+  //    ⚠️ **必须在 `renderBody()` 之后、`attachToc()` 之前**：
+  //       前者产出要装饰的 DOM；后者的目录只认 h1–h4 ⇒ 我们插的按钮/表单
+  //       **不能是标题元素**（否则会混进目录——本项目已有"目录抓到无关元素"的教训）。
+  decorateSpecBlocks(md, data.sections ?? [], data.frontmatter.project, isArchived)
   box.append(md)
   // ⭐ 目录（决策 132）——项目详情渲染的是 handoff 的叙事节（**节名/节数由该文档自己的模板决定**），
   //    目录就按实际渲染出来的标题生成（不假定是六节）。
   attachToc(box, md, data.narrative ?? '')
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ⭐⭐⭐ **规范块的就地编辑**（决策 220）
+//
+// ── 它做什么 ────────────────────────────────────────────────────────────────
+// 项目详情页里，每一节标题下那个灰色围栏块就是该节的**书写规范**
+// （正文里的 ```memj:spec 块）。这一段给它加一个「编辑」按钮：
+// 点开就地变成「多行输入框 + 可自动截断勾选 + 保存/取消」，存完重画。
+//
+// ── 🔴 三个关键的判据选择（都不是随手写的）───────────────────────────────────
+// ① **哪些节能编辑由【服务端】说了算** —— 判据是 `/project` 回的 `sections`
+//    数组（只含**真的有规范块**的节）。前端**不自己解析 markdown**：
+//    否则"能不能编辑"就有了两份实现，迟早与后端漂开（本项目最忌的形态）。
+//     ⚠️ 这同时兑现了既有裁定「已有文档没有规范就**绝不替它合成**」——
+//        没有块 ⇒ 不在数组里 ⇒ 前端**根本没画按钮**（而不是画了再报错）。
+// ② **定位那个 `<pre>` 用「内容比对」而不是 class 名** —— marked 对
+//    ` ```memj:spec ` 会渲染成 `<pre><code class="language-memj:spec">`，
+//    但**类名形态是渲染库的实现细节**（版本一升就可能变），而"这个 pre 的文本
+//    就是服务端给的那段规范"是**语义事实**。⇒ 宁可多比一次内容，
+//    也不要写死一个随时会变的类名（本项目已记过"断言锚点选错"的教训）。
+// ③ **找不到就静默降级**（不加按钮）—— 断网时 `renderBody` 走的是"整篇原文"
+//    的兜底分支（没有 h2、也没有 pre），那时**本来就没有可装饰的块**。
+//    ⇒ 与现状一致（只看不改），不会让页面看起来"坏了"。
+// ══════════════════════════════════════════════════════════════════════════
+
+/**
+ * 给正文里每个规范块装上「编辑」按钮。
+ *
+ * @param {HTMLElement} mdWrap - `renderBody()` 的产物。
+ * @param {Array<{title:string,spec:string,truncate:boolean}>} sections - 服务端给的规范块清单。
+ * @param {string} projectId - 项目 id（保存时回传）。
+ * @param {boolean} isArchived - 归档项目**不可编辑**（决策 133，与其它写通道一致）。
+ */
+function decorateSpecBlocks(mdWrap, sections, projectId, isArchived) {
+  // ⚠️ 归档项目：连按钮都不画（与 `renderProjectDetail` 里"字段一律禁用"同一取向——
+  //    确定会失败的事，就不该让人白填一遍）。
+  if (isArchived === true) return
+  if (!Array.isArray(sections) || sections.length === 0) return
+  const byTitle = new Map(sections.map((s) => [s.title, s]))
+  for (const head of mdWrap.querySelectorAll('h2')) {
+    const title = head.textContent.trim()
+    const info = byTitle.get(title)
+    if (info === undefined) continue
+    const pre = firstPreAfter(mdWrap, head)
+    if (pre === null) continue
+    // 判据 ②（见上）：文本必须逐字等于服务端给的那段规范，否则**说明这个 pre 不是它**
+    // （例如该节正文里恰好也有个代码块，而真正的规范块在别处/被改坏）。
+    if (pre.textContent.trim() !== String(info.spec ?? '').trim()) continue
+    // ⭐ 把 pre 包一层：按钮**绝对定位在块的右上角**（贴着规范块，用户要求的位置）。
+    const wrap = h('div', { class: 'spec-block' })
+    pre.replaceWith(wrap)
+    wrap.append(pre, h('button', {
+      type: 'button', class: 'spec-edit-btn', text: '编辑',
+      title: '编辑这一节的书写规范',
+      onclick: () => openSpecEditor(wrap, projectId, title, info),
+    }))
+  }
+}
+
+/**
+ * 取某个 `h2` 之后、下一个 `h2` 之前的**第一个 `<pre>`**（只走顶层兄弟）。
+ *
+ * 🔴 **为什么只走顶层兄弟**：marked 把顶层块渲染成 `.md` 的直接子元素
+ *    ⇒ 规范块恒在顶层。⚠️ 若该节正文里套了引用块/列表，那个 pre 就不是顶层兄弟
+ *    ⇒ 返回 `null`、**不装饰**（降级成"只看不改"，不会错认成别的东西）。
+ * @param {HTMLElement} mdWrap - 正文容器。
+ * @param {HTMLElement} head - 该节的 `h2`。
+ * @returns {HTMLElement|null} 命中的 `pre`。
+ */
+function firstPreAfter(mdWrap, head) {
+  let cur = head.nextElementSibling
+  while (cur !== null && cur !== undefined) {
+    if (cur.tagName === 'H2') return null
+    if (cur.tagName === 'PRE') return cur
+    cur = cur.nextElementSibling
+  }
+  return null
+}
+
+/**
+ * 就地打开某一节规范的编辑器（挂在规范块**后面**，不遮挡它）。
+ *
+ * @param {HTMLElement} anchor - 规范块的外层（按钮所在的那个 `div.spec-block`）。
+ * @param {string} projectId - 项目 id。
+ * @param {string} title - 节名。
+ * @param {{spec:string,truncate:boolean}} info - 当前值（预填）。
+ */
+function openSpecEditor(anchor, projectId, title, info) {
+  // ⚠️ 已经开着就**不重复插**（连点两下会插两个表单，保存时两个都发请求）。
+  const existing = anchor.nextElementSibling
+  if (existing !== null && existing.classList?.contains('spec-editor')) {
+    existing.querySelector('textarea')?.focus()
+    return
+  }
+  const ta = h('textarea', {
+    class: 'spec-editor-text',
+    rows: '6',
+    placeholder: '这一节要写什么、怎么写（可多行）—— 它就是模型写这一节时看到的规范',
+  })
+  ta.value = info.spec ?? ''
+  // ⭐ **自动长高**（照抄模板页 `tpl-sec-desc` 的既有做法）：
+  //    先归零再读 `scrollHeight`，否则它只增不减（删字后框不缩回去）。
+  const autoGrow = () => {
+    ta.style.height = 'auto'
+    ta.style.height = `${ta.scrollHeight}px`
+  }
+  ta.addEventListener('input', autoGrow)
+  const trunc = h('input', { type: 'checkbox' })
+  trunc.checked = info.truncate === true
+  const msg = h('span', { class: 'spec-editor-msg', text: '' })
+
+  const save = h('button', {
+    type: 'button', class: 'primary', text: '保存',
+    onclick: async () => {
+      msg.className = 'spec-editor-msg'
+      msg.textContent = '保存中…'
+      try {
+        const r = await postJson('/edit', {
+          target: 'sectionSpec',
+          id: projectId,
+          section: title,
+          spec: ta.value,
+          truncate: trunc.checked,
+        })
+        toast((r?.message ?? '已保存').split('\n')[0].slice(0, 60))
+        // ⭐ 重画走 `applyRoute()`（不是直接调渲染函数）——它顺带处理
+        //    "还原滚动位置 + 窄屏打开态"（决策 138 的既有约定）。
+        applyRoute()
+      } catch (e) {
+        msg.className = 'spec-editor-msg err'
+        msg.textContent = (e.body?.message ?? e.message).split('\n').join(' ').slice(0, 200)
+      }
+    },
+  })
+  const cancel = h('button', { type: 'button', text: '取消', onclick: () => editor.remove() })
+
+  const editor = h('div', { class: 'spec-editor' },
+    h('div', { class: 'spec-editor-head' },
+      h('strong', { text: `编辑「${title}」的书写规范` }),
+      h('span', { class: 'dim small', text: '⚠️ 只改这一份文档；不影响任何模板、也不影响别的项目。' }),
+    ),
+    ta,
+    h('label', { class: 'spec-editor-trunc' }, trunc,
+      h('span', { text: '这一节参与自动截断归档（超阈值时把较早的小节整节截走、存成 history 条目）' })),
+    h('div', { class: 'spec-editor-foot' }, msg, save, cancel),
+  )
+  anchor.after(editor)
+  queueMicrotask(autoGrow)
+  ta.focus()
 }
 
 // ───────────────────────────────────────────────────────────────────────────
