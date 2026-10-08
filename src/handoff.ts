@@ -2690,7 +2690,19 @@ export async function runHandoff(
     const sizes = new Map<string, number>()
     for (const s of secs) {
       // ⚠️ 同名节取**合并后**的总量（`mergeNarrative` 允许同名节合并）。
-      const n = s.lines.join('\n').trim().length
+      /**
+       * 🔴🔴 **必须走 `sectionCharCount`（剔规范块），不能手写 `join('\n').trim().length`**。
+       *
+       * ⚠️ **这里原先就是手写的那一句** —— 而 `sectionCharCount` 的注释明写着
+       *   *"两处必须同源（同一个函数）—— 否则'该不该截'与'回执报多少'会给出两个数
+       *   （本项目最忌'同一事实两个数'）"*。
+       *   ⇒ **注释写了规矩，代码没照做**（实测撞上：本项目「当前进度」回执报 **20043**、
+       *     而截断判定算出 **20000** —— 恰好在阈值上 ⇒ 回执说"已超过阈值"、
+       *     截断说"没超" ⇒ **静默不截且不给任何提示**）。
+       * ⭐ 判据：**"两处必须同源"这类注释要配一条断言**，否则它只是愿望。
+       * @see sectionCharCount
+       */
+      const n = sectionCharCount(s.lines)
       sizes.set(s.title, (sizes.get(s.title) ?? 0) + n)
     }
 

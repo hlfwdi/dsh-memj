@@ -304,6 +304,52 @@ console.log('\n【7】⭐⭐ 端到端：真实 handoff 触发截断 ⇒ 条目�
     String(all.covers.length - def.covers.length))
 }
 
+console.log('\n【N】🔴🔴 体量判据必须**同源**：回执报的数 == 截断判定用的数')
+{
+  /**
+   * ⚠️ **为什么单独守这一条**（2026-10-05 实测撞到）：
+   *   `sectionCharCount` 的注释里明写着 *"两处必须同源（同一个函数）——
+   *   否则'该不该截'与'回执报多少'会给出两个数（本项目最忌'同一事实两个数'）"*，
+   *   🔴 **而回执那侧当时是手写的 `join('\n').trim().length`（含规范块）** ——
+   *   **注释写了规矩，代码没照做**。
+   *   实测后果：本项目「当前进度」回执报 **20043**（说"已超过阈值"），
+   *   而截断判定算出 **20000**（`≤ 阈值` ⇒ 不截），**恰好在边界上**
+   *   ⇒ 回执在**谎报**，且截断**静默不动**。
+   * ⭐ 判据：**"两处必须同源"这类注释，要配一条断言，否则它只是愿望。**
+   */
+  const doc = [
+    '## 目标', '目标正文。', '',
+    '## 当前进度',
+    '```memj:spec truncate', '这一节的写作规范（**不该算进体量**）', '```', '',
+    '### 第一批', 'x'.repeat(200), '',
+    '### 第二批', 'y'.repeat(200),
+  ].join('\n')
+
+  const lines = doc.split('\n')
+  const secs = B.splitSectionsForHistory(lines)
+  const prog = secs.find((s) => s.level === 2 && s.title === '当前进度')
+  const secLines = lines.slice(prog.start, prog.end)
+
+  // ① 「该不该截」用的那个数（截断入口自己算的）
+  const r = B.truncateProgress(doc, 999999, 10, [], ['当前进度'])
+  const usedByTruncate = r.beforeChars
+  // ② 「回执要报」的那个数 —— 必须走同一个函数（`sectionCharCount` 是 handoff 内的私有函数，
+  //    这里用**它同样的定义**去算：`stripSpecBlock` + `trimEnd`）
+  const usedByReceipt = B.stripSpecBlock(secLines).join('\n').trimEnd().length
+
+  const rawWithSpec = secLines.join('\n').trim().length
+  check('⭐ 规范块确实被剔掉了（否则这条断言没意义）',
+    rawWithSpec > usedByReceipt,
+    `含规范块 ${rawWithSpec} vs 剔掉后 ${usedByReceipt}`)
+  check('⭐⭐ 回执体量 == 截断判定体量（**同源**）',
+    usedByReceipt === usedByTruncate,
+    `回执 ${usedByReceipt} vs 判定 ${usedByTruncate}`)
+  // 🔴 反证：手写那个旧算法**必然不等**（证明这条断言真的在看着它）
+  check('🔴 反证：手写 `join().trim().length`（旧算法）**与判定不等**',
+    rawWithSpec !== usedByTruncate,
+    `旧算法 ${rawWithSpec} vs 判定 ${usedByTruncate}`)
+}
+
 console.log(`\n═══ 历史归档：通过 ${pass} / 失败 ${fail} ═══`)
 rmSync(lib, { recursive: true, force: true })
 process.exit(fail === 0 ? 0 : 1)
