@@ -607,6 +607,21 @@ async function kindsPayload(): Promise<{ items: unknown[]; selectable: string[] 
 }
 
 /**
+ * ⭐ **规整【一条】类型定义**（`/kind/upsert` 用）。
+ *
+ * 🔴 **为什么不直接写 `normalizeKindDefs([item])?.[0]`**：
+ *    `item === undefined` 时那样会得到 `[undefined]` ⇒ 里面判非对象 ⇒ 返回 `undefined`，
+ *    **结果碰巧对**，但**意图含混**（"一个不存在的元素" vs "没有 item"）。
+ *    ⭐ 判据：**形状判定要一眼看出它判的是哪一种**，别靠"恰好也返回 undefined"。
+ * @param raw - 请求体里的 `item`。
+ * @returns 规整后的单条；形状不对返回 `undefined`。
+ */
+function normalizeOneKindDef(raw: unknown): KindDef | undefined {
+  if (raw === undefined || raw === null) return undefined
+  return normalizeKindDefs([raw])?.[0]
+}
+
+/**
  * ⭐ **把请求体里的 `items` 规整成 `KindDef[]`**（形状不对 ⇒ `undefined`）。
  *
  * ⚠️ **宽容读、严格校验**：这里只保证"形状像"，**业务规则**（内置不可删改、
@@ -1887,6 +1902,47 @@ export async function handleApi(
       // ⭐⭐ **保存成功后立即刷新进程内词表** —— 否则"新类型"要等重启才对读侧生效
       //     （写盘只是持久化；判定与渲染用的是进程内那份，见 `schema.ts` 的 `setCurrentKindDefs`）。
       setCurrentKindDefs(defs)
+      return { status: 200, body: { ok: true, errors: [], ...(await kindsPayload()) } }
+    }
+
+    /**
+     * ⭐⭐⭐ **保存【一条】类型**（2026-10-05 用户裁定新增）—— 设置页的单条「保存」用它。
+     *
+     * ── 为什么不复用 `/kind/save`（整表）──────────────────────────────────────
+     * 用户把界面从"全部展开 + 一个总保存"改成"**收起列表 + 每条各自保存**"
+     * ⇒ 单条保存**不该**要求前端先拼出整张表（那样很容易把别条未保存的改动一起带上去）。
+     *
+     * ── 语义 ────────────────────────────────────────────────────────────────
+     * · **按 `id` 找**：找到 ⇒ **就地替换那一条**（**位置不动**）；
+     * · 找不到 ⇒ **插到最前面**（用户裁定：*"始终插最前"*）；
+     * · ⚠️ **只动这一条**，别条一概不碰（这正是"不提交整表"的意义）。
+     *
+     * 🔴 **顺序是由用户控制的**（= UI 下拉顺序）⇒ 所以"新增插最前"是**明确的产品决定**，
+     *    不是实现细节。想做排序就得靠"删了重加"或整表保存。
+     *
+     * ⚠️ **仍走同一套校验**（`validateKinds`）—— 它校验**整张合并后的表**，
+     *    因为"内置项不能少 / id 不能重复"这类规则**只有看全表才判得了**。
+     */
+    if (route === '/kind/upsert') {
+      if (method !== 'POST') return { status: 405, body: { ok: false, error: '该接口只接受 POST' } }
+      let one: KindDef | undefined
+      try {
+        const body = JSON.parse(rawBody) as { item?: unknown }
+        one = normalizeOneKindDef(body.item)
+      } catch {
+        return { status: 400, body: { ok: false, error: '请求体不是合法 JSON' } }
+      }
+      if (one === undefined) return { status: 400, body: { ok: false, error: '缺少 item（单条类型定义）' } }
+
+      const cur = await loadKinds()
+      const at = cur.findIndex((d) => d.id === one.id)
+      const next = at >= 0
+        ? cur.map((d, i) => (i === at ? one : d))       // 找到 ⇒ **就地替换**（位置不动）
+        : [one, ...cur]                                  // 没有 ⇒ **插到最前**（用户裁定）
+      const errs = await saveKinds(next)
+      if (errs.length > 0) return { status: 400, body: { ok: false, errors: errs } }
+      // ⭐ 与 `/kind/save` 一样：**保存成功后立即刷新进程内词表**（读侧要当场生效）。
+      setCurrentKindDefs(next)
       return { status: 200, body: { ok: true, errors: [], ...(await kindsPayload()) } }
     }
 

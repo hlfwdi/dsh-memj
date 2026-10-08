@@ -536,6 +536,10 @@ export function apply(ctx: Context, config: MemjConfig = DEFAULT_CONFIG): void {
       //    🔴 与 `/kinds` 一样 —— **漏注册会静默落到 SPA 兜底返回 HTML**
       //      （`test-web-api` 的"路由注册一致性"会当场抓到）。
       `${API_BASE}/kind/save`,
+      // ⭐⭐ 2026-10-05：**单条**保存（设置页改成"收起列表 + 每条各自保存"后新增）。
+      //    ⚠️ 与上面几条一样 —— **漏注册会静默落到 SPA 兜底返回 HTML**
+      //      （`test-web-api` 的"路由注册一致性"会当场抓到）。
+      `${API_BASE}/kind/upsert`,
       `${API_BASE}/kind/delete`,
       // ⚠️ 探针路由**不在这里**注册——它有自己的 handler，见下面单独的
       //    `webServer.register`。🔴 我第一版**两处都注册了** ⇒

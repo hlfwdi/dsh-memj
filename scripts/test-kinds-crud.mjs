@@ -129,6 +129,63 @@ console.log('\n【6】端点：读 / 存 / 删 + 读侧立即生效')
   check(r.status === 400, '内置走 delete 端点 ⇒ 400')
 }
 
+console.log('\n【6b】⭐⭐ 单条端点 `/kind/upsert`（2026-10-05：设置页改成"每条各自保存"）')
+{
+  // ── ① 新增：找不到 id ⇒ **插到最前**（用户裁定"始终插最前"）──
+  let r = await call('GET', '/kinds')
+  const before = r.body.items.map((x) => x.id)
+  check(before[0] === 'fact', `前置：当前第一条是 fact（实得 ${before[0]}）`)
+
+  r = await call('POST', '/kind/upsert', {
+    item: { id: 'zzz-new', label: 'Z', when: '新类型什么时候用', guide: '怎么写', builtin: false, reserved: false },
+  })
+  check(r.status === 200 && r.body.ok === true, `新增 ⇒ 200（${r.status}）`, JSON.stringify(r.body.errors))
+  const afterAdd = r.body.items.map((x) => x.id)
+  check(afterAdd[0] === 'zzz-new', `⭐ 新条**插到最前**（实得第一条 ${afterAdd[0]}）`)
+  check(afterAdd.length === before.length + 1, '条数 +1')
+  check(mod.isEntryKind('zzz-new') === true, '⭐ 读侧立即认得它（不用重启）')
+
+  // ── ② 改一条：找到 id ⇒ **就地替换、位置不动** ──
+  r = await call('POST', '/kind/upsert', {
+    item: { id: 'zzz-new', label: 'Z改', when: '改过的判据', guide: '改过的骨架', builtin: false, reserved: false },
+  })
+  check(r.status === 200, `改 ⇒ 200（${r.status}）`)
+  check(r.body.items.map((x) => x.id).join() === afterAdd.join(), '⭐ 位置**没动**（顺序不变）')
+  const z = r.body.items.find((x) => x.id === 'zzz-new')
+  check(z?.when === '改过的判据' && z?.guide === '改过的骨架', '⭐ 改的内容已生效')
+  check(mod.selectableKindList().includes('zzz-new'), '可选值清单里有它')
+
+  // ── ③ **只动这一条**：别条一概不碰（这正是"不提交整表"的意义）──
+  const others = r.body.items.filter((x) => x.id !== 'zzz-new').map((x) => `${x.id}:${x.when}`)
+  const expected = before.length
+  check(others.length === expected, `别条仍是 ${expected} 条`)
+  check(others.some((s) => s.startsWith('fact:')), '内置 fact 未被波及')
+
+  // ── ④ 内置换 `when`/`guide`：**允许**（决策 217 用户裁定"可编辑但不可删除"）──
+  r = await call('POST', '/kind/upsert', {
+    item: { id: 'fact', label: 'fact（事实 / 接口）', when: '改过的内置判据', guide: '是什么 + 出处/依据', builtin: true, reserved: false },
+  })
+  check(r.status === 200, `改内置的 when/guide ⇒ 200（${r.status}）`, JSON.stringify(r.body.errors))
+  check(r.body.items.find((x) => x.id === 'fact')?.when === '改过的内置判据', '⭐ 内置的 when 真的改了')
+
+  // ── ⑤ 内置改**显示名** ⇒ 仍拒绝（身份锁死）──
+  r = await call('POST', '/kind/upsert', {
+    item: { id: 'fact', label: '换个名', when: 'x', guide: '', builtin: true, reserved: false },
+  })
+  check(r.status === 400, '改内置显示名 ⇒ 400')
+  check((r.body.errors ?? []).some((e) => e.includes('显示名')), '  报"显示名不能改"')
+
+  // ── ⑥ 形状与方法边界 ──
+  check((await call('GET', '/kind/upsert')).status === 405, 'GET ⇒ 405')
+  check((await call('POST', '/kind/upsert', {})).status === 400, '缺 item ⇒ 400')
+  check((await call('POST', '/kind/upsert', { item: { label: 'x' } })).status === 400, 'item 缺 id ⇒ 400')
+  check((await call('POST', '/kind/upsert', { item: { id: 'BAD大写' } })).status === 400, 'id 非法 ⇒ 400')
+
+  // ── ⑦ 清理 ──
+  r = await call('POST', '/kind/delete', { id: 'zzz-new' })
+  check(r.status === 200, '清理测试类型 ⇒ 200')
+}
+
 console.log('\n【7】形状与方法的边界')
 {
   check((await call('POST', '/kinds')).status === 405, 'POST /kinds ⇒ 405')
@@ -150,9 +207,15 @@ console.log('\n【8】静态反证：工具 schema 的 enum 必须**每轮现算
   //    我第一版按后者写，断言当场假失败。⭐ 判据：**断言里搜"定义形态"要用对语法**。
   check(/const\s+kindParam\s*=/.test(tools), 'kindParam 已定义')
   const api = readFileSync(join(process.cwd(), 'src/api.ts'), 'utf8')
-  check(/'\/kinds'/.test(api) && /'\/kind\/save'/.test(api) && /'\/kind\/delete'/.test(api), 'api.ts 三个端点都在')
   const index = readFileSync(join(process.cwd(), 'src/index.ts'), 'utf8')
-  check(/\$\{API_BASE\}\/kind\/save/.test(index) && /\$\{API_BASE\}\/kind\/delete/.test(index), 'index.ts 两个新路由都注册了')
+  // ⚠️ 2026-10-05 起是**四个**端点（`/kind/upsert` 是新增的单条保存）。
+  //    🔴 旧断言写"三个端点都在" ⇒ 加了 upsert 之后**它照样报绿**（只查存在、不查全不全）
+  //       —— 正是 `5f063b9b`「校验范围过窄会比漏检更糟：它报绿」的形态。
+  //    ✅ 改成**逐个点名**：以后再加端点，这里必须跟着加一行（否则新端点无人守）。
+  for (const p of ['/kinds', '/kind/save', '/kind/upsert', '/kind/delete']) {
+    check(api.includes("'" + p + "'"), `api.ts 有 ${p} 处理`)
+    check(index.includes('${API_BASE}' + p), `index.ts 注册了 ${p}（漏了 ⇒ 落到 SPA 兜底返回 HTML）`)
+  }
   check(/loadKinds\(\)/.test(index), '⭐ 启动时预热词表（漏了 ⇒ 新类型首次解析不被认）')
 }
 

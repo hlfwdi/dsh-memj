@@ -4626,11 +4626,29 @@ async function openKindsPage() {
   }
 }
 
+/** 正在展开编辑的那一条的 id（一次只开一条；空串 = 都收起）。 */
+let kindEditingId = ''
 /**
- * ⭐ **把类型表画成可编辑的卡片列表**。
+ * ⭐ **草稿的编辑态用【下标】定位**（2026-10-05）。
  *
- * 🔴 **内置项的输入框一律 \`disabled\`** —— 用户能看见它们（并看到"为什么不能改"），
- *    但改不动。⚠️ 用 \`disabled\` 而不是"藏起来"：藏起来会让用户以为"库里没有这一类"。
+ * 🔴 **为什么不能用 id**：刚点「＋ 添加」那条**id 是空串**（要等用户填），
+ *    而空串在 `kindEditingId` 里正表示"都收起" ⇒ 两者撞车。
+ * ⚠️ 只在"刚添加、还没保存"这一段有效；保存成功后置回 -1。
+ * ⭐ 判据：**用"值"当键时，先确认那个值在"还没填"的时候是否也唯一。**
+ */
+let kindDraftIndex = -1
+
+/**
+ * ⭐⭐⭐ **画知识类型列表**（2026-10-05 用户裁定改版）。
+ *
+ * ── 改了什么 ──────────────────────────────────────────────────────────────
+ * · **默认全部收起**：列表态只给摘要（id + 徽标 + 计数 + when 预览）——
+ *   原先把所有字段摊开，五个类型就是一屏半的输入框，找一条要翻半天。
+ * · **点「编辑」才展开**：展开后是那一条的完整字段 + **它自己的「保存」**。
+ * · **每条各自保存**（走 POST /kind/upsert）—— 不再有"保存整张表"的总按钮：
+ *   那样"改了 A 条却顺手把 B 条的半成品也存了"是迟早的事。
+ *
+ * ⚠️ **一次只开一条**（kindEditingId）：多开会让"哪个保存按钮对应哪条"变得费解。
  * @returns void
  */
 function renderKindsList() {
@@ -4638,72 +4656,204 @@ function renderKindsList() {
   if (!box) return
   box.replaceChildren()
   kindsState.items.forEach((k, i) => {
-    const card = h('div', { class: 'kind-card' })
-    const head = h('div', { class: 'kind-card-head' })
-    head.append(h('span', { class: 'kind-id', text: k.id }))
-    if (k.builtin) head.append(h('span', { class: 'kind-badge', text: '内置' }))
-    if (k.reserved) head.append(h('span', { class: 'kind-badge reserved', text: '保留' }))
-    // ⭐ 现报"有多少条在用" —— 删不掉时用户才知道卡在哪。
-    const cnt = k.count > 0 ? k.count + ' 条在用' : '还没人用'
-    head.append(h('span', { class: 'dim kind-count', text: cnt }))
-    if (!k.builtin) {
-      const del = h('button', { type: 'button', class: 'kind-del', text: '删除' })
-      del.addEventListener('click', () => {
-        if (k.count > 0) {
-          toast('「' + k.id + '」还有 ' + k.count + ' 条知识在用，先把它们改成别的类型再删', true)
-          return
-        }
-        kindsState.items.splice(i, 1)
-        renderKindsList()
-      })
-      head.append(del)
-    }
-    card.append(head)
-    /**
-     * 🔴🔴 **两个锁的粒度不一样**（决策 217 用户裁定：*"可编辑但不可删除"*）：
-     *   · **身份**（`id` / 显示名）⇒ 内置项**锁死** ——
-     *     改 id 会让存量那几百条知识**当场变非法值**（不可逆）；
-     *   · **内容**（`什么时候用` / `怎么写`）⇒ **内置项也可编辑** ——
-     *     它们只是描述性文字，改错了随时能改回，而"内置"保护的是**身份**不是措辞。
-     * ⭐ 判据：**"这是身份还是内容"决定它锁不锁**。
-     */
-    const lockIdentity = k.builtin === true
-    /**
-     * ⭐⭐ **id 也要能填**（2026-10-05 实测补的缺口）。
-     *
-     * 🔴 **为什么之前漏了**：卡片头里已经把 id 显示出来了（`## fact` 那个机器名），
-     *    我就想当然地以为"id 是只读的、只有内置才有"。
-     *    ⇒ 而**自定义类型的 id 必须由用户指定**（它就是写进封面 `kind:` 的值），
-     *      没这个格子 ⇒ 用户点"添加"后**根本没法填 id** ⇒ 保存时被校验拒绝
-     *      （实测：报「第 6 项：id `` 不合法」）。
-     * ⚠️ 内置项**没有这个格子**（它们的 id 锁死，见 `lockIdentity`）。
-     */
-    if (!lockIdentity) {
-      card.append(
-        kindField('id（机器名，写进封面用）', k.id, false, (v) => { k.id = v.trim() },
-          '小写英文/数字/连字符，2–32 位，小写字母开头；改它不影响已有知识'),
-      )
-    }
-    // ⚠️ 显示名只给非内置可编辑（它是**身份**的一部分：改它会让老知识显示成另一个名字）。
-    card.append(kindField('显示名', k.label, lockIdentity, (v) => { k.label = v }))
-    card.append(
-      // ⭐ 内置项**也可编辑**（决策 217）—— `when` 是内容。
-      kindField('什么时候用', k.when, false, (v) => { k.when = v },
-        '一句话说清"什么内容该归到这一类" —— 它会进提示词，是模型选类型的唯一依据'),
-    )
-    // ⭐ 书写规范**可多行**（与模板的章节规范同一形态：可能要写不少字），内置项也可编辑。
-    card.append(
-      kindField('怎么写（骨架 / 规范）', k.guide, false, (v) => { k.guide = v },
-        '这一类知识该怎么写（可多行）—— 也会进提示词', true),
-    )
-    if (lockIdentity) {
-      card.append(h('p', {
-        class: 'set-note',
-        text: '内置类型：id 与显示名锁死、不可删除（库里已有知识在用它）；但「什么时候用 / 怎么写」可以改。',
-      }))
-    }
+    // ⭐ 编辑态：按 id 匹配（正常条）**或**按草稿下标匹配（刚添加、id 还空着的那条）。
+    const editing = (kindEditingId !== '' && kindEditingId === k.id) || i === kindDraftIndex
+    const card = h('div', { class: 'kind-card' + (editing ? ' editing' : '') })
+    card.append(editing ? kindEditor(k, i) : kindRow(k, i))
     box.append(card)
   })
+}
+
+/**
+ * ⭐ **收起态：一行摘要**（不是"被藏起来"—— 关键信息都要看得见）。
+ *
+ * 🔴 **为什么要带上 when 预览**：用户原话是"不要全部展开"，
+ *   但如果收起后只剩一个 id，**没人知道这条是干嘛的**（还得点开看）。
+ *    ⇒ 摘要里必须给"这一类什么时候用"的一小段，**一眼能认出来**才算真的收起。
+ * @param k - 该条类型。
+ * @param i - 它在表里的下标。
+ * @returns 摘要行元素。
+ */
+function kindRow(k, i) {
+  const row = h('div', { class: 'kind-row' })
+  const head = h('div', { class: 'kind-card-head' })
+  head.append(h('span', { class: 'kind-id', text: k.id }))
+  if (k.builtin) head.append(h('span', { class: 'kind-badge', text: '内置' }))
+  if (k.reserved) head.append(h('span', { class: 'kind-badge reserved', text: '保留' }))
+  // ⭐ 现报"有多少条在用" —— 删不掉时用户才知道卡在哪。
+  head.append(h('span', { class: 'dim kind-count', text: k.count > 0 ? k.count + ' 条在用' : '还没人用' }))
+  const btn = h('button', { type: 'button', class: 'kind-edit', text: '编辑' })
+  btn.addEventListener('click', () => {
+    kindEditingId = k.id
+    renderKindsList()
+    // ⭐ 展开后聚焦**第一格**（内置是"什么时候用"、自定义是"id"）—— 少一次点击。
+    const box = document.getElementById('kinds-list')
+    const editing = [...(box?.children ?? [])].find((c) => c.classList.contains('editing'))
+    editing?.querySelector('input, textarea')?.focus()
+  })
+  head.append(btn)
+  row.append(head)
+  // ⭐ 预览：when 一行（收起态也要认得出这条是什么）。
+  row.append(
+    h('div', {
+      class: 'kind-preview dim',
+      text: k.when === '' ? '（还没写「什么时候用」）' : k.when,
+    }),
+  )
+  return row
+}
+
+/**
+ * ⭐⭐ **展开态：可编辑的完整字段 + 本条自己的「保存」。**
+ *
+ * 🔴🔴 **两个锁的粒度不一样**（决策 217 用户裁定：*"可编辑但不可删除"*）：
+ *   · **身份**（id / 显示名）⇒ 内置项**锁死** ——
+ *     改 id 会让存量那几百条知识**当场变非法值**（不可逆）；
+ *   · **内容**（什么时候用 / 怎么写）⇒ **内置项也可编辑**。
+ * ⭐ 判据：**"这是身份还是内容"决定它锁不锁**。
+ * @param k - 该条类型。
+ * @param i - 它在表里的下标。
+ * @returns 展开态的卡片内容。
+ */
+function kindEditor(k, i) {
+  const body = h('div', { class: 'kind-body' })
+  const head = h('div', { class: 'kind-card-head' })
+  head.append(h('span', { class: 'kind-id', text: k.id === '' ? '（新类型，请先填 id）' : k.id }))
+  if (k.builtin) head.append(h('span', { class: 'kind-badge', text: '内置' }))
+  if (k.reserved) head.append(h('span', { class: 'kind-badge reserved', text: '保留' }))
+  body.append(head)
+
+  const lockIdentity = k.builtin === true
+  /**
+   * ⭐⭐ **id 也要能填**（2026-10-05 实测补的缺口）。
+   *
+   * 🔴 **为什么之前漏了**：卡片头里已经把 id 显示出来了，
+   *    我就想当然以为"id 是只读的、只有内置才有"。
+   *    ⇒ 而**自定义类型的 id 必须由用户指定**（它就是写进封面 kind: 的值），
+   *      没这个格子 ⇒ 用户点"添加"后**根本没法填 id** ⇒ 保存被校验拒
+   *      （实测报「第 6 项：id 为空，不合法」）。
+   * ⚠️ 内置项**没有这个格子**（它们的 id 锁死，见 lockIdentity）。
+   */
+  if (!lockIdentity) {
+    body.append(
+      kindField('id（机器名，写进封面用）', k.id, false, (v) => { k.id = v.trim() },
+        '小写英文/数字/连字符，2–32 位，小写字母开头'),
+    )
+  }
+  // ⚠️ 显示名只给非内置可编辑（它是**身份**的一部分）。
+  body.append(kindField('显示名', k.label, lockIdentity, (v) => { k.label = v }))
+  body.append(
+    // ⭐ 内置项**也可编辑**（决策 217）—— when 是内容。
+    kindField('什么时候用', k.when, false, (v) => { k.when = v },
+      '一句话说清"什么内容该归到这一类" —— 它会进提示词，是模型选类型的唯一依据'),
+  )
+  // ⭐ 怎么写**可多行**（可能要写不少字），内置项也可编辑。
+  body.append(
+    kindField('怎么写（骨架 / 规范）', k.guide, false, (v) => { k.guide = v },
+      '这一类知识该怎么写（可多行）—— 也会进提示词', true),
+  )
+  if (lockIdentity) {
+    body.append(h('p', {
+      class: 'set-note',
+      text: '内置类型：id 与显示名锁死、不可删除（库里已有知识在用它）；但「什么时候用 / 怎么写」可以改。',
+    }))
+  }
+
+  // ── 本条自己的操作行 ──
+  const foot = h('div', { class: 'kind-foot' })
+  const save = h('button', { type: 'button', class: 'primary kind-save', text: '保存' })
+  save.addEventListener('click', () => { void saveOneKind(k, i) })
+  foot.append(save)
+  const cancel = h('button', { type: 'button', class: 'kind-cancel', text: '取消' })
+  cancel.addEventListener('click', () => {
+    kindEditingId = ''
+    kindDraftIndex = -1
+    // ⚠️ **取消要丢掉未保存的改动** ⇒ 从服务端重拉一次（否则本地对象还留着改过的值）。
+    void openKindsPage()
+  })
+  foot.append(cancel)
+  if (!k.builtin) {
+    const del = h('button', { type: 'button', class: 'kind-del', text: '删除' })
+    del.addEventListener('click', () => {
+      if (k.count > 0) {
+        toast('「' + k.id + '」还有 ' + k.count + ' 条知识在用，先把它们改成别的类型再删', true)
+        return
+      }
+      void deleteKind(k.id)
+    })
+    foot.append(del)
+  }
+  body.append(foot)
+  return body
+}
+
+/**
+ * ⭐ **保存【这一条】**（POST /kind/upsert）—— 只动这一条，别条一概不碰。
+ * @param k - 该条（**已被就地改过**的本地对象）。
+ * @param i - 它在表里的下标（失败时要回滚用）。
+ * @returns Promise<void>
+ */
+async function saveOneKind(k, i) {
+  void i
+  const msg = document.getElementById('settings-msg-kinds')
+  try {
+    const r = await fetch(API + '/kind/upsert', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ item: k }),
+    })
+    const body = await r.json()
+    if (!body.ok) {
+      showKindErrs(body.errors || [body.error || '保存失败'])
+      toast('这一条没保存：校验没过', true)
+      return
+    }
+    showKindErrs([])
+    kindsState.items = body.items
+    kindEditingId = ''
+    kindDraftIndex = -1
+    renderKindsList()
+    // ⭐⭐ 类型表变了 ⇒ **kind 下拉必须跟着重填**（否则编辑知识时选不到新类型）。
+    await loadKinds()
+    fillKindFilters()
+    if (msg) msg.textContent = '已保存（' + new Date().toLocaleTimeString() + '）'
+    toast('已保存「' + k.id + '」')
+  } catch (e) {
+    showKindErrs(['请求失败：' + e.message])
+    toast('保存失败：' + e.message, true)
+  }
+}
+
+/**
+ * ⭐ **删一条**（走 /kind/delete，**服务端还会再查一次引用**）。
+ * @param id - 要删的 id。
+ * @returns Promise<void>
+ */
+async function deleteKind(id) {
+  try {
+    const r = await fetch(API + '/kind/delete', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id }),
+    })
+    const body = await r.json()
+    if (!body.ok) {
+      showKindErrs(body.errors || [body.error || '删除失败'])
+      toast('删除被拒', true)
+      return
+    }
+    showKindErrs([])
+    kindsState.items = body.items
+    kindEditingId = ''
+    kindDraftIndex = -1
+    renderKindsList()
+    await loadKinds()
+    fillKindFilters()
+    toast('已删除「' + id + '」')
+  } catch (e) {
+    showKindErrs(['请求失败：' + e.message])
+    toast('删除失败：' + e.message, true)
+  }
 }
 
 /**
@@ -4757,59 +4907,31 @@ function showKindErrs(list) {
 }
 
 /**
- * ⭐ 保存整张类型表（成功后**重拉一次**，让计数与生效状态同步回显）。
- * @returns Promise<void>
- */
-async function saveKindsForm() {
-  const msg = document.getElementById('settings-msg-kinds')
-  try {
-    const r = await fetch(API + '/kind/save', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ items: kindsState.items }),
-    })
-    const body = await r.json()
-    if (!body.ok) {
-      showKindErrs(body.errors || [body.error || '保存失败'])
-      toast('类型表未保存：校验没过', true)
-      return
-    }
-    showKindErrs([])
-    kindsState.items = body.items
-    renderKindsList()
-    // ⭐⭐ 类型表变了 ⇒ **kind 下拉必须跟着重填**（否则编辑知识时选不到新类型）。
-    await loadKinds()
-    fillKindFilters()
-    if (msg) msg.textContent = '已保存（' + new Date().toLocaleTimeString() + '）'
-    toast('知识类型已保存')
-  } catch (e) {
-    showKindErrs(['请求失败：' + e.message])
-    toast('保存失败：' + e.message, true)
-  }
-}
-
-/**
- * 绑定类型页的按钮（放文件末尾 —— 同 TDZ 理由，见 \`bindTemplateButtons\`）。
+ * 绑定类型页的按钮（放文件末尾 —— 同 TDZ 理由，见 bindTemplateButtons）。
+ *
+ * ⭐ **2026-10-05 改版**：不再有"保存整张表"的总按钮（每条各自保存，见 saveOneKind）
+ *   ⇒ 这里只剩「＋ 添加」一个动作。
  * @returns void
  */
 function bindKindButtons() {
-  document.getElementById('kinds-save')?.addEventListener('click', () => { void saveKindsForm() })
   document.getElementById('kinds-add')?.addEventListener('click', () => {
-    // ⭐ 先加本地草稿、填完才写盘 —— 与"模板的添加一节"同一取向
-    //    （先写盘会让"空 id 被自己的校验拒" ⇒ 用户看到"点添加就报错"）。
-    // ⚠️ 草稿的 id 留空、由用户在第一格填 —— 见 `renderKindsList` 里那段的说明。
-    kindsState.items.push({
-      id: '', label: '', when: '', guide: '', builtin: false, reserved: false, count: 0,
-    })
+    // 🔴 **插到【最前】**（2026-10-05 用户裁定：*"始终插最前，保存后也在最前"*）。
+    //    ⚠️ 按钮本来就在列表上方 ⇒ 新条紧跟其后，**一眼就看得见**，不必往下翻。
+    //    ⭐ 顺序 = 类型下拉里的顺序，**由用户自己控制**（想调就靠"删了重加"）。
+    // ⚠️ **草稿 id 留空**、由用户填 —— 先写盘会让"空 id 被自己的校验拒"
+    //    ⇒ 用户看到"点添加就报错"。
+    // 🔴 **草稿的编辑键不能用 id**（id 是空串，而空串在 kindEditingId 里表示"都收起"）
+    //    ⇒ 用**下标** 0 定位（它就是刚插到最前的那条）。
+    kindsState.items.unshift({ id: '', label: '', when: '', guide: '', builtin: false, reserved: false, count: 0 })
+    kindEditingId = ''
+    kindDraftIndex = 0
     renderKindsList()
-    // ⭐ 滚到底并聚焦新卡片的**第一格（id）** —— 它是必填的第一项。
     const box = document.getElementById('kinds-list')
-    const last = box?.lastElementChild
-    last?.scrollIntoView({ block: 'nearest' })
-    last?.querySelector('input')?.focus()
+    const first = box?.firstElementChild
+    first?.scrollIntoView({ block: 'nearest' })
+    first?.querySelector('input, textarea')?.focus()
   })
 }
-
 /** 把一份模板灌进表单（编辑已有模板，或以它为起点）。 */
 function loadTemplateIntoForm(t) {
   if (!t) return

@@ -1148,16 +1148,21 @@
           （由工具自动生成，手工填会让那条知识<b>搜不到</b>）。
           <b>有知识在用的类型也删不掉</b> —— 请先把那些知识改成别的类型。
         </p>
+        <!-- ⭐⭐⭐ 2026-10-05 用户裁定改版：
+             · **默认收起**（列表态只给摘要，不再把所有字段摊开）；
+             · **每条各自「编辑 / 保存」**（不再有一个"保存整张表"的总按钮）；
+             · **「+ 添加」放到列表【最上面】** —— 用户原话：
+               *"不可能让用户非要划到最下面的时候才能新建"*。 -->
+        <div class="kinds-toolbar">
+          <button type="button" id="kinds-add">＋ 添加一种类型</button>
+          <span class="dim set-msg" id="settings-msg-kinds"></span>
+        </div>
         <div id="kinds-list" class="kinds-list"></div>
         <p class="set-note">
-          改完点下面的<b>保存</b>生效（<b>不用重启</b>）。加/删/改都会同时影响
-          模型能填哪些值、以及编辑知识时的下拉。
+          每一条<b>各自保存</b>（改完点那一条自己的「保存」）—— <b>不用重启</b>，下一轮即生效。
+          加/删/改都会同时影响模型能填哪些值、以及编辑知识时的下拉。
+          <br>⚠️ 列表顺序 = <b>类型下拉里的顺序</b>。
         </p>
-      </div>
-      <div class="set-foot set-foot-inline">
-        <button type="button" id="kinds-add">+ 添加一种类型</button>
-        <button type="button" class="primary" id="kinds-save">保存</button>
-        <span class="dim set-msg" id="settings-msg-kinds"></span>
       </div>
       <div id="kinds-errors" class="tpl-errors" hidden></div>
     </section>
