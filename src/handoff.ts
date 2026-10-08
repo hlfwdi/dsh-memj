@@ -125,7 +125,7 @@ const FENCE_SPEC = `${String.fromCharCode(96, 96, 96)}${SPEC_BLOCK_FENCE}`
 const FENCE_BARE = String.fromCharCode(96, 96, 96)
 import { commitAll, ensureRepo, noteGitFailure, noteGitSuccess, probeGit, readRepoState } from './git.ts'
 import type { Cover, CoverIssue } from './schema.ts'
-import { ENTRY_KINDS, isEntryKind } from './schema.ts'
+import { isEntryKind, selectableKindList } from './schema.ts'
 
 /**
  * ⭐⭐⭐ **`themeWhy` 里有没有"逐字引用"所挂主题 desc 的某个片段**（决策 156）。
@@ -1400,12 +1400,16 @@ export function checkEntryShape(e: HandoffEntry, label: string): string[] {
     }
   }
 
-  // ⭐ `kind` 是**受控四值**（决策 81）；留空合法，填了别的值才报错。
+  // ⭐ `kind` 是**受控词表**（决策 81/215）；留空合法，填了别的值才报错。
   const rawKind = (e.kind ?? '').trim()
   if (rawKind !== '' && !isEntryKind(rawKind)) {
     out.push(
       `${label} 的 kind 取值非法：「${rawKind}」——只能是 ` +
-        `${ENTRY_KINDS.join(' / ')} 之一，或留空（留空 = 未分类）。`,
+        // 🔴 用 `selectableKindList()`（**读当前值、且排除保留项**）：
+        //    旧写法 `ENTRY_KINDS.join()` 有两个错 ——
+        //    ① 把**保留项** `history` 也列了出来（诱导模型手工造一条检索不到的条目）；
+        //    ② 读编译期表 ⇒ **用户加的类型不在报错里**（而报错的用途正是"告诉模型能填什么"）。
+        `${selectableKindList()} 之一，或留空（留空 = 未分类）。`,
     )
   }
   return out
@@ -1440,7 +1444,8 @@ export function checkAdoptShape(a: AdoptRequest, label: string): string[] {
   if (rawKind !== '' && !isEntryKind(rawKind)) {
     out.push(
       `${label} 的 kind 取值非法：「${rawKind}」——只能是 ` +
-        `${ENTRY_KINDS.join(' / ')} 之一，或留空。`,
+        // 🔴 同上：读当前值、且**不含保留项**。
+        `${selectableKindList()} 之一，或留空。`,
     )
   }
   return out

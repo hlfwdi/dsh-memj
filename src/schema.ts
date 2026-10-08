@@ -48,14 +48,30 @@
  * ⚠️ **本表届时降级为"内置默认值"** —— 仍不可删，但不再是被引用的唯一来源。
  */
 
-/** 表里的一项：id + 显示名 + "什么时候用它"。 */
+/**
+ * 表里的一项：id + 显示名 + "什么时候用它" + "怎么写它"。
+ *
+ * 🔴🔴 **两个字段的分工（2026-10-05 用户裁定「丙」，决策 217）—— 别再混**：
+ *   · `when`  = **什么内容该归到这一类**（判据，供模型**选**类型）
+ *   · `guide` = **这一类该写成什么形状**（骨架/规范，供模型**写**内容）
+ *
+ * ⚠️⚠️ **历史包袱（本次才拆干净）**：这 4 条内置的 `when` 原先装的是**骨架**
+ *   （`现象 → 根因 → 正确做法` 之类）—— 那是从更早的设计原样继承的，
+ *   而字段名一直叫"什么时候用"。⇒ 于是**字段名在撒谎**，且与后加的 `guide` 语义重叠。
+ *   ✅ 本次把骨架**搬进 `guide`**、给 `when` 补上**真正的判据**。
+ */
 export interface EntryKindDef {
   /** 机器用的 id（小写英文；**它就是写进封面 `kind:` 的那个值**）。 */
   id: string
   /** 给人看的短名（UI 下拉、报错文案里用）。 */
   label: string
-  /** ⭐ "**什么时候用这一种**" —— 一句话，会进提示词。 */
+  /** ⭐ **什么内容该归到这一类**（判据）—— 会进提示词。 */
   when: string
+  /**
+   * ⭐ **这一类该怎么写**（骨架/规范，可多行）—— 会进提示词。
+   * ⚠️ 内置项可以为空（如 `history` 是工具生成的，没有书写规范可言）。
+   */
+  guide: string
   /**
    * 🔴 **保留项**：不可删、不可改名、**不作为模型的可选项**（目前只有 `history`）。
    * @default false
@@ -67,16 +83,40 @@ export interface EntryKindDef {
  * ⭐⭐ **内置知识类型表**（顺序即 UI 下拉顺序）。
  *
  * ⚠️ **改动这一张表就够** —— 工具 schema、UI 下拉、报错文案、提示词都从这里取。
+ * 🔴 **2026-10-05（决策 217）**：`when` 全部改写成**真的"什么时候用"**，
+ *   原先装在这里的骨架文字**搬进了 `guide`**（见 `EntryKindDef` 的说明）。
  */
 export const ENTRY_KIND_DEFS: readonly EntryKindDef[] = [
-  { id: 'fact', label: 'fact（事实 / 接口）', when: '是什么 + 出处/依据' },
-  { id: 'trap', label: 'trap（陷阱 / 纠错）', when: '现象 → 根因 → 正确做法' },
-  { id: 'howto', label: 'howto（流程步骤）', when: '步骤清单' },
-  { id: 'decision', label: 'decision（决策 + 理由）', when: '结论 + 理由 + 边界' },
+  {
+    id: 'fact',
+    label: 'fact（事实 / 接口）',
+    when: '陈述一个**可核实的结论**、接口形态、路径或数字',
+    guide: '是什么 + 出处/依据',
+  },
+  {
+    id: 'trap',
+    label: 'trap（陷阱 / 纠错）',
+    when: '**出过错 / 反直觉 / 会让人白费功夫**的那类事',
+    guide: '现象 → 根因 → 正确做法',
+  },
+  {
+    id: 'howto',
+    label: 'howto（流程步骤）',
+    when: '一串**有先后顺序、要照着做**的步骤',
+    guide: '步骤清单（编号，每步一句）',
+  },
+  {
+    id: 'decision',
+    label: 'decision（决策 + 理由）',
+    when: '在**几个方案里做过的一个选择**',
+    guide: '结论 + 理由 + 边界',
+  },
   {
     id: 'history',
     label: 'history（历史进展归档·不参与检索）',
     when: '（工具自动生成，不手工填写）',
+    // ⚠️ 它是「当前进度」被截断时截走的**原文**，形状由原文自己决定 ⇒ 无规范可言。
+    guide: '',
     reserved: true,
   },
 ]
@@ -114,35 +154,67 @@ export type EntryKind = (typeof ENTRY_KIND_DEFS)[number]['id']
  * · 🔴 它决定"合法性" ⇒ **删掉一个类型会让存量封面变成非法值** ——
  *   这正是"有引用不许删"（`deleteKindBlockReason`）要挡住的事。
  */
-let currentKinds: readonly string[] = ENTRY_KIND_DEFS.map((d) => d.id)
+/**
+ * 🔴🔴 **进程内当前值 = 【完整定义】，不只是 id**（决策 217 从"只存 id"扩成这个）。
+ *
+ * ⚠️ **为什么必须存完整定义**：`when`/`guide` 现在要**每轮现拼进提示词**，
+ *    而拼装点（工具描述 getter、`context()` 的 `text()`）**必须是同步的**；
+ *    `loadKinds()`（读 `kinds.md`）是 **async** ⇒ 只能靠这个同步缓存。
+ * ⭐ 判据：**"同步的渲染点"与"异步的读取源"之间，必须有一个同步快照。**
+ *
+ * ⚠️ 形状**刻意与 `KindDef` 结构兼容**（只取渲染用得上的四个字段）——
+ *    这样 `kinds.ts` 可以直接把 `KindDef[]` 传进来，**不必反向 import**（避免循环依赖）。
+ */
+export interface LiveKindDef {
+  id: string
+  when: string
+  guide: string
+  /** `label` 不参与提示词渲染，但留着便于调试与将来的展示点。 */
+  label: string
+  reserved: boolean
+}
+
+let currentDefs: readonly LiveKindDef[] = ENTRY_KIND_DEFS.map((d) => ({
+  id: d.id,
+  when: d.when,
+  guide: d.guide,
+  label: d.label,
+  reserved: d.reserved === true,
+}))
 
 /**
- * ⭐ **设置当前生效的词表**（插件启动与"保存类型表"两处调用）。
- * @param ids - 全部合法 id（**含保留项** —— 读侧要认 `history`）。
+ * ⭐ **设置当前生效的类型表**（插件启动与"保存类型表"两处调用）。
+ * @param defs - 完整定义（**含保留项** —— 读侧要认 `history`）。
  */
-export function setCurrentKinds(ids: readonly string[]): void {
-  if (ids.length > 0) currentKinds = [...ids]
+export function setCurrentKindDefs(defs: readonly LiveKindDef[]): void {
+  if (defs.length > 0) currentDefs = defs.map((d) => ({ ...d }))
 }
 
 /**
- * ⭐ **取当前生效的词表**。
+ * ⭐ **取当前生效的完整定义**（渲染点用它现拼）。
+ * @returns 完整定义列表。
+ */
+export function currentKindDefsOf(): readonly LiveKindDef[] {
+  return currentDefs
+}
+
+/**
+ * ⭐ **取当前生效的词表**（只要 id）。
  * @returns 全部合法 id。
  */
 export function currentKindsOf(): readonly string[] {
-  return currentKinds
+  return currentDefs.map((d) => d.id)
 }
 
 /**
- * ⭐⭐ **当前生效的"保留项"id**（不给模型选的那些）—— 决策 215。
+ * ⭐⭐ **当前生效的"保留项"id**（不给模型选的那些）。
  *
- * 🔴 **为什么它也要跟着变**：保留项来自内置表（`history`），而
- *   "哪些是保留项"与"有哪些类型"一样会影响**工具 schema 的 enum**。
- *   两者都从**同一个当前词表**派生，才能保证"UI 能选"与"工具认"一致。
- * @returns 保留项 id（目前恒为 `['history']`，但**不再由调用方写死**）。
+ * 🔴 **它也读当前值**（不再读编译期表）：`reserved` 是**表里的一个字段**，
+ *   与"有哪些类型"一样来自同一份文件 ⇒ 从同一个当前值派生才可能一致。
+ * @returns 保留项 id。
  */
 export function currentReservedKinds(): readonly string[] {
-  // 保留项由内置表决定（用户加的类型都不是保留项）。
-  return ENTRY_KIND_DEFS.filter((d) => d.reserved === true).map((d) => d.id)
+  return currentDefs.filter((d) => d.reserved).map((d) => d.id)
 }
 
 /**
@@ -152,12 +224,12 @@ export function currentReservedKinds(): readonly string[] {
  *    用户可在设置页增删改类型。
  * ⚠️ 签名**刻意保持不变**（`isEntryKind(value)`，不是 `isEntryKind(value, kinds)`）——
  *    它有 18 个调用点、其中两个是纯函数；把词表做成参数会污染它们。
- *    ⇒ 改用"进程内当前值 + 明确的刷新时机"（见 `setCurrentKinds`）。
+ *    ⇒ 改用"进程内当前值 + 明确的刷新时机"（见 `setCurrentKindDefs`）。
  * @param value - 待判断的值。
  * @returns 是否为合法 kind。
  */
 export function isEntryKind(value: unknown): value is EntryKind {
-  return typeof value === 'string' && currentKinds.includes(value)
+  return typeof value === 'string' && currentDefs.some((d) => d.id === value)
 }
 
 /**
@@ -166,7 +238,7 @@ export function isEntryKind(value: unknown): value is EntryKind {
  * @returns 那句话；id 不认识 ⇒ 空串。
  */
 export function entryKindWhen(id: string): string {
-  return ENTRY_KIND_DEFS.find((d) => d.id === id)?.when ?? ''
+  return currentDefs.find((d) => d.id === id)?.when ?? ''
 }
 
 /**
@@ -174,11 +246,15 @@ export function entryKindWhen(id: string): string {
  *
  * ⚠️ 收敛前这句在 `handoff.ts` / `parse.ts` / `tools.ts` 里**各写了一遍**，
  *    且**四处文案不一致**（有的带含义、有的只列 id）。
+ * 🔴 **读当前值**（决策 217）—— 以前读编译期表，于是用户加的类型**不出现在报错里**，
+ *   而报错的用途恰恰是"告诉模型能填什么"。
+ * ⚠️ **不含保留项**（`history` 不给模型填）—— 曾经的实现用 `ENTRY_KINDS` 把 `history`
+ *   也列了出来，那是**错的**（会诱导模型手工造一条检索不到的条目）。
  * @param sep - 分隔符（默认 ` / `）。
  * @returns 形如 `fact / trap / howto / decision`。
  */
 export function selectableKindList(sep = ' / '): string {
-  return SELECTABLE_ENTRY_KINDS.join(sep)
+  return currentDefs.filter((d) => !d.reserved).map((d) => d.id).join(sep)
 }
 
 /**
@@ -186,13 +262,90 @@ export function selectableKindList(sep = ' / '): string {
  *
  * 收敛前这段串在 `tools.ts` 里**抄了三遍**（长得一模一样），
  * 而那正是"加一个类型要改七处"里最容易漏的三处。
+ * 🔴 **读当前值**（决策 217）—— 用户加的类型必须出现在这里，否则模型
+ *   在 enum 里看得到一个值、却不知道它是什么意思（**"两边打架"**）。
  * @param sep - 条目之间的分隔符（默认 `｜`）。
- * @returns 形如 `fact 是什么 + 出处/依据｜trap 现象 → 根因 → 正确做法｜…`。
+ * @returns 形如 `fact 陈述一个可核实的结论…｜trap 出过错 / 反直觉…｜…`。
  */
 export function kindsInline(sep = '｜'): string {
-  return ENTRY_KIND_DEFS.filter((d) => d.reserved !== true)
+  return currentDefs
+    .filter((d) => !d.reserved)
     .map((d) => `${d.id} ${d.when}`)
     .join(sep)
+}
+
+/**
+ * 🔴🔴 **交给 DSH 的文本里，插槽不能用 `{{…}}`**（决策 217；**这是踩崩一次换来的**）。
+ *
+ * ── 事故 ──────────────────────────────────────────────────────────────────
+ * 我第一版用 `{{kindCatalog}}` 当插槽，结果**整个会话装配失败**：
+ * `malformed prompt variable reference "{{kindCatalog}}" in context "memj:usage-guidance"`
+ *
+ * ── 根因（读 `dsh-system-prompt` 源码确认）────────────────────────────────
+ * `systemPrompt.context()` 的 `text` **会被 DSH 自己再跑一遍 `interpolate()`**：
+ * ```js
+ * const VARIABLE_NAME = /^[a-z][a-z0-9_]*$/     // ← 只允许【小写】开头
+ * if (!VARIABLE_NAME.test(name)) throw …        // ← 大写 C 直接抛
+ * if (!Object.hasOwn(variables, name)) throw …  // ← 还得在 DSH 里注册过
+ * ```
+ * ⇒ ⭐⭐ **`{{}}` 在 DSH 里是【有主】的语法** —— 不是"谁都能用的占位符"。
+ *   而 `systemPrompt.context()` / `section()` 的文本**恰恰要交给它** ⇒ 用不了。
+ * （⚠️ `handoff:prompt-steps` 那些 `{{}}` 之所以没事：它们走**命令注入**，不过 DSH 的 interpolate。）
+ *
+ * ── 现在的做法：**HTML 注释标记** ────────────────────────────────────────────
+ * DSH 的 `interpolate()` **只认 `{{}}`** ⇒ 注释**完全安全**。
+ * ⭐ 而且它有个关键的降级性质：**新文本 + 旧代码**时，标记会**原样发出去**（看得见的丑），
+ *   而不是**运行时抛异常**。⇒ **"先改设置页、后重启"的窗口不再致命**。
+ * ⭐⭐ **判据：给别人家的文本插占位符前，先问"它自己会不会把这段再解析一遍"。**
+ */
+export const KIND_CATALOG_MARKER = '<!--memj:kind-catalog-->'
+/** 可选值清单的标记（给工具描述用，同上的理由）。 */
+export const KIND_LIST_MARKER = '<!--memj:kind-list-->'
+
+/**
+ * ⭐⭐ **填掉 memj 自己的标记**（`kinds.ts`/`tools.ts`/`index.ts` 三处共用）。
+ *
+ * ⚠️ **与 `fillSlots`（`{{名字}}`）是两套东西，别混**：
+ *   · `fillSlots` 服务**memj 内部**的模板（命令注入那些，宿主不过问）；
+ *   · 本函数服务**要交给 DSH 的**文本（`context()` / 工具描述），
+ *     那里 `{{}}` **有主**，只能用注释。
+ * @param text - 原文本。
+ * @returns 填好的文本（不认识的标记**原样留着** —— 可见比静默吞掉强）。
+ */
+export function fillKindMarkers(text: string): string {
+  return text
+    .replaceAll(KIND_CATALOG_MARKER, kindCatalogText())
+    .replaceAll(KIND_LIST_MARKER, selectableKindList(' / '))
+}
+
+/**
+ * ⭐⭐⭐ **渲染"知识类型目录"**（决策 217）—— 常驻上下文里那张表的**唯一来源**。
+ *
+ * 每轮现拼（`when` + `guide` 都来自**当前生效的类型表**）⇒
+ * 用户改了类型，**下一轮模型就看到新的**，不用重启。
+ *
+ * 🔴 **为什么必须现拼、不能写在提示词正文里**：
+ *   正文那份是**可编辑的固定文本**，而你改了类型它不会跟着变 ——
+ *   本项目为这类"固定清单与运行时真值脱节"记过账（`写给模型的固定清单会成为「凭印象猜」的源头`）。
+ *
+ * ⚠️ **`history` 的说明与表格放在一起**（同一段）—— 它讲的是"表里为什么没有它"，
+ *   拆开会让那句失去指代对象（`按句切分提示词会让两侧都断`）。
+ * @returns markdown 表格 + 一句保留项说明。
+ */
+export function kindCatalogText(): string {
+  const rows = currentDefs
+    .filter((d) => !d.reserved)
+    .map((d) => `| \`${d.id}\` | ${d.when} | ${d.guide === '' ? '（自由发挥）' : d.guide} |`)
+  return [
+    '| `kind` | 什么时候用（什么内容归这一类） | 怎么写 |',
+    '|---|---|---|',
+    ...rows,
+    '| （留空） | 未分类 | 自由发挥 |',
+    '',
+    '⚠️ **`history` 不在上表**（决策 136）：它是**工具自动生成的**历史归档条目',
+    '（「当前进度」截断时被截走的原文）⇒ **你不填它、也不该手工把一条知识改成它**',
+    '（那会让那条知识**从检索里消失**）。',
+  ].join('\n')
 }
 
 /**

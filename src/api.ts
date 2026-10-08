@@ -61,11 +61,12 @@ import {
 } from './store.ts'
 import { themeDocPath } from './paths.ts'
 import { isAbsolutePath, parseCovers } from './parse.ts'
-import { isEntryKind, setCurrentKinds } from './schema.ts'
+import { isEntryKind, setCurrentKindDefs } from './schema.ts'
 // ⭐⭐⭐ 决策 215：知识类型（`kind`）的**可配置词表**。
+//    🔴 决策 217 起**渲染一律读 `schema.ts` 的进程内当前值**（同步），
+//       所以这里不再需要 `kindIdsOf` 那类"传表进来"的助手（已删）。
 import {
   deleteKindBlockReason,
-  kindIdsOf,
   loadKinds,
   saveKinds,
   type KindDef,
@@ -1884,8 +1885,8 @@ export async function handleApi(
       const errs = await saveKinds(defs)
       if (errs.length > 0) return { status: 400, body: { ok: false, errors: errs } }
       // ⭐⭐ **保存成功后立即刷新进程内词表** —— 否则"新类型"要等重启才对读侧生效
-      //     （写盘只是持久化；判定用的是进程内那份，见 `schema.ts` 的 `setCurrentKinds`）。
-      setCurrentKinds(kindIdsOf(defs))
+      //     （写盘只是持久化；判定与渲染用的是进程内那份，见 `schema.ts` 的 `setCurrentKindDefs`）。
+      setCurrentKindDefs(defs)
       return { status: 200, body: { ok: true, errors: [], ...(await kindsPayload()) } }
     }
 
@@ -1913,7 +1914,7 @@ export async function handleApi(
       if (why !== '') return { status: 400, body: { ok: false, errors: [why] } }
       const errs = await saveKinds(defs.filter((d) => d.id !== id))
       if (errs.length > 0) return { status: 400, body: { ok: false, errors: errs } }
-      setCurrentKinds(kindIdsOf(await loadKinds()))
+      setCurrentKindDefs(await loadKinds())
       return { status: 200, body: { ok: true, errors: [], ...(await kindsPayload()) } }
     }
 

@@ -237,7 +237,7 @@ export const MEMJ_HANDOFF_DESCRIPTION = `写入或更新一份**项目级 handof
 | \`body\` | ✅ **都必填** | 落库 = 正文 markdown（须以标题行开头）；**外部引用 = 200 字以内的摘要**（⛔ 不贴全文） |
 | \`ref\` | **外部引用时必填** | 库外文档的**绝对路径**；⚠️ **落库条目不要给**（工具自动生成） |
 | \`ext\` | 与 \`ref\` 配套 | 外部引用填 \`true\`；落库不填 |
-| \`kind\` | 否 | 只能 \`fact\` / \`trap\` / \`howto\` / \`decision\`，或留空 |
+| \`kind\` | 否 | 只能 <!--memj:kind-list-->，或留空 |
 | \`theme\` | 否 | **只能填已存在的主题 id**（要新建用 \`newThemes\`） |
 | \`project\` | 否 | 归属项目 id；留空 = 无项目归属 |
 | \`global\` | 否 | \`true\` = 跨主题共用（**只登记提名，待批准**） |
@@ -272,7 +272,7 @@ export const MEMJ_PROMOTE_DESCRIPTION = `把知识**推进归属**，或**修改
 
 **二、改封面的字段**
 - \`setFields: { title?, desc?, tags?, kind? }\`：**只改你给的字段**，没给的保持不变。
-  · \`kind\` 是受控四值（fact / trap / howto / decision），空串 = 改回"未分类"。
+  · \`kind\` 是受控词表（<!--memj:kind-list-->），空串 = 改回"未分类"。
   ⚠️ 它**只改封面（与条目正文的 frontmatter）**，**不动正文内容**。
 
 **三、global**

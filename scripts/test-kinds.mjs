@@ -79,7 +79,17 @@ console.log('\n【4】两个派生文案助手（报错/描述共用一处）')
   check(mod.selectableKindList() === 'fact / trap / howto / decision', `selectableKindList() → ${mod.selectableKindList()}`)
   check(mod.selectableKindList('、') === 'fact、trap、howto、decision', '自定义分隔符生效')
   const inline = mod.kindsInline()
-  check(inline.includes('fact') && inline.includes('→'), 'kindsInline() 带"什么时候用"')
+  // 🔴 **锚点换过**（决策 217）：原先用 `includes('→')` 当"带含义"的判据 ——
+  //    而 `→` 只是**骨架**里的箭头，骨架已从 `when` 搬到 `guide` ⇒ 锚点随之蒸发。
+  //    ⭐ 这正是本项目记过的那笔账：**断言的锚点要选"被断言对象存在就必然出现"的词**，
+  //      不能用"写这段文案时恰好用的那个字符"。
+  //    现在改判"四个 id 都在，且每个 id 后面都跟了非空的说明"。
+  const ids = ['fact', 'trap', 'howto', 'decision']
+  check(ids.every((id) => inline.includes(id)), 'kindsInline() 含全部四个可选类型')
+  check(
+    ids.every((id) => new RegExp(`${id} \\S`).test(inline)),
+    'kindsInline() 每个 id 后面都跟着说明（不是光秃秃一串 id）',
+  )
   check(!inline.includes('history'), 'kindsInline() 不含保留项')
   check(mod.entryKindWhen('trap') !== '', 'entryKindWhen("trap") 非空')
   check(mod.entryKindWhen('不存在') === '', '未知 id ⇒ 空串（不抛）')

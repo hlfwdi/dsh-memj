@@ -30,8 +30,8 @@ import { ensureLibraryDirs, libraryRoot } from './store.ts'
 // ⭐ 决策 208：`default` 模板也落盘（文件不存在时写一份出来，幂等、不覆盖用户改动）。
 import { ensureDefaultTemplateFile } from './templates.ts'
 // ⭐⭐⭐ 决策 215：知识类型词表的启动预热（`isEntryKind` 读的是进程内当前值）。
-import { kindIdsOf, loadKinds } from './kinds.ts'
-import { setCurrentKinds } from './schema.ts'
+import { loadKinds } from './kinds.ts'
+import { fillKindMarkers, setCurrentKindDefs } from './schema.ts'
 import { PROTOCOL_SECTION_ORDER, PROTOCOL_TEXT, protocolText } from './protocol.ts'
 // ⭐⭐ 运行时上下文（决策 124）：走 `context()`，**改它不破前缀缓存**。
 import { CONTEXT_NAME, CONTEXT_ORDER, CONTEXT_TEXT } from './context.ts'
@@ -224,7 +224,7 @@ export function apply(ctx: Context, config: MemjConfig = DEFAULT_CONFIG): void {
   // ⚠️ **失败不阻断启动**：读不到文件 ⇒ 那份当前值保持**内置默认**
   //    （`schema.ts` 的初值就是内置 id）—— 那正是"还没配过"的常态。
   void loadKinds()
-    .then((defs) => setCurrentKinds(kindIdsOf(defs)))
+    .then((defs) => setCurrentKindDefs(defs))
     .catch(() => {})
 
   // ⭐⭐⭐ **预热提示词覆盖缓存**（本次新增）。
@@ -279,7 +279,15 @@ export function apply(ctx: Context, config: MemjConfig = DEFAULT_CONFIG): void {
         // ⭐⭐⭐ **本次新增：走 `promptText` 取覆盖值**（同协议通道）。
         //    ⚠️ `context()` 落在 user 角色、按内容比较收口 ⇒ **改它不破前缀缓存**
         //       （与本页展示的"破缓存=否"一致）。
-        text: () => promptText('context:memj:usage-guidance', CONTEXT_TEXT),
+        //
+        // ⭐⭐⭐ **决策 217：填 `{{kindCatalog}}` 插槽** —— 知识类型目录**每轮现拼**。
+        //    🔴 **为什么必须在这里填、而不是把表写进 `CONTEXT_TEXT`**：
+        //      `promptText` 取的是**覆盖层优先**的那一份（用户可在设置页编辑），
+        //      而覆盖值是**固定快照** ⇒ 表写在正文里就会**过时**
+        //      （用户在【知识类型】页加了类型，模型读到的还是旧表）。
+        //    ✅ 做成插槽后：**正文可编辑、目录永远新鲜** —— 两件事不再冲突。
+        //    ⚠️ `prompts.ts` 的 `slots` 校验（双向）保证这个插槽不会被误删/写错名字。
+        text: () => fillKindMarkers(promptText('context:memj:usage-guidance', CONTEXT_TEXT)),
       })
       diag('context-registered', config)
     } catch (err) {

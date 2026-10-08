@@ -300,7 +300,20 @@ const PROMPT_SPECS_RAW: readonly PromptSpec[] = [
     sourceConst: 'CONTEXT_TEXT',
     hotReload: 'immediate',
     editable: true,
-    checks: [{ kind: 'nonEmpty' }, { kind: 'fencesBalanced' }],
+    checks: [
+      { kind: 'nonEmpty' },
+      { kind: 'fencesBalanced' },
+      // ⭐⭐⭐ **决策 217：正文里的「知识类型目录」是一个 HTML 注释标记**。
+      //    `<!--memj:kind-catalog-->` 由 `schema.ts` 的 `kindCatalogText()` **每轮现拼**
+      //    （`index.ts` 的 `fillKindMarkers()` 填）。
+      //    🔴 为什么不能写死：本条目**可编辑**（且已有覆盖层），表写死在正文里就永远是**固定快照**
+      //       ⇒ 用户在【知识类型】页改了类型，模型读到的还是旧表。
+      //    🔴🔴 **为什么是注释、不是 `{{名字}}` 插槽**（**踩崩一次换来的**）：
+      //       `context()` 的文本会被 **DSH 自己再解析一遍 `{{}}`**，而它只认
+      //       `/^[a-z][a-z0-9_]*$/` 且要求变量已在 DSH 注册 ⇒ 否则**抛异常、会话装配失败**。
+      //       ⭐ 注释**不在 DSH 的语法里** ⇒ 安全；且"新文本 + 旧代码"时只是**原样发出去**，
+      //       不会崩 —— 那个窗口因此不再致命。
+    ],
   },
 
   // ── B 区：工具描述（可改） + 参数/输出 schema（只读展示）──
@@ -323,6 +336,14 @@ const PROMPT_SPECS_RAW: readonly PromptSpec[] = [
       sourceConst: `${t.name.toUpperCase()}_DESCRIPTION`,
       hotReload: 'immediate',
       editable: true,
+      /**
+       * ⚠️ **这里曾经想加 `slots: ['kindList']` 校验，已撤掉**（决策 217）：
+       *   那套"插槽"方案整体作废 —— `{{名字}}` 在 **DSH 的通道里是有主的语法**
+       *   （会被它再解析、且只认小写、还要求变量已注册 ⇒ 否则**抛异常**）。
+       * ⭐ 现在用 **HTML 注释标记**（`<!--memj:kind-list-->`），
+       *   而"禁止 `{{}}`"那道闸由 **通道判定** 统一加（见 `validatePrompt`），
+       *   不需要在这条 spec 上单独声明。
+       */
       checks: [{ kind: 'nonEmpty' }],
     },
     {
@@ -1159,11 +1180,61 @@ export function promptCurrent(key: string): string {
  * @param text - 待保存文本。
  * @returns 违规说明列表（空 = 通过）。
  */
+/**
+ * 🔴🔴 **常驻防线：交给 DSH 的文本里禁止 `{{…}}`**（决策 217，**踩崩一次换来的**）。
+ *
+ * ── 事故 ──────────────────────────────────────────────────────────────────
+ * 我用 `{{kindCatalog}}` 当插槽，**没有走本文件的校验**（那次是直接写覆盖层），
+ * 结果整个会话装配抛：
+ * `malformed prompt variable reference "{{kindCatalog}}" in context "memj:usage-guidance"`
+ *
+ * ── 根因 ──────────────────────────────────────────────────────────────────
+ * `systemPrompt.context()` / `section()` 的文本会被 **DSH 自己再跑一遍 `interpolate()`**：
+ * `VARIABLE_NAME = /^[a-z][a-z0-9_]*$/`（只允许小写开头）且变量须已注册 ⇒ 否则 **throw**。
+ * ⇒ ⭐⭐ **`{{}}` 在 DSH 里是"有主"的语法**，memj 的常驻文本**用不了**。
+ *
+ * ── 为什么必须做成检查 ─────────────────────────────────────────────────────
+ * 这类文本有**两个投递口**：设置页保存（走 `validatePrompt`）与**直接写覆盖表**。
+ * 只顾一头 ⇒ 另一头能把会话搞崩。⇒ **把判据放在"文本进入系统"的必经之处**。
+ * @param text - 要交给 DSH 的文本。
+ * @returns 问题清单（空 = 安全）。
+ */
+export function checkNoDshVariables(text: string): string[] {
+  const hits = [...text.matchAll(/\{\{([^{}]*)\}\}/g)].map((m) => m[0])
+  if (hits.length === 0) return []
+  const uniq = [...new Set(hits)].slice(0, 5)
+  return [
+    `文本里有 ${hits.length} 处 \`{{…}}\`（如 ${uniq.join('、')}）——` +
+      '**DSH 会把这段再解析一遍**，它的变量名只允许小写开头、且必须已注册，' +
+      '否则**会话装配直接抛异常**。' +
+      // ⚠️ 提示里的标记用**拼接**写 —— 直接在字符串里放 HTML 注释会被 .mjs 解析器拒（本脚本踩过）。
+      'memj 自己的占位请改用 HTML 注释标记（<' + '!--memj:kind-catalog--' + '>）。',
+  ]
+}
+
 export function validatePrompt(key: string, text: string): string[] {
   const spec = specOf(key)
   if (spec === undefined) return [`未知的提示词键：${key}`]
   if (!spec.editable) return [`${key} 是只读项${spec.readonlyWhy !== undefined ? `（${spec.readonlyWhy}）` : ''}`]
   const out: string[] = []
+  /**
+   * 🔴🔴 **只有"交给 DSH 的通道"才禁 `{{…}}`**（决策 217，**踩崩一次换来的**）。
+   *
+   * ⚠️⚠️ **范围必须精确 —— 我第一版设成全局，当场误伤了两条合法条目**：
+   *   `handoff:prompt-steps` / `handoff:prompt-note` 的 `{{steps}}` / `{{userNote}}`
+   *   走的是**命令注入**（memj 自己 `fillSlots` 填），**不过 DSH 的 `interpolate()`**
+   *   ⇒ 它们**本来就合法**。被 `check-prompt-specs` 的"默认值必须过自己的校验"当场抓到。
+   *
+   * ⭐ **判据：一条规则该管的范围，取决于【谁还会再解析这段文本】，而不是文本本身。**
+   *   本项目的通道分工：
+   *   · **交给 DSH**（会被它再解析 `{{}}`）⇒ `section()` / `context()` / 工具描述
+   *     —— 这几条**禁 `{{}}`**，占位用 HTML 注释标记。
+   *   · **memj 自填**（命令注入）⇒ `command:*` / `handoff:prompt-*` / `score:*` 等
+   *     —— 那些 `{{}}` 是 memj 自己的插槽，**合法且必须留着**。
+   */
+  const dshOwned =
+    spec.injectMode.includes('systemPrompt.') || spec.injectMode.includes('wire `tools`')
+  if (dshOwned) out.push(...checkNoDshVariables(text))
   for (const c of spec.checks) {
     if (c.kind === 'nonEmpty') {
       if (text.trim() === '') out.push('内容不能为空。')

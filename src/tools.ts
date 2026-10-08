@@ -62,6 +62,7 @@ import { resolveRef } from './paths.ts'
 import {
   currentKindsOf,
   currentReservedKinds,
+  fillKindMarkers,
   isEntryKind,
   kindsInline,
   selectableKindList,
@@ -169,27 +170,35 @@ export function registerTools(deps: ToolDeps): void {
   const { ctx, config } = deps
 
   /**
-   * ⭐⭐⭐ **`kind` 字段的 schema 片段（`enum` 每轮现算）**（决策 215）。
+   * ⭐⭐⭐ **`kind` 字段的 schema 片段（`enum` 与 `description` 都每轮现算）**。
    *
    * ── 🔴 为什么需要它 ────────────────────────────────────────────────────────
-   * 词表**运行期可配**了（用户在设置页增删类型）⇒ `enum` **不能是"注册时算一次"的常量**，
-   * 否则用户加的类型**模型填了会被判非法**（工具层先拦），而界面上却能选 —— **两边打架**。
+   * 词表**运行期可配**了（用户在设置页增删类型）⇒ 两者**都不能是"注册时算一次"的**：
+   *   · 只看 `enum` 不算数 ⇒ 用户加的类型会 **"UI 能选、工具不认"**（模型填了被判非法）；
+   *   · **只看描述也不算数** —— 描述里写着"有哪些类型/各自什么意思"，
+   *     若它是注册时定死的，就会出现 🔴🔴 **同一个 schema 内部自相矛盾**：
+   *     `enum` 里有 `pitfall`，而描述说"只能 fact/trap/howto/decision"。
+   *     ⚠️ 这正是本项目反复记的"**两边打架**"，只不过发生在一个字段内部。
    *
    * ── 机制（与 `description` 的覆盖 getter **同源**，见 `safeRegister` 的长注释）──
    * DSH 的装配路径是 `ctx.systemPrompt.tools((context) => this.wireSchemas(...))`
    * ⇒ **每轮重新 `schemaOf()`** ⇒ 参数对象上的 **getter 每轮都会被求值**。
-   * ⇒ ⭐ 把 `enum` 做成 getter，**加完类型下一轮即时生效、不用重启**。
+   * ⇒ ⭐ 把两者都做成 getter，**改完类型下一轮即时生效、不用重启**。
    *
    * ⚠️ **`parameters` 是 `defineTool` 一次性构造的普通对象** ⇒
    *    这里返回的也必须是**它当场能吃下的形态**（对象字面量 + getter）。
-   * @param desc - 该处 `kind` 的字段说明（各处文案不同，但 enum 同源）。
+   * ⚠️ 两个 getter 都**必须在对象字面量之后**定义 ——
+   *    `defineTool` 对**顶层** `description` 做的是普通属性赋值，会覆盖提前定义的同名 getter；
+   *    但**参数对象内部**的这一层它不碰（实测：`enum` getter 自决策 215 起一直有效）。
+   * @param descOf - **现算描述**的函数（各处文案不同，但都从当前词表取）。
    * @returns 可直接放进 `parameters` 的 schema 片段。
    */
-  const kindParam = (desc: string): { type: 'string'; enum: string[]; description: string } => {
+  const kindParam = (descOf: () => string): { type: 'string'; enum: string[]; description: string } => {
     const o = {
       type: 'string' as const,
-      description: desc,
-      /** 占位：紧接着被下面的 getter 覆盖（`defineTool` 只做普通赋值，故必须事后定义）。 */
+      /** 占位：紧接着被下面的 getter 覆盖。 */
+      description: '',
+      /** 占位：同上。 */
       enum: [] as string[],
     }
     Object.defineProperty(o, 'enum', {
@@ -201,6 +210,12 @@ export function registerTools(deps: ToolDeps): void {
         const reserved = new Set(currentReservedKinds())
         return currentKindsOf().filter((id) => !reserved.has(id))
       },
+    })
+    Object.defineProperty(o, 'description', {
+      enumerable: true,
+      configurable: true,
+      // ⭐⭐ **描述也每轮现算**（决策 217）—— 见上面那段"同一个 schema 内部自相矛盾"。
+      get: descOf,
     })
     return o
   }
@@ -234,7 +249,17 @@ export function registerTools(deps: ToolDeps): void {
       Object.defineProperty(def, 'description', {
         enumerable: true,
         configurable: true,
-        get: () => promptText(`tool:${name}:description`, fallback),
+        /**
+         * ⭐⭐⭐ **决策 217：这里同时填 `{{kindList}}` 插槽**。
+         *
+         * 🔴 **为什么**：`memj_handoff` / `memj_promote` 的描述里有"只能 {{kindList}}"，
+         *    而那句以前是**写死的四值** ⇒ 用户加了类型之后，
+         *    同一个 schema 的 `enum` 里有它、描述却说"只能四个" —— **自相矛盾**。
+         * ✅ 做成插槽 + **每轮现填** ⇒ 描述永远跟着类型表走。
+         * ⚠️ 不认识 `{{…}}` 的（别的工具描述里没有）**原样保留** ——
+         *    `fillSlots` 的语义就是"没提供的插槽不填空串"（宁可在输出里可见，也别静默吞掉）。
+         */
+        get: () => fillKindMarkers(promptText(`tool:${name}:description`, fallback)),
       })
       // ⭐⭐⭐ **登记参数 / 输出的「可读文本」**（2026-10-12 新增）——**只为展示**。
       //
@@ -392,9 +417,11 @@ export function registerTools(deps: ToolDeps): void {
             // ⭐ 2026-10-05 收敛：取值与含义都从 `schema.ts` 的唯一词表取 ——
             //    收敛前这里**抄了一遍**，加类型时漏改就会"工具不认、UI 能选"。
             // ⭐⭐ 决策 215：词表运行期可配 ⇒ enum 做成 getter 每轮现算（见 kindParam）。
+            // ⭐ 传**函数**（描述每轮现算，决策 217）—— 不是"注册时拼好的字符串"。
             ...kindParam(
-              `按**形态分类**筛（决策 81）：${kindsInline()}。` +
-              '与 project/theme 正交，可并用。',
+              () =>
+                `按**形态分类**筛（决策 81）：${kindsInline()}。` +
+                '与 project/theme 正交，可并用。',
             ),
           },
           query: {
@@ -1175,9 +1202,11 @@ export function registerTools(deps: ToolDeps): void {
                 kind: {
                   // ⭐⭐ 决策 215：enum 每轮现算（词表运行期可配）。
                   ...kindParam(
-                    `形态分类（**可选**）：${kindsInline()}。` +
-                    '**只能填这 4 个值**，留空合法。它决定正文用哪种骨架，也便于按类型筛选。' +
-                    '⚠️ 与 theme 无关：theme 是"属于谁"，kind 是"本身是什么形态"。',
+                    () =>
+                      `形态分类（**可选**）：${kindsInline()}。` +
+                      // 🔴 原文写死「**只能填这 4 个值**」—— 用户加第 5 个类型它就在撒谎。
+                      '留空合法。它决定正文用哪种骨架，也便于按类型筛选。' +
+                      '⚠️ 与 theme 无关：theme 是"属于谁"，kind 是"本身是什么形态"。',
                   ),
                 },
                 tags: { type: 'array', required: true, items: { type: 'string' }, description: '至少 1 个。' },
@@ -1251,7 +1280,7 @@ export function registerTools(deps: ToolDeps): void {
                 body: { type: 'string', description: "mode='extract' 时的正文。" },
                 desc: { type: 'string', required: true },
                 kind: {
-                  ...kindParam(`形态分类（可选），同 entries[].kind。可选：${selectableKindList('、')}。`),
+                  ...kindParam(() => `形态分类（可选），同 entries[].kind。可选：${selectableKindList('、')}。`),
                 },
                 tags: { type: 'array', required: true, items: { type: 'string' } },
                 theme: { type: 'array', items: { type: 'string' } },
@@ -1401,8 +1430,9 @@ export function registerTools(deps: ToolDeps): void {
               tags: { type: 'array', items: { type: 'string' }, description: '新标签（至少 1 个）。' },
               kind: {
                 ...kindParam(
-                  `形态分类（受控词表：${selectableKindList('、')}）。` +
-                  '⚠️ **这是 `kind` 的修改通道**（以前写完只能手工改库文件）。',
+                  () =>
+                    `形态分类（受控词表：${selectableKindList('、')}）。` +
+                    '⚠️ **这是 `kind` 的修改通道**（以前写完只能手工改库文件）。',
                 ),
               },
             },
@@ -1665,7 +1695,7 @@ export function registerTools(deps: ToolDeps): void {
               desc: { type: 'string', description: '新描述（≤200，检索键）。' },
               tags: { type: 'array', items: { type: 'string' }, description: '新标签（至少 1 个）。' },
               kind: {
-                ...kindParam(`形态分类（受控词表：${selectableKindList('、')}）。`),
+                ...kindParam(() => `形态分类（受控词表：${selectableKindList('、')}）。`),
               },
             },
           },
@@ -1700,7 +1730,11 @@ export function registerTools(deps: ToolDeps): void {
           const kind: EntryKind | '' | undefined =
             rawKind === undefined ? undefined : rawKind === '' ? '' : (isEntryKind(rawKind) ? rawKind : undefined)
           if (rawKind !== undefined && kind === undefined) {
-            return { ok: false, message: `\`kind\` 非法：\`${rawKind}\`（只能是 fact/trap/howto/decision）。` }
+            // 🔴 校验走 `isEntryKind`（动态），文案却写死四值 ⇒ 报错会**暗示新类型非法**。
+            return {
+              ok: false,
+              message: `\`kind\` 非法：\`${rawKind}\`（只能是 ${selectableKindList('、')} 之一，或留空）。`,
+            }
           }
           const r = await updateEntry(entryId, {
             ...(body !== undefined ? { body } : {}),

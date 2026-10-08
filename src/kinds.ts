@@ -108,15 +108,21 @@ const BUILTIN_IDS: readonly string[] = ENTRY_KIND_DEFS.map((d) => d.id)
  *   · `ENTRY_KIND_DEFS` = **编译期内置值**（决策 214 的唯一来源，现在降级为默认值）；
  *   · 本函数 = **把它补全成 `KindDef`**（加上 `builtin` / `reserved` / `guide` 三个字段）。
  * 🔴 **不在这里抄第二份 id 列表** —— 一律从 `ENTRY_KIND_DEFS` 派生。
- * @returns 内置表的完整定义（含空的"书写规范"）。
+ * @returns 内置表的完整定义。
  */
 export function builtinKindDefs(): KindDef[] {
   return ENTRY_KIND_DEFS.map((d: EntryKindDef) => ({
     id: d.id,
     label: d.label,
     when: d.when,
-    // ⭐ 内置项默认没有"书写规范"——那是**留给用户填**的（填了就会进提示词）。
-    guide: '',
+    /**
+     * ⭐⭐ **内置项现在自带书写规范**（决策 217）。
+     * 🔴 以前这里写死 `''`，而"骨架"其实装在 `when` 里（**字段名在撒谎**）——
+     *    ✅ 本次把骨架搬进 `guide`、`when` 换成真判据。
+     * ⚠️ 所以这两处**必须一起改**：只改 `when` 而这里仍给 `''`
+     *    ⇒ 骨架会**凭空消失**（模型再也看不到"怎么写"）。
+     */
+    guide: d.guide,
     builtin: true,
     reserved: d.reserved === true,
   }))
@@ -298,6 +304,13 @@ export async function saveKinds(defs: readonly KindDef[]): Promise<string[]> {
  *   · 内置项的 **id 与 label 都不能改**（改 id ⇒ 存量知识当场非法）；
  *   · 内置项**不能少**（少一条 ⇒ 原来用它那些知识变非法值）；
  *   · 保留项的 `reserved` **不能被摘掉**（摘了模型就能手工造 `history`）。
+ *
+ * ⭐⭐ **2026-10-05 用户裁定（决策 217）：内置项的 `when` / `guide` 【可以编辑】**
+ *   —— *"可编辑但不可删除"*。
+ *   ⇒ 本函数**刻意不校验这两项**：它们是**内容**（描述性文字），
+ *     而"内置"锁的是**身份**（`id` / `label` / 存在性）。
+ *   ⭐ 判据：**"这是身份还是内容"决定它锁不锁** ——
+ *     改身份会让存量数据非法（不可逆），改内容只影响措辞（随时可改回）。
  * @param defs - 待校验的表。
  * @returns 问题清单（空 = 合法）。
  */
@@ -359,44 +372,4 @@ export function deleteKindBlockReason(id: string, defs: readonly KindDef[], used
   return ''
 }
 
-// ══════════════════════════════════════════════════════════════════════════
-// 给消费方用的小工具（都从"当前生效的表"派生，不再各自抄一份）
-// ══════════════════════════════════════════════════════════════════════════
 
-/** ⭐ 全部 id（含保留项）—— **读侧**判定"这个 kind 合不合法"用它。 */
-export function kindIdsOf(defs: readonly KindDef[]): string[] {
-  return defs.map((d) => d.id)
-}
-
-/** ⭐⭐ 可给模型选的 id（**排除保留项**）—— 工具 schema 的 `enum` 用它。 */
-export function selectableKindIdsOf(defs: readonly KindDef[]): string[] {
-  return defs.filter((d) => !d.reserved).map((d) => d.id)
-}
-
-/** ⭐ 判断一个值是否合法（**传入当前表** —— 决策 215 起词表不再是编译期常量）。 */
-export function isKindIn(defs: readonly KindDef[], value: unknown): boolean {
-  return typeof value === 'string' && defs.some((d) => d.id === value)
-}
-
-/**
- * ⭐⭐ **拼一句给模型看的"有哪些类型、各自什么时候用"**。
- *
- * 🔴 收敛前这段串在 `tools.ts` 里**抄了三遍**（决策 214 收敛成 `kindsInline()`），
- *    现在词表可在运行期变 ⇒ 必须**从传入的表**拼，不能再读编译期常量。
- * @param defs - 生效的类型表。
- * @param sep - 条目分隔符。
- * @returns 形如 `fact 是什么 + 出处/依据｜trap 现象 → 根因 → 正确做法｜…`。
- */
-export function kindsInlineOf(defs: readonly KindDef[], sep = '｜'): string {
-  return defs.filter((d) => !d.reserved).map((d) => `${d.id} ${d.when}`).join(sep)
-}
-
-/**
- * ⭐ **拼一句"可选值清单"**（报错文案用）。
- * @param defs - 生效的类型表。
- * @param sep - 分隔符。
- * @returns 形如 `fact / trap / howto / decision`。
- */
-export function kindListOf(defs: readonly KindDef[], sep = ' / '): string {
-  return selectableKindIdsOf(defs).join(sep)
-}

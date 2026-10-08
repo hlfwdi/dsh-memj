@@ -4659,7 +4659,15 @@ function renderKindsList() {
       head.append(del)
     }
     card.append(head)
-    const ro = k.builtin === true
+    /**
+     * 🔴🔴 **两个锁的粒度不一样**（决策 217 用户裁定：*"可编辑但不可删除"*）：
+     *   · **身份**（`id` / 显示名）⇒ 内置项**锁死** ——
+     *     改 id 会让存量那几百条知识**当场变非法值**（不可逆）；
+     *   · **内容**（`什么时候用` / `怎么写`）⇒ **内置项也可编辑** ——
+     *     它们只是描述性文字，改错了随时能改回，而"内置"保护的是**身份**不是措辞。
+     * ⭐ 判据：**"这是身份还是内容"决定它锁不锁**。
+     */
+    const lockIdentity = k.builtin === true
     /**
      * ⭐⭐ **id 也要能填**（2026-10-05 实测补的缺口）。
      *
@@ -4668,25 +4676,32 @@ function renderKindsList() {
      *    ⇒ 而**自定义类型的 id 必须由用户指定**（它就是写进封面 `kind:` 的值），
      *      没这个格子 ⇒ 用户点"添加"后**根本没法填 id** ⇒ 保存时被校验拒绝
      *      （实测：报「第 6 项：id `` 不合法」）。
-     * ⚠️ 内置项**没有这个格子**（它们的 id 锁死）；所以这里**只给非内置加**。
+     * ⚠️ 内置项**没有这个格子**（它们的 id 锁死，见 `lockIdentity`）。
      */
-    if (!ro) {
+    if (!lockIdentity) {
       card.append(
         kindField('id（机器名，写进封面用）', k.id, false, (v) => { k.id = v.trim() },
           '小写英文/数字/连字符，2–32 位，小写字母开头；改它不影响已有知识'),
       )
     }
-    card.append(kindField('显示名', k.label, ro, (v) => { k.label = v }))
+    // ⚠️ 显示名只给非内置可编辑（它是**身份**的一部分：改它会让老知识显示成另一个名字）。
+    card.append(kindField('显示名', k.label, lockIdentity, (v) => { k.label = v }))
     card.append(
-      kindField('什么时候用', k.when, ro, (v) => { k.when = v },
+      // ⭐ 内置项**也可编辑**（决策 217）—— `when` 是内容。
+      kindField('什么时候用', k.when, false, (v) => { k.when = v },
         '一句话说清"什么内容该归到这一类" —— 它会进提示词，是模型选类型的唯一依据'),
     )
-    // ⭐ 书写规范**可多行**（与模板的章节规范同一形态：可能要写不少字）。
+    // ⭐ 书写规范**可多行**（与模板的章节规范同一形态：可能要写不少字），内置项也可编辑。
     card.append(
-      kindField('书写规范', k.guide, ro, (v) => { k.guide = v },
+      kindField('怎么写（骨架 / 规范）', k.guide, false, (v) => { k.guide = v },
         '这一类知识该怎么写（可多行）—— 也会进提示词', true),
     )
-    if (ro) card.append(h('p', { class: 'set-note', text: '内置类型：不可删、不可改名（库里已有知识在用它）。' }))
+    if (lockIdentity) {
+      card.append(h('p', {
+        class: 'set-note',
+        text: '内置类型：id 与显示名锁死、不可删除（库里已有知识在用它）；但「什么时候用 / 怎么写」可以改。',
+      }))
+    }
     box.append(card)
   })
 }

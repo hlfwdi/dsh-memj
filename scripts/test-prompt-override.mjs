@@ -60,8 +60,17 @@ check('1e JEV 英文通过',
   P.validatePrompt('jev:need', 'Does the context need external knowledge?').length === 0)
 check('1f 围栏不成对被拒',
   P.validatePrompt('context:memj:usage-guidance', 'a\n```\nb').some((s) => s.includes('围栏不成对')))
+// ⚠️ 样本**必须能通过该条目的全部校验**（含"交给 DSH 的通道禁 `{{}}`"，决策 217）。
+//    ⭐ 判据：给一条提示词加校验后，**所有构造样本的地方都要跟着改**。
 check('1g 围栏成对通过',
   P.validatePrompt('context:memj:usage-guidance', 'a\n```\nb\n```').length === 0)
+// ⭐ 反证：**交给 DSH 的通道里出现 `{{…}}` ⇒ 被拒**（这条是本次崩溃的直接防线）
+check('1g2 🔴 交给 DSH 的通道里出现 `{{kindCatalog}}` ⇒ 被拒（DSH 只认小写且须已注册）',
+  P.validatePrompt('context:memj:usage-guidance', 'a\n{{kindCatalog}}\nb').some((s) => s.includes('{{')))
+// ⭐ 反向：**memj 自填的通道（命令注入）里 `{{}}` 合法** —— 别把闸设成全局
+//    （第一版就是全局，当场误伤了 `handoff:prompt-steps`，被 check-prompt-specs 抓到）
+check('1g3 ⭐ 反证：memj 自填的通道里 `{{}}` 合法（闸只管交给 DSH 的那些）',
+  P.validatePrompt('handoff:prompt-note', '内容是 {{userNote}} 结束').length === 0)
 check('1h 未知键被拒', P.validatePrompt('nonexistent:key', 'x').length > 0)
 check('1i 只读项被拒（参数 schema）',
   P.validatePrompt('tool:memj_info:parameters', '{}').some((s) => s.includes('只读')))
