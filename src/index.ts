@@ -22,6 +22,21 @@ import type { WebServer } from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-commands'
+// ⭐⭐⭐ **本插件自己的 `MessageSourceMap` 条目**（0.2.0 起 kind 是 `plugin:dsh-memj`）。
+//
+// 🔴 **这一行的作用只有一个：把那次 module augmentation 钉进编译程序。**
+//    本行**没有运行时效果**（type-only import 会被完全擦除），
+//    但**少了它，`plugin:dsh-memj` 就只靠 `tsconfig.json` 的
+//    `include: ["src"]` 兜着** —— 一旦有人把 include 收窄成显式清单，
+//    augmentation 会**静默失效**（各处写的都是字符串字面量，照样编得过）。
+//
+// ⚠️ **实测教训（2026-10-08 全量核实时查出）**：`message-source.ts` 的文件头
+//    **原文就写着"本文件被 `index.ts` 以 `import type` 引入"**，
+//    而当时**全仓 0 个消费者**（`grep -r message-source src/` 无命中）——
+//    **注释写了规矩、代码没照做**，正是本项目反复栽的那个形态
+//    （同族：风险 52「'两处必须同源'这类注释要配一条断言，否则它只是愿望」）。
+//    ⇒ 修法就是这一行：**让注释描述的事实真的成立**，而不是把注释改弱去迁就现状。
+import type {} from './message-source.ts'
 import { appendFile, mkdir, readFile } from 'node:fs/promises'
 import { extname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'

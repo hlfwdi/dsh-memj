@@ -19,8 +19,20 @@
  *   都没有就返回 `` `plugin:${plugin}` ``。`dsh-memj` 两张表都不在 ⇒ `plugin:dsh-memj`。
  *   ⇒ **与迁移器保持一致**，旧会话里的历史注入也能被同一个判据认出来。
  *
- * ⚠️ 只声明不写运行时：本文件被 `index.ts` 以 `import type` 引入，
- *    目的是把这次 module augmentation 纳入编译。
+ * ⚠️ 只声明不写运行时：本文件被 `index.ts` 以 `import type {} from './message-source.ts'`
+ *    引入，目的是把这次 module augmentation 纳入编译。
+ *
+ * 🔴🔴 **那一行 import 是必需的，别删**（2026-10-08 实测记一笔）：
+ *    本文件此前**没有任何消费者** —— 它只是靠 `tsconfig.json` 的 `include: ["src"]`
+ *    被捎带进编译程序，而**文件头当时却写着"被 index.ts 引入"**（注释与事实不符）。
+ *    两者在"能编过"这一点上效果相同，但**可靠性不同**：
+ *    `include` 一旦被收窄成显式清单，augmentation 会**静默失效**
+ *    （各处都写字符串字面量 `'plugin:dsh-memj'`，没有类型约束会报错）。
+ *    ⇒ 已按注释补上 `index.ts` 的 import：**让注释描述的事实真的成立**。
+ *
+ * ⭐ **这个 kind 的取值已被实测证实**（不是照文档推的）：逐帧解本机 8 个
+ *    `session.v4.jsonl.zstd`（16 313 条 source），memj 的注入一律是
+ *    `{"kind":"plugin:dsh-memj","form":"instructions"}`（51 处），全库无 `kind:"plugin"`。
  */
 
 /** 一条注入指令块里的分节（保留以便溯源）。 */
