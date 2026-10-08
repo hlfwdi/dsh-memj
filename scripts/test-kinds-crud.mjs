@@ -219,5 +219,54 @@ console.log('\n【8】静态反证：工具 schema 的 enum 必须**每轮现算
   check(/loadKinds\(\)/.test(index), '⭐ 启动时预热词表（漏了 ⇒ 新类型首次解析不被认）')
 }
 
+
+console.log('\n【9】⭐⭐ 保存前确认：**只在该破前缀缓存时弹**（2026-10-05 用户要求）')
+{
+  /**
+   * 判据（本轮核实过）：
+   *   · 只改 when / guide（id 与数量不变） ⇒ ✅ 不破（tools 侧清单**只有 id**）
+   *   · 改 id / 增 / 删 ⇒ 🔴 破（可选值清单变 ⇒ tools 变 ⇒ node 0 重写）
+   * ⭐ **只在该破时弹** —— 每次都弹 ⇒ 用户会无脑确认 ⇒ 弹窗等于不存在。
+   *
+   * ⚠️ 这段函数在前端（app.js），这里用 **vm 单测它的判定分支** ——
+   *    因为"判据函数"最怕**看起来对、实际某一支是死代码**（我第一版就有）。
+   */
+  const vm = await import('node:vm')
+  const js = readFileSync(join(process.cwd(), 'src', 'web', 'app.js'), 'utf8')
+  const s = js.indexOf('/**\n * ⭐⭐⭐ **这次保存会不会破坏前缀缓存？**')
+  const e = js.indexOf('/**\n * ⭐ **保存【这一条】**')
+  check(s >= 0 && e > s, '在 app.js 里找到 kindChangeBreaksCache')
+  const ctx = vm.createContext({ console, kindsState: { items: [], originals: new Map() } })
+  vm.runInContext(js.slice(s, e) + '\n;globalThis.__f = kindChangeBreaksCache; globalThis.__st = kindsState', ctx)
+  const f = ctx.__f
+  const st = ctx.__st
+  const mk = (id, when, guide) => ({ id, label: id, when, guide, builtin: true, reserved: false, count: 0 })
+
+  st.originals = new Map([['fact', mk('fact', '旧', '旧')], ['trap', mk('trap', 'w', 'g')]])
+
+  st.items = [mk('fact', '新判据', '新骨架'), mk('trap', 'w', 'g')]
+  check(f(st.items[0]) === '', '只改 when/guide ⇒ **不弹**（本来就不破）')
+
+  st.items = [mk('fact', '旧', '旧'), mk('trap', 'w', 'g')]
+  check(f(st.items[0]) === '', '什么都没改 ⇒ 不弹')
+
+  st.items = [mk('newone', 'w', 'g'), mk('fact', '旧', '旧'), mk('trap', 'w', 'g')]
+  const rNew = f(st.items[0])
+  check(rNew !== '' && rNew.includes('新增'), '新增 ⇒ 弹，且文案说「新增」')
+  check(rNew.includes('前缀缓存'), '  文案点明「前缀缓存」')
+
+  st.originals = new Map([['fact', mk('fact', 'w', 'g')], ['trap', mk('trap', 'w', 'g')]])
+  st.items = [mk('fact2', 'w', 'g'), mk('trap', 'w', 'g')]
+  const rRen = f(st.items[0])
+  check(rRen.includes('改了一个类型的 id'), '⭐ 改 id ⇒ 弹，且文案说「改 id」（**不是"新增"**）')
+  check(!rRen.includes('新增'), '  没误报成「新增」')
+
+  // ⭐ 静态反证：删除那条路也必须有确认（我第一版漏了它）
+  check(/async function deleteKind\(id\)[\s\S]{0,400}window\.confirm/.test(js),
+    '⭐ 删除路径也有确认（删除同样破缓存，且不可逆）')
+  check(/async function saveOneKind\(k, i\)[\s\S]{0,300}kindChangeBreaksCache/.test(js),
+    '保存路径调了判据函数')
+}
+
 console.log(`\n═══ 知识类型词表：通过 ${pass} / 失败 ${fail} ═══`)
 process.exit(fail === 0 ? 0 : 1)

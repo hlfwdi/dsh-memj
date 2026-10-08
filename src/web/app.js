@@ -4600,7 +4600,14 @@ async function openTemplatesPage() {
 }
 
 /** ⭐ 知识类型页的状态（决策 215）。 */
-const kindsState = { items: [] }
+/**
+ * ⭐ **知识类型页的状态**。
+ *
+ * 🔴 `originals` 是**服务端那份的原样快照**（每次拉到就抄一份）——
+ *    用来在「保存」前判断"这次改动会不会破坏前缀缓存"。
+ *    ⚠️ 不能拿 `items` 自己跟自己比（它**已被就地改过**，见 `kindField` 的 onInput）。
+ */
+const kindsState = { items: [], originals: new Map() }
 
 /**
  * ⭐⭐⭐ **知识类型页**（决策 215）—— \`kind\` 的可配置词表。
@@ -4618,6 +4625,8 @@ async function openKindsPage() {
     const body = await r.json()
     if (!body.ok) throw new Error(body.error || '读取失败')
     kindsState.items = body.items
+    // ⭐ 存一份**原样快照**（按 id）—— 保存前拿它比对"改了哪些字段"。
+    kindsState.originals = new Map(body.items.map((x) => [x.id, { ...x }]))
     renderKindsList()
     showKindErrs([])
   } catch (e) {
@@ -4788,6 +4797,56 @@ function kindEditor(k, i) {
 }
 
 /**
+ * ⭐⭐⭐ **这次保存会不会破坏前缀缓存？**（是 ⇒ 返回要弹的确认文案；否 ⇒ 空串）
+ *
+ * ── 判据（2026-10-05 核实，不是猜）─────────────────────────────────────────
+ * 只有**两条腿**会进 DSH 的 wire \`tools\`（那正是"tools 变 ⇒ node 0 重写"的触发源）：
+ *
+ * | 改动 | tools 侧会变吗 | 结论 |
+ * |---|---|---|
+ * | **只改 when / guide** | ❌ 不变 —— 那两份清单里**只有 id**（\`<!--memj:kind-list-->\`） | ✅ **不破** |
+ * | 改 id / 新增 / 删除 | ✅ 变（可选值清单变了） | 🔴 **破** |
+ * | 什么都没改 | ❌ | ✅ 不破（也不用弹） |
+ *
+ * ⚠️ 目录表（含 when + guide）走的是 **context()** —— 尾部 append、同值不发 ⇒ 不破。
+ *
+ * ⭐ **为什么只在该破时弹**：每次都弹的话，"改个错别字"也要吓用户一次
+ *   ⇒ 他会开始**无脑点确认**，那时弹窗就等于不存在（本项目判据：
+ *     **一个总在报警的警报，与没有警报等价**）。
+ * @param k - 本次要保存的那条（已被就地改过）。
+ * @returns 确认文案（空串 = 不必确认）。
+ */
+function kindChangeBreaksCache(k) {
+  const before = kindsState.originals.get(k.id)
+  const idsBefore = [...kindsState.originals.keys()]
+  const idsNow = kindsState.items.map((x) => x.id)
+  // ⚠️ 用**排序后**比集合：顺序变了不影响 tools（可选值清单按表顺序拼，
+  //    所以顺序其实也影响 —— 但那属于"表变了"，一并算作会破更稳妥）。
+  const setChanged = idsBefore.slice().sort().join('\u0000') !== idsNow.slice().sort().join('\u0000')
+
+  const reasons = []
+  // ⭐ 先判「改名」：旧 id 从表里消失、同时出现了一个新 id（总数不变）。
+  //    ⚠️ 我第一版写成 before.id !== k.id —— 那是**死代码**：
+  //      originals.get(k.id) 用的是**新 id**，改过名时必然 undefined
+  //      ⇒ 会落到「新增」分支 ⇒ **文案说错**（实际是改名）。
+  const idRenamed = before === undefined && idsNow.length === idsBefore.length && setChanged
+  if (idRenamed) reasons.push('**改了一个类型的 id**')
+  else if (before === undefined) reasons.push('**新增了一个类型**')
+  else if (setChanged) reasons.push('**类型集合变了**（有新增或删除）')
+
+  if (reasons.length === 0) return ''
+
+  return (
+    '这次改动会**破坏前缀缓存**：' + reasons.join('、') + '。\n\n' +
+    '原因：知识类型的**可选值清单会写进工具的 schema**（模型靠它决定能填什么），\n' +
+    '而它一变，DSH 就要**重写系统提示的开头** ⇒ **所有活跃会话的前缀缓存全部作废**' +
+    '（下一轮会变慢、也更贵）。\n\n' +
+    '⚠️ 影响范围是**所有正在进行的会话**，不只当前这个。\n\n' +
+    '确定要保存吗？'
+  )
+}
+
+/**
  * ⭐ **保存【这一条】**（POST /kind/upsert）—— 只动这一条，别条一概不碰。
  * @param k - 该条（**已被就地改过**的本地对象）。
  * @param i - 它在表里的下标（失败时要回滚用）。
@@ -4796,6 +4855,9 @@ function kindEditor(k, i) {
 async function saveOneKind(k, i) {
   void i
   const msg = document.getElementById('settings-msg-kinds')
+  // ⭐⭐ **保存前确认 —— 只在该破前缀缓存时弹**（判据见 `kindChangeBreaksCache`）。
+  const why = kindChangeBreaksCache(k)
+  if (why !== '' && !window.confirm(why)) return
   try {
     const r = await fetch(API + '/kind/upsert', {
       method: 'POST',
@@ -4830,6 +4892,15 @@ async function saveOneKind(k, i) {
  * @returns Promise<void>
  */
 async function deleteKind(id) {
+  // 🔴🔴 **删除同样破前缀缓存**（可选值清单少一项 ⇒ tools 变）—— 而且它最该确认。
+  //    ⚠️ 我第一版只给 saveOneKind 加了确认、**漏了这里** —— 而删除是**不可逆**的。
+  if (
+    !window.confirm(
+      '删除「' + id + '」会**破坏前缀缓存**：知识类型的可选值清单会写进工具的 schema，' +
+        '少一项也要**重写系统提示的开头** ⇒ **所有活跃会话的前缀缓存全部作废**。' +
+        '\n\n⚠️ 这个动作**不可逆**（类型定义会被删掉）。确定吗？',
+    )
+  ) return
   try {
     const r = await fetch(API + '/kind/delete', {
       method: 'POST',
