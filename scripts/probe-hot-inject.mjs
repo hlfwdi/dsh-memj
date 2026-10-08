@@ -37,16 +37,41 @@ console.log('【1】pre-step waterfall：追加的 user 消息是否进最终 de
 
 const ctx = new Context()
 
-/** 造一条插件 user 消息（与方案 §6.1 的形态一致）。 */
-const makeMsg = (text, plugin) => ({
-  id: `${plugin}-${Math.random().toString(36).slice(2, 10)}`,
+/**
+ * 造一条插件 user 消息（与方案 §6.1 的形态一致）。
+ *
+ * 🔴🔴 **2026-10-08 更正：0.2.0 没有 catch-all `plugin` 这个 kind 了。**
+ *    · 旧写法 `{kind:'plugin', plugin:<名>}` 是 0.1.5 的形态；
+ *    · 0.2.0 的 `dsh-llm` 里 `MessageSourceMap` **删掉了它**（注释原话：
+ *      "there is no shared catch-all `plugin` kind"），改为**每个 producer
+ *      声明自己的 kind**，V4 会话日志会硬拒旧形状
+ *      （`SessionFormatError: format v4 message requires a producer-owned source kind`）。
+ *    · 实测自本机 8 个 `session.v4.jsonl.zstd`（逐帧解，共 1.6 万条 source）：
+ *      `dsh-memj` 用 `"plugin:dsh-memj"`（51 处），而 `dsh-prompt-inject`
+ *      用的是**裸包名** `"dsh-prompt-inject"`（47 处）—— **两者前缀规则不同**。
+ *
+ * ⚠️ **别再退回 `plugin`**：本探针第【2】节专门验"两个 pre-step 监听器叠加"，
+ *    如果 kind 写错，它验的就不是真实形态了（探针的价值全在"形状照真实"）。
+ * @param text - 消息正文。
+ * @param kind - **producer 自己的 source kind**（如 `plugin:dsh-memj`）。
+ */
+const makeMsg = (text, kind) => ({
+  id: `${kind}-${Math.random().toString(36).slice(2, 10)}`,
   role: 'user',
   content: [{ type: 'text', text }],
-  source: { kind: 'plugin', plugin, form: 'instructions' },
+  source: { kind, form: 'instructions' },
+})
+
+/** 真人从输入框提交的消息（真实形态：`kind:'user'` + `rpcId`）。 */
+const userMsg = (text) => ({
+  id: `user-${Math.random().toString(36).slice(2, 10)}`,
+  role: 'user',
+  content: [{ type: 'text', text }],
+  source: { kind: 'user', rpcId: 'probe-rpc-1', clientTimeZone: 'Asia/Shanghai' },
 })
 
 // 模拟 agent-loop 的调用形态：默认决策 = 本步准入消息。
-const baseMessages = [makeMsg('用户的问题', 'user')]
+const baseMessages = [userMsg('用户的问题')]
 const call = () => ctx.waterfall('agent/pre-step', {
   agent: { id: 'session-probe-1' },
   messages: baseMessages,
@@ -58,7 +83,7 @@ const call = () => ctx.waterfall('agent/pre-step', {
 // 监听器 A：往 messages 里 push（第一版写法：直接改数组）
 ctx.on('agent/pre-step', async (payload, next) => {
   const d = await next()
-  if (d.kind === 'enter') d.messages.push(makeMsg('HOT-A', 'memj'))
+  if (d.kind === 'enter') d.messages.push(makeMsg('HOT-A', 'plugin:dsh-memj'))
   return d
 })
 
@@ -103,7 +128,7 @@ check('⭐ 顺序稳定（连跑 5 次一致）', new Set(orders).size === 1, `�
 const injected = d2.messages.find((m) => m.content[0].text === 'HOT-A')
 check('追加消息形状合法（id/role/content/source 齐全）',
   injected !== undefined && typeof injected.id === 'string' && injected.role === 'user'
-  && Array.isArray(injected.content) && injected.source?.kind === 'plugin')
+  && Array.isArray(injected.content) && injected.source?.kind === 'plugin:dsh-memj')
 
 // ══════════════════════════════════════════════════════════════════════════
 // 【3】llm/stream 能否读到完整出网 messages
@@ -123,10 +148,12 @@ ctx.on('llm/stream', async function* (options, next) {
 })
 
 // 模拟一次出网请求（options 形状照 `GenerateOptions`：provider/model/messages/sessionId）
+// ⚠️ system 那条用**真实形态** `kind:'system-prompt'`（实测日志里 27 处，
+//    且**不带别的字段**）—— 旧写法 `{kind:'plugin',plugin:'sp'}` 已不存在。
 const outMessages = [
-  { id: 'm0', role: 'system', content: [{ type: 'text', text: 'system' }], source: { kind: 'plugin', plugin: 'sp' } },
-  makeMsg('用户的问题', 'user'),
-  makeMsg('HOT-A', 'memj'),
+  { id: 'm0', role: 'system', content: [{ type: 'text', text: 'system' }], source: { kind: 'system-prompt' } },
+  userMsg('用户的问题'),
+  makeMsg('HOT-A', 'plugin:dsh-memj'),
 ]
 const chunks = []
 for await (const c of ctx.waterfall({}, 'llm/stream', {

@@ -30,7 +30,16 @@ const check = (name, ok, extra = '') => {
 const mod = await import('file://' + LIB.replace(/\\/g, '/'))
 
 const um = (text) => ({ role: 'user', content: [{ type: 'text', text }] })
-const inj = (text) => ({ role: 'user', content: [{ type: 'text', text }], source: { kind: 'plugin', plugin: 'dsh-memj', form: 'instructions' } })
+// ⚠️ **注入夹具的 kind 是 `plugin:dsh-memj`**（0.2.0 的 producer-owned 形态）。
+//    🔴 旧写法 `{kind:'plugin', plugin:'dsh-memj'}` 是 0.1.5 的 catch-all 形态；
+//    0.2.0 起 `dsh-llm` 的 `MessageSourceMap` **删掉了那个 catch-all**，
+//    每个 producer 必须声明自己的 kind，V4 会话日志会**硬拒**旧形状。
+//    实测自本机 8 个 `session.v4.jsonl.zstd`（逐帧解）：memj 的注入就是
+//    `{"kind":"plugin:dsh-memj","form":"instructions"}`。
+//    ⚠️ 它与实现的判据（`active-context.ts` 的 `MEMJ_SOURCE_KIND`）**必须同源** ——
+//    这点尤其要紧，因为**memj 的注入也是 `role:'user'`**：
+//    判据错一个字符 ⇒ 注入被当成"真人输入" ⇒ turn 数暴涨、去重失效。
+const inj = (text) => ({ role: 'user', content: [{ type: 'text', text }], source: { kind: 'plugin:dsh-memj', form: 'instructions' } })
 const am = (blocks) => ({ role: 'assistant', content: blocks })
 const txt = (t) => ({ type: 'text', text: t })
 const rea = (t) => ({ type: 'reasoning', text: t })

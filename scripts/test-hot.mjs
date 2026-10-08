@@ -569,9 +569,18 @@ const injEvent = (seq, timeIso, text) => ({
   seq,
   time: Date.parse(timeIso),
   // ⚠️ **真实形态**：`data.source` + `data.message.content[]`
-  //    （实测自 `session.v3.jsonl.zstd`：`source={kind:plugin,plugin:dsh-memj,form:instructions}`）
+  //
+  // 🔴🔴 **2026-10-08 更正：kind 是 `plugin:dsh-memj`，不是 catch-all `plugin`。**
+  //    · 旧夹具写的是 `{kind:'plugin', plugin:'dsh-memj'}`（0.1.5 的形态）；
+  //    · 0.2.0 起 `dsh-llm` 的 `MessageSourceMap` **删掉了 catch-all `plugin`**，
+  //      每个 producer 必须声明自己的 kind，V4 会话日志会**硬拒**旧形状；
+  //    · 实测自本机 8 个 `session.v4.jsonl.zstd`（多帧 zstd，逐帧解）：
+  //      `user/message` 的 `data.source` = `{"kind":"plugin:dsh-memj","form":"instructions"}`
+  //      （51 处），全库**没有**任何 `kind:"plugin"`。
+  //    ⚠️ 夹具不改的后果：`hot-inject.ts` 的判据 `src?.kind !== 'plugin:dsh-memj'`
+  //      恒真 ⇒ 本文件 20 条断言**全红**，而生产代码其实是对的。
   data: {
-    source: { kind: 'plugin', plugin: 'dsh-memj', form: 'instructions' },
+    source: { kind: 'plugin:dsh-memj', form: 'instructions' },
     message: { role: 'user', content: [{ type: 'text', text }] },
   },
 })
@@ -586,10 +595,15 @@ const injEvent = (seq, timeIso, text) => ({
   const events = [
     injEvent(10, '2026-09-22T10:00:00.000Z', `## memj 热知识（本次会话相关）\n\n- \`${A}\` 甲\n- \`${B}\` 乙`),
     // 中间夹一条**别的插件的**注入（⚠️ 不能被误当成 memj 的）
+    //
+    // ⚠️ **这个夹具的价值恰恰在于"它不是 memj 的 kind"**：判据只认
+    //    `plugin:dsh-memj` ⇒ 别的插件（裸包名 kind）自然被排除。
+    //    实测：`dsh-prompt-inject` 在真实日志里的 kind 就是**裸包名**
+    //    `"dsh-prompt-inject"`（47 处），**没有** `plugin:` 前缀。
     {
       type: 'user/message', seq: 11, time: Date.parse('2026-09-22T10:05:00.000Z'),
       data: {
-        source: { kind: 'plugin', plugin: 'dsh-prompt-inject', form: 'instructions' },
+        source: { kind: 'dsh-prompt-inject', form: 'instructions' },
         message: { content: [{ type: 'text', text: `- \`${C}\` 别的插件注入的` }] },
       },
     },
@@ -639,7 +653,7 @@ const injEvent = (seq, timeIso, text) => ({
     && mod.fingerprintsFromInjectionEvents([null, undefined, {}], [A]).present.size === 0)
   // ⚠️ 反证：**扁平形态**（`data.content` 而非 `data.message.content`）也要能吃
   const flat = mod.fingerprintsFromInjectionEvents(
-    [{ type: 'user/message', time: 2, data: { source: { kind: 'plugin', plugin: 'dsh-memj' }, content: [{ type: 'text', text: `- \`${A}\` 甲` }] } }],
+    [{ type: 'user/message', time: 2, data: { source: { kind: 'plugin:dsh-memj' }, content: [{ type: 'text', text: `- \`${A}\` 甲` }] } }],
     [A])
   check('⭐ 两种正文形态都吃（`data.message.content` 与 `data.content`）',
     flat.present.has(A), JSON.stringify([...flat.present]))
@@ -647,14 +661,17 @@ const injEvent = (seq, timeIso, text) => ({
   // ── ⭐⭐⭐ 【10b】命令注入排在热知识之后 ⇒ 不许把重建判成"从没注入过" ──
   //
   // 🔴 **用户 2026-09-24 实测报的 bug（方案 A）**：
-  //    `plugin: 'dsh-memj'` **命令注入也在用**（如 `/memj-handoff` 的提示词）
+  //    memj 的**命令注入也在用同一个 source.kind**（如 `/memj-handoff` 的提示词，
+  //    见 `commands.ts` 的 `source: { kind: 'plugin:dsh-memj', … }`）
   //    ⇒ 旧实现"只取最近一次 memj 注入"会取到那条**不含任何知识 id** 的文本
   //    ⇒ `present.size === 0` ⇒ 上层判成"从没注入过" ⇒ **页面把每一条都显示成「未注入」**。
   //    实测案例：本会话日志 `11:41:37` 有一条 979 字符、命中 0/19 的注入。
+  //    ⚠️ **注意：这里的 kind 与热知识注入【相同】** —— 这正是本节的难点所在：
+  //       不能靠 kind 区分两者，只能靠"这段文本里有没有指纹"。
   const cmdInjection = {
     type: 'user/message', seq: 30, time: Date.parse('2026-09-23T09:00:00.000Z'),
     data: {
-      source: { kind: 'plugin', plugin: 'dsh-memj', form: 'instructions' },
+      source: { kind: 'plugin:dsh-memj', form: 'instructions' },
       message: { content: [{ type: 'text', text: '## 请做一次记忆 handoff\n\n按 `memj_handoff` 工具的说明执行。要点：…' }] },
     },
   }
@@ -737,7 +754,7 @@ section('【10c】⭐⭐ 共享比对实现 `fingerprintsInText`（2026-09-24 �
   const msgs = [{ role: 'user', content: [{ type: 'text', text }] }]
   const viaWatchdog = mod.idsInWindow(msgs, [U1, U2, persona])
   const viaRebuild = mod.fingerprintsFromInjectionEvents(
-    [{ type: 'user/message', time: Date.now(), data: { source: { kind: 'plugin', plugin: 'dsh-memj' }, message: { content: [{ type: 'text', text }] } } }],
+    [{ type: 'user/message', time: Date.now(), data: { source: { kind: 'plugin:dsh-memj' }, message: { content: [{ type: 'text', text }] } } }],
     [U1, U2, persona]).present
   check('⭐⭐ **看门狗与重建的结论逐条一致**（共用实现的核心价值）',
     [...viaWatchdog].sort().join(',') === [...viaRebuild].sort().join(','),
@@ -809,7 +826,7 @@ section('【10d】⭐⭐⭐ decideInjection：内存缺失时从日志补快照�
   const injEv = (texts) => ({
     type: 'user/message',
     time: Date.now(),
-    data: { source: { kind: 'plugin', plugin: 'dsh-memj' }, message: { content: texts.map((t) => ({ type: 'text', text: t })) } },
+    data: { source: { kind: 'plugin:dsh-memj' }, message: { content: texts.map((t) => ({ type: 'text', text: t })) } },
   })
 
   // ⚠️ **前置条件**：先确认夹具真的被扫到了 —— 否则下面的断言全是假绿。

@@ -632,13 +632,24 @@ console.log('\n【15】⭐⭐⭐ 意图门必须【点名 memj 工具】（2026-
 // ⚠️ 本节夹具**照真实会话日志的形状**（`source.kind`）—— 不是我以为的形状。
 //    本项目刚因为这个栽过一次（`parentSessionIdOf` 读错了字段位置），
 //    那次是"假夹具让错的实现全绿"。
+//    🔴🔴 **2026-10-08 更正：0.2.0 没有 catch-all `plugin` 这个 kind 了。**
+//    `dsh-llm` 的 `MessageSourceMap` **删掉了它**，改为每个 producer 声明自己的
+//    kind（V4 会话日志会硬拒旧形状）。实测自本机 8 个 `session.v4.jsonl.zstd`
+//    （逐帧解，16 313 条 source）的真实取值：
+//      memj 自身 = `"plugin:dsh-memj"`（51 处，字段 `form`）
+//      别的插件 = **裸包名** 如 `"dsh-prompt-inject"`（47 处）
+//      系统提示快照 = `"runtime-context"`（39 处，字段 `form`+`sections`）
+//      系统提示本体 = `"system-prompt"`（27 处，**无别的字段**）
+//      别的 agent = `"agent-message"`（字段 `form`+`senderSessionId`）
+//    ⇒ **全库没有任何 `kind:"plugin"`**。旧夹具会让本节断言全绿**而其实没在验真形态**
+//      （`extractUserSubmit` 只判 `kind==='user'`，所以它一直"碰巧"是对的）。
 {
   const { extractUserSubmit } = mod
 
-  // ── 夹具：真实日志里出现过的 source 形态（逐条抄自实测数据）──
+  // ── 夹具：真实日志里出现过的 source 形态（逐条按实测数据更正）──
   const realUser       = { kind: 'user', rpcId: 'cf87a6cc-e7cf-4a99-9a83-a4cfd5f0dd3e', clientTimeZone: 'Asia/Shanghai' }
-  const realPluginMemj = { kind: 'plugin', plugin: 'dsh-memj', form: 'instructions' }
-  const realSnapshot   = { kind: 'plugin', plugin: '@deepseek-ai/dsh-system-prompt', form: 'snapshot', sections: [] }
+  const realPluginMemj = { kind: 'plugin:dsh-memj', form: 'instructions' }
+  const realSnapshot   = { kind: 'runtime-context', form: 'snapshot', sections: [] }
   const realRelay      = { kind: 'agent-message', form: 'relay', senderSessionId: 'x' }
   const msg = (source, text) => ({ id: 'm1', role: 'user', source, content: [{ type: 'text', text }] })
 
