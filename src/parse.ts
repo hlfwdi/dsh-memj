@@ -30,7 +30,14 @@
  */
 
 import { parse as parseYaml } from 'yaml'
-import { ENTRY_KINDS, isEntryKind, type Cover, type CoverIssue, type EntryKind, type ParsedCover } from './schema.ts'
+import {
+  isEntryKind,
+  selectableKindList,
+  type Cover,
+  type CoverIssue,
+  type EntryKind,
+  type ParsedCover,
+} from './schema.ts'
 // ⭐ 节名走**唯一源头**（`sections.ts` 零依赖 ⇒ 不会形成 store ⇄ parse 循环引用）。
 import { cutKnowledgeSection } from './sections.ts'
 
@@ -269,12 +276,21 @@ export function validateCoverShape(
   // ④ tags 至少 1 个（§3.9.2 第 5 项）。
   if (cover.tags.length === 0) issues.push('tags 为空（至少 1 个）')
 
-  // ④b `kind` 若给了，必须是受控四值之一（§3.9.2 第 5b 项 / 决策 81）。
+  // ④b `kind` 若给了，必须是**当前词表**之一（§3.9.2 第 5b 项 / 决策 81 / 决策 217）。
   //     ⚠️ 留空**合法**（= 未分类），只有"填了非法值"才报错。
   if (rawKind !== undefined && rawKind !== '') {
     if (!isEntryKind(rawKind)) {
       issues.push(
-        `kind 的取值非法：「${rawKind}」——只能是 ${ENTRY_KINDS.join(' / ')} 之一，或留空`,
+        // 🔴 **决策 217 修**：旧写法是 `${ENTRY_KINDS.join(' / ')}`，有两个错 ——
+        //    ① 读**编译期表** ⇒ **不含用户在【知识类型】页新加的类型**
+        //      （而报错的用途恰恰是"告诉模型能填什么"）；
+        //    ② `ENTRY_KINDS` **含保留项 `history`** ⇒ 把它也列给模型，
+        //      等于诱导它手工造一条**检索不到的**条目。
+        //    ✅ 改用 `selectableKindList()`：读**当前值**、且**排除保留项**。
+        //    ⚠️ 同款错误在 `handoff.ts`（两处）也犯过，**那两处已于同批修掉** ——
+        //      这里是**漏网的一处**（我当时只扫了 `handoff.ts` / `tools.ts`，没扫全）。
+        //    ⭐ 判据：**改完一类文案要扫【全部】源码文件，不能只扫记得住的那几个。**
+        `kind 的取值非法：「${rawKind}」——只能是 ${selectableKindList()} 之一，或留空`,
       )
     }
   }

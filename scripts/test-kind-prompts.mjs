@@ -16,7 +16,7 @@
  *    `score:*`）里 `{{}}` 是**合法**的 —— 那套闸必须只管"交给 DSH"的那些。
  *    （第一版设成全局，当场误伤 `handoff:prompt-steps`，被 `check-prompt-specs` 抓到。）
  */
-import { mkdtempSync, mkdirSync, readFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -112,8 +112,49 @@ console.log('\n【5】静态反证：不许再出现写死的四值')
   const all = CT + HD + PD
   check(!/fact\s*\/\s*trap\s*\/\s*howto/.test(all), '三段文本里没有写死的 `fact / trap / howto` 清单')
   check(!/\|\s*`fact`\s*\|\s*是什么/.test(CT), 'context 里没有写死的骨架表')
+
+  /**
+   * 🔴🔴 **范围必须扫【全部源码】，不能只扫记得住的那几个文件**（决策 217 补）。
+   *
+   * ⚠️ **我第一版就写成了 `readFileSync('src/tools.ts')`** —— 而**同一批我在 `handoff.ts`
+   *    修掉了同款错误、却漏了 `parse.ts`**（那里的 `ENTRY_KINDS.join()` 一直没被发现）。
+   *    ⭐ 这条防线**当时是绿的**，因为**它根本没看那个文件** ——
+   *      正是库里 `5f063b9b`「**校验范围过窄会比"漏检"更糟：它报绿**」讲的形态。
+   * ⭐ 判据：**静态扫源码时，作用域要覆盖"这类错误可能出现的地方"，而不是"我这次改的地方"。**
+   */
+  const srcDir = join(process.cwd(), 'src')
+  const files = []
+  const walk = (d) => {
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      const p = join(d, e.name)
+      if (e.isDirectory()) { if (e.name !== 'web') walk(p) } else if (e.name.endsWith('.ts')) files.push(p)
+    }
+  }
+  walk(srcDir)
+  check(files.length >= 15, `扫到 ${files.length} 个 .ts 文件（作用域够宽）`)
+
+  /** 写死四值的各种形态（斜杠 / 顿号 / 竖线分隔都算）。 */
+  const HARDCODED = [
+    /fact\s*\/\s*trap\s*\/\s*howto/,
+    /fact\s*、\s*trap\s*、\s*howto/,
+    /'fact'[\s\S]{0,40}'trap'[\s\S]{0,40}'howto'/,
+    /ENUM_OF_KINDS|ENTRY_KINDS\.join/,
+  ]
+  const hits = []
+  for (const f of files) {
+    const t = readFileSync(f, 'utf8')
+    // 逐行判：**跳过注释行**（本文件里就有大量解释性注释会谈起这些字面量）
+    const lines = t.split('\n')
+    for (const [i, l] of lines.entries()) {
+      if (/^\s*(\/\/|\*|\/\*)/.test(l)) continue
+      if (HARDCODED.some((re) => re.test(l))) {
+        hits.push(`${f.replace(process.cwd(), '.')}:${i + 1}  ${l.trim().slice(0, 90)}`)
+      }
+    }
+  }
+  check(hits.length === 0, `全部 ${files.length} 个源码文件里没有写死四值 / \`ENTRY_KINDS.join()\``, hits.slice(0, 4).join(' | '))
+
   const tools = readFileSync(join(process.cwd(), 'src', 'tools.ts'), 'utf8')
-  check(!/只能是 fact\/trap\/howto\/decision/.test(tools), 'tools.ts 的报错文案不再是写死四值')
   check(/get: descOf/.test(tools), 'kindParam 的 description 用了 getter（每轮现算）')
 }
 
