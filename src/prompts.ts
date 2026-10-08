@@ -847,6 +847,10 @@ const PROMPT_SPECS_RAW: readonly PromptSpec[] = [
   //       措辞一松，模型就又会忽略各节的规范。
   //    ⚠️ **与 `tpl:guidance-*` 的区别**：那几条是**从模板渲染**（另一个来源，会漂）；
   //       这两条的**内容由正文现读**，它们只是**外壳文案**。
+  //    🔴🔴 **决策 222 改了它的触发位置**：从"每次阅读都给"改成"**只在整篇读时给一次**"
+  //       —— 用户当场否掉旧位置：*"现在他每一次阅读全都要给他一遍，这有点奇怪吧"*
+  //       （三点都对：无条件 / 重复 7 遍 / 位置错）。**退役的理由不适用于本条**：
+  //       它仍被 `full` 与交接回执用着，所以**保留登记、改的是调用点**。
   {
     key: 'reads:section-spec-head',
     injectMode: '工具返回值（进模型上下文；不进 node 0、不破前缀缓存）',
@@ -863,6 +867,39 @@ const PROMPT_SPECS_RAW: readonly PromptSpec[] = [
     breaksCache: 'no',
     sourceFile: F.reads,
     sourceConst: 'SECTION_SPEC_CLOSING',
+    hotReload: 'immediate',
+    editable: true,
+    checks: [{ kind: 'nonEmpty' }],
+  },
+  // ⭐⭐⭐ 交接回执里的「本次没动的节」点名（决策 222，2026-10-12 用户裁定）。
+  //    🔴🔴 **它才是"规范会被执行"的那一环** —— 221 只解决了"看得见"，
+  //       而实测证明**看得见不等于会去做**（用户原话：*"刚刚为什么没有做呢？"*；
+  //       同一个会话里我看到规范清单、也量了「目标」节，却只把它写成了"汇报"）。
+  //    ⚠️ `handoff:untouched-sections` 带一个 `{{sections}}` 插槽（由程序填真实节名）——
+  //       🔴 **文案本身不能列节名**（那会与文档实际结构漂开）。
+  {
+    key: 'handoff:untouched-sections',
+    injectMode: '工具返回值（进模型上下文；不进 node 0、不破前缀缓存）',
+    breaksCache: 'no',
+    sourceFile: F.reads,
+    sourceConst: 'HANDOFF_UNTOUCHED_SECTIONS',
+    hotReload: 'immediate',
+    editable: true,
+    checks: [
+      { kind: 'nonEmpty' },
+      {
+        kind: 'slots',
+        tokens: ['sections'],
+        why: '它是"本次没动过的那几个节"的实际名字，由程序现填；删了模型就不知道是哪些节',
+      },
+    ],
+  },
+  {
+    key: 'handoff:untouched-closing',
+    injectMode: '工具返回值（进模型上下文；不进 node 0、不破前缀缓存）',
+    breaksCache: 'no',
+    sourceFile: F.reads,
+    sourceConst: 'HANDOFF_UNTOUCHED_CLOSING',
     hotReload: 'immediate',
     editable: true,
     checks: [{ kind: 'nonEmpty' }],

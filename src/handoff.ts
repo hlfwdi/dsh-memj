@@ -99,7 +99,12 @@ import {
 } from './templates.ts'
 // ⭐⭐⭐ 决策 167：落知识时**由插件自己记一笔**（供轮次结束的自动规范化判断）。
 import { noteKnowledgeWritten } from './tag-auto-state.ts'
-import { pendingSnapshots } from './reads.ts'
+// ⭐⭐ 决策 222：交接回执里那段「本次没动的节」的点名（两条文案 + 一个插槽）。
+import {
+  HANDOFF_UNTOUCHED_CLOSING,
+  HANDOFF_UNTOUCHED_SECTIONS,
+  pendingSnapshots,
+} from './reads.ts'
 import { narrativeFromProjectText } from './parse.ts'
 import {
   countHistoryPlaceholders,
@@ -111,7 +116,8 @@ import {
 } from './history.ts'
 import { readNarrativeMirror, writeNarrativeMirror } from './narrative.ts'
 // ⭐ 决策 209：建项目回执里要报"本模板没有可截断的节"（那句文案走提示词页、可编辑）。
-import { promptText } from './prompts.ts'
+// ⚠️ 决策 222 起本文件也用它填**插槽**（`{{sections}}`）⇒ `fillSlots` 一并引入。
+import { fillSlots, promptText } from './prompts.ts'
 import type { Template } from './templates.ts'
 
 /**
@@ -3023,12 +3029,38 @@ export async function runHandoff(
   // ⭐⭐ **合并回执**（决策 109）：说清"哪些节这次没写、沿用了旧内容"。
   //    🔴 为什么必须报：合并让"没写"变成**安全的默认**，但也带来新的静默风险——
   //    模型**以为清空了、其实没清**；或**忘了写某个本该更新的节**。
+  //
+  // ⭐⭐⭐ **决策 222（2026-10-12 用户裁定）：这一段同时承担「该整理哪一节」的触发点。**
+  //
+  // 🔴🔴 **为什么必须在这里补**（用户当场问出来的）：
+  //    *"写书写规范的目的不就是让他在做交接的时候去按规范去整理和书写吗？刚刚为什么没有做呢？"*
+  //    ⇒ 决策 221 只把规范**变显眼**（列在 `memj_read` 的返回值最前面），
+  //      而**实测证明"看得见"不够**：同一个会话里我逐节读文档时**看到了**那份清单、
+  //      也**真的去量了**「目标」节（18616 字符 / 0 个 `###`）——
+  //      然后把它写成了**"给用户的汇报"**，而**不是"我要做的事"**。
+  //    ⭐ 判据：**规范需要一个【触发点】，不能只靠"它就在那儿"。**
+  //
+  // ⭐ 为什么触发点选在**这里**（而不是每次阅读）：
+  //    · 用户同时否掉了"每次阅读都给"（*"这有点奇怪吧"* —— 无条件 / 重复 7 遍 / 位置错）；
+  //    · 而**交接正是"按规范整理文档"这件事真正该发生的地方**；
+  //    · 本段**本来就在报"哪些节沿用了旧内容"** ⇒ 把"逐条对照规范"挂上去**零额外成本**。
   if (inheritedSections.length > 0) {
     lines.push(
       `\n📄 **叙事合并**：本次未写的 ${inheritedSections.length} 个节**沿用了原有内容**：` +
         `${inheritedSections.map((s) => `\`${s}\``).join('、')}。\n` +
         '    ⚠️ 若其中某个节**本该更新**，请把它写进 `doc` 重调；' +
         '要**清空**某节，就把它写出来、内容留空。',
+    )
+    // ⭐⭐ **决策 222：点名 + 要求逐条对照各节自己的规范**。
+    //    ⚠️ 名单用 `fillSlots` 现填（`{{sections}}`），**不在文案里写死节名** ——
+    //       节名由该文档自己的模板决定（自定义模板完全不同），写死必然漂开。
+    lines.push(
+      '\n' +
+        fillSlots(promptText('handoff:untouched-sections', HANDOFF_UNTOUCHED_SECTIONS), {
+          sections: inheritedSections.map((s) => `\`${s}\``).join('、'),
+        }) +
+        '\n    ' +
+        promptText('handoff:untouched-closing', HANDOFF_UNTOUCHED_CLOSING),
     )
   }
 

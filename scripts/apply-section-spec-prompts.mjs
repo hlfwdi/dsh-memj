@@ -11,11 +11,14 @@
  *
  * 用法：node scripts/apply-section-spec-prompts.mjs [port]
  *   ⚠️ 它做的是"运维动作"（改库里的覆盖层 + 固化源码），**不进 run-all-tests**。
+ *
+ * ⭐ **决策 222 起它也负责新增的两条**（交接回执里的「本次没动的节」点名）——
+ *    见下面 `PROMPTS` 里那两条带 `{{sections}}` 的。
  */
 const PORT = Number(process.argv[2] ?? 3107)
 const API = `http://127.0.0.1:${PORT}/plugins/dsh-memj/api`
 
-/** 三条要落的提示词（与源码常量逐字一致）。 */
+/** 要落的提示词（与源码常量逐字一致）。 */
 const PROMPTS = {
   'reads:section-spec-head':
     '📐 **本文档各节的写作规范**（逐节对照——写之前先看有没有哪一节已经不符合它自己的规范）：',
@@ -26,6 +29,14 @@ const PROMPTS = {
   'reads:snapshot-closing':
     '🔴 **逐条判断"它确实和本次要落盘的项目相关吗"**——读了不等于用上了；' +
     '不相关的要排除，否则会拿无关知识去凑主题证据。',
+  // ⭐ 决策 222 新增：交接回执里那段「本次没动的节」的点名。
+  //    🔴 `{{sections}}` **要原样保留** —— 它是插槽，由程序在运行期填真实节名。
+  'handoff:untouched-sections':
+    '📋 **本次没动过的节（{{sections}}）**——逐条对照它们**自己的**规范，看有没有哪一节已经不符合了：',
+  'handoff:untouched-closing':
+    '⚠️ 上面这些节本次**原样保留**（合并规则：没写的节沿用旧内容）。规范就写在各节标题下那个 ' +
+    '`memj:spec` 围栏块里——⭐ **若某节已经明显不符合它自己的规范，现在就把它整理进 `doc`** ' +
+    '（要整节重写就带上它的全文）。⚠️ 但**不要为了"顺便"去改没问题的节**。',
 }
 
 const post = async (path, body) => {

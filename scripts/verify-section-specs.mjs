@@ -48,7 +48,11 @@ console.log('═══ ① 纯函数：规范清单的渲染形态 ═══')
     '⭐ 收尾取自可编辑提示词 `reads:section-spec-closing`')
 
   // ══ ② 端到端：真建项目 ⇒ 读它 ⇒ 看交付文本 ══
-  console.log('\n═══ ② 端到端：读项目文档时，规范真的排在最前面 ═══')
+  console.log('\n═══ ② 端到端：清单的形态与同源性 ═══')
+  // 🔴 **决策 222 改了交付时机**：清单**只在整篇读时给**（原先每次阅读都给）。
+  //    ⚠️ 本组验的是 `renderSectionSpecs()` 的**内容与同源性**（时机由
+  //       `verify-untouched-callout.mjs` 那套件盯）；标题里的"排在最前面"
+  //       是**渲染顺序**，与"什么时候渲染"是两件事（别混）。
   const CFG = { ...mod.DEFAULT_CONFIG, themeCreation: 'loose', backupGit: false }
   const seed = await mod.runHandoff({
     project: 'spec221',
