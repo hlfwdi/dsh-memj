@@ -675,6 +675,9 @@ export {
   insertSpecBlocks,
   // ⭐⭐⭐ 决策 156：挂靠依据核对（`themeWhy` 有没有逐字引所挂主题的 desc）——纯函数。
   quoteAppearsIn,
+  // ⭐⭐⭐ 决策 223：算各节字符数（**"强提醒"的原料** —— 工具不再自动归档，
+  //    改成把它量不出来的那个数字报给模型）。测试要直接验它。
+  measureSections,
 } from './handoff.ts'
 export type {
   HandoffRequest,

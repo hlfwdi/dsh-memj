@@ -30,14 +30,16 @@ console.log('═══ ① 纯函数：规范清单的渲染形态 ═══')
   const mod = await import(pathToFileURL(join(process.cwd(), 'lib', 'index.js')).href)
 
   const specs = [
-    { title: '目标', spec: '只保留总目标与最新批次', truncate: false },
-    { title: '当前进度', spec: '做到哪了\n（新进展必须写进这一节）', truncate: true },
+    { title: '目标', spec: '只保留总目标与最新批次' },
+    { title: '当前进度', spec: '做到哪了\n（新进展必须写进这一节）' },
   ]
   const text = mod.renderSectionSpecs(specs)
   chk(text.includes('目标') && text.includes('当前进度'), '两节的节名都在')
   chk(text.includes('只保留总目标与最新批次'), '规范原文**逐字**出现')
   chk(text.includes('（新进展必须写进这一节）'), '⭐ 多行规范**没被截断**（换行也保留）')
-  chk(text.includes('可自动截断归档'), '⭐ 带 `truncate` 的节被标出来（这是程序读的语义，模型也该知道）')
+  // 🔴 **决策 223（2026-10-12）：不再标"（可自动截断归档）"** ——
+  //    那个标记已整个废除（归档交给模型按各节规范做）⇒ 渲染里也不该再出现它。
+  chk(!text.includes('可自动截断归档'), '⭐ 不再标"可自动截断归档"（标记已废）')
   chk(!text.includes('失败/踩坑'), '⚠️ 没有规范的节**不出现**（不编造 —— 决策 207）')
   chk(mod.renderSectionSpecs([]) === '', '⭐ 一节规范都没有 ⇒ 返回空串（不输出空标题）')
 

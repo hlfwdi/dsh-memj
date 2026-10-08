@@ -52,9 +52,8 @@ import {
   syncEntryFrontmatter,
   writeProjectDoc,
   writeThemeDoc,
-  // ⭐⭐ 决策 220：改完规范后，`truncateSections` **从正文反解**再回写
-  //    （与 handoff 落盘同一条纪律：**正文权威、frontmatter 跟随**）。
-  truncateTitlesFromBlocks,
+  // 🔴 决策 223（2026-10-12）：`truncateTitlesFromBlocks` 已删除 ——
+  //    改规范后**不再刷新 `truncateSections` 镜像**（那个字段没人读它了）。
 } from './store.ts'
 import { validateCoverShape } from './parse.ts'
 import type { Cover, EntryKind } from './schema.ts'
@@ -853,14 +852,12 @@ export async function setProjectDesc(id: string, desc: string): Promise<EditResu
  * @param id - 项目 id。
  * @param title - 节名（**精确匹配**）。
  * @param spec - 新的规范正文。
- * @param truncate - 新的截断标记（该节是否参与自动截断归档）。
  * @returns 结果。
  */
 export async function setSectionSpec(
   id: string,
   title: string,
   spec: string,
-  truncate: boolean,
 ): Promise<EditResult> {
   const blocked = await guardProjectEditable(id)
   if (blocked !== null) return blocked
@@ -874,7 +871,7 @@ export async function setSectionSpec(
   const before = sectionSpecsOf(doc.narrative).find((s) => s.title === name)
   // ⚠️ **只调一次**（读 status 与 narrative 都从这一次拿）——调两次是白算一遍、
   //    且两处若传入参数不一致就会静默分叉（本项目"同一件事两条实现"的老坑）。
-  const applied = setSectionSpecBlock(doc.narrative, name, spec, truncate)
+  const applied = setSectionSpecBlock(doc.narrative, name, spec)
   if (applied.status === 'no-section') {
     return no(`项目 \`${id}\` 的文档里没有「${name}」这一节（节名必须与正文的 \`## \` 标题逐字相同）。`)
   }
@@ -888,7 +885,7 @@ export async function setSectionSpec(
         '要给它加规范，请直接在该项目的交接文档里手写一个 \u0060\u0060\u0060memj:spec 围栏块。',
     )
   }
-  if (before !== undefined && before.spec === spec.trim() && before.truncate === truncate) {
+  if (before !== undefined && before.spec === spec.trim()) {
     return ok(`「${name}」的规范没有变化，未写入。`)
   }
 
@@ -907,9 +904,9 @@ export async function setSectionSpec(
       ...doc.frontmatter,
       createdAt: (doc.frontmatter.createdAt ?? '') !== '' ? doc.frontmatter.createdAt : nowIso,
       updatedAt: nowIso,
-      // ⭐ 边界 3：**从新正文反解**截断目标（正文权威），而不是在旧数组上加减。
-      //    ⚠️ 旧镜像本来就与正文不一致时，"加减一个名字"会把错的那份固化下来。
-      truncateSections: truncateTitlesFromBlocks(narrative),
+      // 🔴 **决策 223：不再刷新 `truncateSections`** —— 那个镜像没有消费者了
+      //    （归档规则改成各节规范里的自然语言）⇒ 维护它只会制造"两份值"的漂移风险。
+      //    ⚠️ **存量值原样透传**（`...doc.frontmatter` 已带上），不主动清空。
     },
     narrative,
     doc.covers,
@@ -920,9 +917,6 @@ export async function setSectionSpec(
   const marks: string[] = []
   if (before !== undefined && before.spec !== spec.trim()) {
     marks.push(`规范 ${[...before.spec].length} → ${[...spec.trim()].length} 字符`)
-  }
-  if (before !== undefined && before.truncate !== truncate) {
-    marks.push(`可自动截断：${before.truncate ? '是' : '否'} → ${truncate ? '是' : '否'}`)
   }
   return ok(
     `已更新项目 \`${id}\` 的「${name}」规范${marks.length > 0 ? `（${marks.join('；')}）` : ''}。`,

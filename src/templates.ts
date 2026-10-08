@@ -129,10 +129,16 @@ export const TEMPLATE_ID_RE = /^[a-z0-9][a-z0-9-]{0,46}[a-z0-9]$/
 export interface TemplateSection {
   /** 节名（`## ` 后面那个词）。 */
   name: string
-  /** ⭐ **这一节要干嘛**（必填；会拼进写作指导）。 */
+  /**
+   * ⭐⭐ **这一节的书写规范**（必填）—— 会进该节的规范块，**模型按它写这一节**。
+   *
+   * 🔴🔴 **决策 223（2026-10-12）起，它还可能承载"归档规则"**（自然语言）：
+   *    用户裁定"**归档完全交给模型、规则写在各节的书写规范里**"，工具不再执行归档
+   *    （它读不懂自然语言）⇒ **规范里怎么写，模型就怎么做**。
+   *    ⚠️ 所以规范要写得**模型能自检**：**把数字写死**（如"超过 20000 字符"），
+   *       因为工具会在交接回执里**把实际字符数报给它**，有确切数字才对照得上。
+   */
   desc: string
-  /** 是否参与自动截断（至多一节为 true）。 */
-  truncate?: boolean
 }
 
 /** 一份模板。 */
@@ -146,13 +152,19 @@ export interface Template {
 /**
  * ⭐ **内置默认模板**（= 改造前的硬编码六节）。
  *
- * 🔴 `truncate` 落在「当前进度」——与既有实现一致（`PROGRESS_TITLE`）。
- *
  * ⭐⭐ **2026-10-12（决策 208）：`default` 也落盘，用户可直接编辑它。**
  *   ⇒ 本函数是**纯函数回落值**（磁盘上没有那份文件时用它）；
  *     真正"当前生效的默认模板"请用 **`loadDefaultTemplate()`**（它读盘优先）。
  *   ⚠️ **为什么必须留一个纯函数的版本**：很多地方（校验、测试、UI 初值）要一个
  *     不依赖磁盘的确定值；而"用户改过默认模板"这件事只影响**新建项目**。
+ *
+ * 🔴🔴 **2026-10-12（决策 223）：`truncate` 标记已废除，归档规则改成写进 `desc`。**
+ *   · **旧**：`{ name:'当前进度', truncate: true }` + 设置页两个全局旋钮
+ *     ⇒ 工具**自动**截断并落 `history` 条目；
+ *   · **新**：规则**写成自然语言放进这一节的书写规范**，**由模型执行**；
+ *     工具不再执行，只在交接回执里**报出各节字符数**（让模型有数字可对照）。
+ *   ⭐ 用户原话：*"什么阈值触发，压缩目标，要不要截断，怎么归档，归档到什么类型
+ *     完全由章节的书写规范去定。"*
  */
 export function defaultTemplate(): Template {
   return {
@@ -160,8 +172,31 @@ export function defaultTemplate(): Template {
     id: 'default',
     title: '默认（六节）',
     sections: [
-      { name: '目标', desc: '这个项目要做什么' },
-      { name: '当前进度', desc: '做到哪了（新进展必须写进这一节）', truncate: true },
+      { name: '目标', desc: '这个项目要做什么。只保留**总目标**与**最新批次的目标**，用 `###` 子章节分开。' },
+      {
+        name: '当前进度',
+        desc: [
+          '做到哪了（新进展必须写进这一节）。',
+          '',
+          '· **新批次写在【最上面】**——最新的进展永远排在本节开头，越往下越旧。',
+          '· **每个批次一个 `###` 小节**，标题格式：',
+          '  `### 第N批（YYYY-MM-DD）：<一句话主题>`',
+          '  例：`### 第一百零二批（2026-10-12）：归档交给模型`',
+          '  ⚠️ 批号用中文数字（如 `第三十八批`），日期用 `YYYY-MM-DD`；同一批次只写一个小节。',
+          '· **本节超过 20000 字符**时，把**最早的那些 `###` 小节整节挪走**：',
+          '  · 挪到哪：用 `memj_handoff` 的 `entries` 落成 **`kind: history`** 的条目；',
+          '    `history` **不参与检索**（是留档、不是知识）——⚠️ 若写成别的类型，它就会正常参与检索；',
+          '  · 正文**原文照收、一字不改**（归档的意义就是留原话），`title`/`desc` 写清是哪几批；',
+          '  · `slug` 用英文，形如 `dsh-memj-history-b32-b37`（项目名 + `history` + 批号区间）；',
+          '  · 原处**只留一行指针**：**完整 uuid** + **一句话批次主题**，',
+          '    例：`· 第32~37批：早期设置页改造 —— 详见条目 9f3c1a2b-…`（uuid 要能直接读回）；',
+          '  · 一直挪到**本节不超过 12000 字符**为止。',
+          '· **`### 历史进展` 小节**：它集中列出全部已归档批次的指针，放在本节**最末尾**。',
+          '',
+          '⚠️ 工具**不会**替你归档（它读不懂这段规范）——它只在交接回执里**报出本节当前多少字符**，',
+          '你据此判断该不该动手。',
+        ].join('\n'),
+      },
       { name: '有效做法', desc: '被验证过的工作方法' },
       { name: '失败/踩坑', desc: '出过的错与根因' },
       { name: '关键上下文', desc: '接手人必须知道的事实（路径、id、机制）' },
@@ -359,9 +394,9 @@ export function templateSectionNames(t: Template): string[] {
  *   ⭐ 于是**同一份文件**既是"模板"、又是人能直接读懂的结构说明 ——
  *     这正是用户要的"把初始模板作为一个文档模板存 md"。
  *
- * 🔴 **"可截断"怎么表达**：写成标题行末的 ` <!-- truncate -->`（HTML 注释，
- *   在渲染出的页面里**不显示**、不干扰人阅读）⇒ 与 `truncateTitlesFromSpec()` 的取向一致：
- *   **机器标记要能被人忽略**。
+ * 🔴 **"可截断"已不再是一个标记**（决策 223）：归档规则**直接写进那一节的 `desc`**
+ *   —— 也就是它必须写成**自然语言**（如"本节超过 20000 字符时……"）。
+ *   ⚠️ 所以模板里**没有** `<!-- truncate -->` 这类机器标记了；解析侧对存量**仍宽容**。
  * @param t - 模板。
  * @returns markdown 全文（末尾带换行）。
  */
@@ -377,9 +412,8 @@ export function renderTemplateDoc(t: Template): string {
     '',
     `<!-- 这是模板 \`${t.id}\`：\`## \` 标题 = 节名；标题下的 ${FENCE}${SPEC_BLOCK_FENCE} 围栏里写"这一节要干嘛"。`,
     '     ⭐ 建项目时工具会把**整份结构（含规范块）**复制成那份项目文档，此后两者解耦（改这里不影响已有文档）。',
-    `     ⚠️ 只有**要参与自动截断归档**的节，才在围栏那一行末尾加 \`truncate\`：`,
-    `        · 截断： ${FENCE}${SPEC_BLOCK_FENCE} truncate`,
-    `        · 不截断：${FENCE}${SPEC_BLOCK_FENCE}      ← 大多数节是这种（本节共 ${t.sections.filter((s) => s.truncate === true).length} 节写了 truncate） -->`,
+    '     ⭐ **归档规则也写在这里**（自然语言）：想让某一节自动瘦身，就把"超过多少字符、', 
+    '        把什么归档成什么类型、原处留什么"写进那一节的围栏里 —— 由模型照它执行。 -->',
     '',
   ]
   for (const s of t.sections) {
@@ -387,12 +421,7 @@ export function renderTemplateDoc(t: Template): string {
     // ⭐⭐ 决策 209：desc 放进**规范块**（与项目文档同形）。
     //    ⚠️ 即使 desc 是空串也照样写围栏 —— 否则解析回来分不清
     //       "这一节没有规范"与"规范是空的"，而后者是**校验要报的错**。
-    parts.push(
-      `${FENCE}${SPEC_BLOCK_FENCE}${s.truncate === true ? ' truncate' : ''}`,
-      s.desc.trim(),
-      FENCE,
-      '',
-    )
+    parts.push(`${FENCE}${SPEC_BLOCK_FENCE}`, s.desc.trim(), FENCE, '')
   }
   return `${parts.join('\n').trimEnd()}\n`
 }
@@ -431,9 +460,9 @@ export function parseTemplateDoc(text: string, fallbackId: string): Template | u
     const head = /^##\s+(.+?)\s*$/.exec(seg[0] ?? '')
     if (head === null) { curFrom = -1; return }
     let name = (head[1] ?? '').trim()
-    // ⚠️ **兼容旧的 `<!-- truncate -->` 行末标记**（决策 208 的存量模板）；
-    //    新形态的标记在规范块的围栏起始行上（见下）。
-    const legacyTrunc = /<!--\s*truncate\s*-->/i.test(name)
+    // ⚠️ **兼容旧版遗留的 `<!-- truncate -->` 行末标记** ——
+    //    决策 223 起归档标记已废除，但**存量模板里可能还带着它**
+    //    ⇒ 读侧**照旧剥掉**（否则它会留在节名里 ⇒ 节名对不上 ⇒ 模板看起来坏了）。
     name = name.replace(/<!--\s*truncate\s*-->/i, '').trim()
     if (name === '') { curFrom = -1; return }
     // ⭐⭐ 决策 209：**围栏的内容 = desc**（`specBlockRange` 是唯一边界实现）。
@@ -445,9 +474,9 @@ export function parseTemplateDoc(text: string, fallbackId: string): Template | u
     const desc = r === undefined
       ? seg.slice(1).join('\n').trim()
       : seg.slice(r.bodyStart, r.bodyEnd).join('\n').trim()
-    const sec: TemplateSection = { name, desc }
-    if (r?.truncate === true || legacyTrunc) sec.truncate = true
-    sections.push(sec)
+    // 🔴 **决策 223：不再读 `truncate`** —— 归档规则现在是 `desc` 里的自然语言，
+    //    ⇒ 围栏起始行的后缀（若有）**被解析侧忽略**（`specBlockFenceInfo` 仍认那行）。
+    sections.push({ name, desc })
     curFrom = -1
   }
 
@@ -525,12 +554,12 @@ export function normalizeTemplate(raw: unknown): Template | undefined {
     const so = s as Record<string, unknown>
     const name = typeof so['name'] === 'string' ? so['name'] : ''
     if (name === '') continue
-    const sec: TemplateSection = {
+    // 🔴 **决策 223：`truncate` 不再读**（归档规则改由 `desc` 的自然语言表达）。
+    //    ⚠️ 存量 `.json` 模板里可能还带着 `truncate: true` ⇒ **忽略它**（不报错、也不生效）。
+    sections.push({
       name,
       desc: typeof so['desc'] === 'string' ? so['desc'] : '',
-    }
-    if (so['truncate'] === true) sec.truncate = true
-    sections.push(sec)
+    })
   }
   return { version: TEMPLATE_VERSION, id, title, sections }
 }
@@ -652,8 +681,8 @@ export const DEFAULT_SECTION_NAMES: readonly string[] = NARRATIVE_TITLES
 export function renderSpecBlocksSkeleton(t: Template): string {
   const out: string[] = []
   for (const s of t.sections) {
-    const mark = s.truncate === true ? ' truncate' : ''
-    out.push(`## ${s.name}`, '', `${FENCE}${SPEC_BLOCK_FENCE}${mark}`)
+    // 🔴 **决策 223：围栏起始行不再有任何后缀**（`truncate` 已废除）。
+    out.push(`## ${s.name}`, '', `${FENCE}${SPEC_BLOCK_FENCE}`)
     if (s.desc.trim() !== '') out.push(s.desc.trim())
     out.push(FENCE, '')
   }
@@ -661,35 +690,17 @@ export function renderSpecBlocksSkeleton(t: Template): string {
 }
 
 /**
- * ⚠️⚠️ **兼容读（决策 207 的旧形态）** —— 从末尾那一节「本档写作规范」里
- *   反解"哪几节能自动截断"。
+ * 🔴🔴 **`truncateTitlesFromSpec()` 已于 2026-10-12（决策 223）删除。**
  *
- * 🔴 **决策 209 之后它不再是主路径**（主路径是 `truncateTitlesFromBlocks()`，
- *   从**各节自己的规范块**读）。**但必须留着**：
- *   存量文档（决策 207 建的）里规范仍在末尾那一节 ⇒ 删掉它，那些文档会
- *   **静默变成"不截"**（`a113fcb` 事故的同族：判据翻转 + 完全静默）。
- * ⚠️ 与 `renderSpecSection()` 配对：两边都用 `tpl:guidance-trunc-mark`
- *   ⇒ 用户改那句文案时**写与读会一起变**。为防"文档渲染于旧文案、后来文案被改"
- *   的错配，本函数**同时认内置默认文案**。
- * @param specSection - 旧形态规范节原文（`extractSpecSection()` 的产物）。
- * @returns 可截断的节名数组；解析不出 ⇒ 空数组。
- * @deprecated 用 `truncateTitlesFromBlocks()`（决策 209）。
+ * ── 它原来做什么 ────────────────────────────────────────────────────────────
+ * 兼容读**决策 207 的旧形态**：从文档末尾那节「本档写作规范」里反解"哪几节能自动截断"。
+ *
+ * ── 为什么现在能删 ──────────────────────────────────────────────────────────
+ * 它服务的是"**工具自动截断**"这条机制 —— 而该机制已整个废除
+ * （归档交给模型、规则写成自然语言）⇒ 没有消费者了。
+ * ⚠️ **代价（已接受）**：存量老文档里那句"本节的较早内容会被自动截断归档"
+ *    **不再有任何效果** —— 它现在只是一句**给人看的陈述**。
+ *    用户若要让那些文档继续瘦身，得按新规范**把归档规则写进各节的规范块**。
+ * ⭐ 这不影响文档可读性（那行本来就只是说明），也不会让页面报错。
  */
-export function truncateTitlesFromSpec(specSection: string): string[] {
-  if (specSection.trim() === '') return []
-  const marks = [
-    promptText('tpl:guidance-trunc-mark', TPL_GUIDANCE_TRUNC_MARK),
-    TPL_GUIDANCE_TRUNC_MARK,
-  ].filter((m) => m.trim() !== '')
-  const out: string[] = []
-  for (const line of specSection.split(/\r?\n/)) {
-    // 旧形态里每个叙事节一行：`- \`## <节名>\` —— <用途><截断标记>`
-    const m = /^\s*-\s+`##\s+(.+?)`/.exec(line)
-    if (m === null) continue
-    const name = (m[1] ?? '').trim()
-    if (name === '' || name === KNOWLEDGE_TITLE || name === SPEC_TITLE) continue
-    if (marks.some((mk) => mk !== '' && line.includes(mk)) && !out.includes(name)) out.push(name)
-  }
-  return out
-}
 

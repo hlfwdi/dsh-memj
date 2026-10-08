@@ -50,18 +50,33 @@ console.log('\n【1】唯一词表的形状')
   }
 }
 
-console.log('\n【2】保留项语义（history 特殊）')
+console.log('\n【2】⭐⭐ 决策 223：`history` **已开放给模型**（不再是保留项）')
 {
-  check(mod.ENTRY_KINDS.includes('history'), 'history 在【全部】词表里（读侧要认它）')
-  check(!mod.SELECTABLE_ENTRY_KINDS.includes('history'), 'history 不在【可给模型选】里')
+  // 🔴 **这一组原来是"保留项语义"** —— 决策 223（2026-10-12 用户裁定）把它**翻转了**：
+  //    > *"他就把内容归档为 history 知识，而 history 知识本身是不参与检索的。
+  //    >  就只有 history 知识不参与检索。如果归档为其他的话，那应该正常参与检索。"*
+  //    ⇒ 归档从"工具自动做"改成"**模型按各节规范做**" ⇒ `history` **必须给模型选**。
+  //    ⭐ 它的特殊性没消失，只是**换了承载方式**：
+  //      以前靠 `reserved`（结构性禁止），现在靠 `when`/`guide`（语义上讲清"它不参与检索"）。
+  check(mod.ENTRY_KINDS.includes('history'), 'history 仍在【全部】词表里')
+  check(mod.SELECTABLE_ENTRY_KINDS.includes('history'),
+    '⭐⭐ history **已进【可给模型选】**（归档交给模型做）')
   check(
-    JSON.stringify(mod.SELECTABLE_ENTRY_KINDS) === JSON.stringify(['fact', 'trap', 'howto', 'decision']),
-    `可选的恰好 4 个（实得 ${mod.SELECTABLE_ENTRY_KINDS.join(',')}）`,
+    JSON.stringify(mod.SELECTABLE_ENTRY_KINDS) === JSON.stringify(['fact', 'trap', 'howto', 'decision', 'history']),
+    `可选的恰好 5 个（实得 ${mod.SELECTABLE_ENTRY_KINDS.join(',')}）`,
   )
+  // ⭐ 内置类型里**不再有保留项**（机制仍在，但当前无人使用）
   check(
-    mod.ENTRY_KIND_DEFS.filter((d) => d.reserved === true).length === 1,
-    '只有一个保留项（history）',
+    mod.ENTRY_KIND_DEFS.filter((d) => d.reserved === true).length === 0,
+    '⭐ 内置类型里**没有**保留项了',
   )
+  check(mod.currentReservedKinds().length === 0, '  ⇒ `currentReservedKinds()` 返回空数组')
+  // 🔴 **但"它不参与检索"这件事必须被讲清楚** —— 那正是 `reserved` 曾经挡着的东西。
+  const h = mod.ENTRY_KIND_DEFS.find((d) => d.id === 'history')
+  check((h?.guide ?? '').includes('不参与检索'),
+    '⭐⭐ `history` 的 `guide` **明写"不参与检索"**（防线从结构换成语义）', h?.guide)
+  check((h?.when ?? '').trim() !== '' && (h?.when ?? '') !== '（工具自动生成，不手工填写）',
+    '⭐ `when` 已改写成真正的"什么时候用它"（不再是"工具生成、别手填"）', h?.when)
 }
 
 console.log('\n【3】isEntryKind 行为（零行为变化 —— 收敛不该动它）')
@@ -76,8 +91,10 @@ console.log('\n【3】isEntryKind 行为（零行为变化 —— 收敛不该�
 
 console.log('\n【4】两个派生文案助手（报错/描述共用一处）')
 {
-  check(mod.selectableKindList() === 'fact / trap / howto / decision', `selectableKindList() → ${mod.selectableKindList()}`)
-  check(mod.selectableKindList('、') === 'fact、trap、howto、decision', '自定义分隔符生效')
+  // 🔴 决策 223：`history` 现在**也是**可选项 ⇒ 这两个文案里应当包含它。
+  check(mod.selectableKindList() === 'fact / trap / howto / decision / history',
+    `selectableKindList() → ${mod.selectableKindList()}`)
+  check(mod.selectableKindList('、') === 'fact、trap、howto、decision、history', '自定义分隔符生效')
   const inline = mod.kindsInline()
   // 🔴 **锚点换过**（决策 217）：原先用 `includes('→')` 当"带含义"的判据 ——
   //    而 `→` 只是**骨架**里的箭头，骨架已从 `when` 搬到 `guide` ⇒ 锚点随之蒸发。
@@ -85,13 +102,15 @@ console.log('\n【4】两个派生文案助手（报错/描述共用一处）')
   //      不能用"写这段文案时恰好用的那个字符"。
   //    现在改判"四个 id 都在，且每个 id 后面都跟了非空的说明"。
   const ids = ['fact', 'trap', 'howto', 'decision']
-  check(ids.every((id) => inline.includes(id)), 'kindsInline() 含全部四个可选类型')
+  check(ids.every((id) => inline.includes(id)), 'kindsInline() 含四个基础类型')
   check(
     ids.every((id) => new RegExp(`${id} \\S`).test(inline)),
     'kindsInline() 每个 id 后面都跟着说明（不是光秃秃一串 id）',
   )
-  check(!inline.includes('history'), 'kindsInline() 不含保留项')
+  // ⭐ 决策 223 起 `history` **也在**（它现在给模型选）。
+  check(inline.includes('history'), '⭐ kindsInline() **含 history**（它已开放给模型）')
   check(mod.entryKindWhen('trap') !== '', 'entryKindWhen("trap") 非空')
+  check(mod.entryKindWhen('history') !== '', '⭐ entryKindWhen("history") 非空（它现在有正经的判据）')
   check(mod.entryKindWhen('不存在') === '', '未知 id ⇒ 空串（不抛）')
 }
 

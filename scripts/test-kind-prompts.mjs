@@ -75,10 +75,15 @@ console.log('\n【3】标记能填掉（内置状态）')
   check(!c.includes(MK_CAT), 'context 的标记已替换')
   check(c.includes('是什么 + 出处/依据'), '填完含**骨架**（guide）')
   check(c.includes('陈述一个**可核实的结论**'), '填完含**判据**（when）')
-  check(c.includes('`history` 不在上表'), 'history 的说明与表同段')
+  // 🔴 **决策 223：`history` 现在**在表里**（它开放给模型了）⇒ 旧的"不在上表"说明已删。
+  //    ⭐ 取而代之：表里那行 + 表后那句"它是留档不是知识、**不参与检索**"。
+  check(!c.includes('`history` 不在上表'), '⭐ 旧的"不在上表"说明已删除（它现在就在表里）')
+  check(c.includes('`history`'), '⭐ 但 `history` 仍出现在目录里（有它自己的判据与写法）')
+  check(c.includes('不参与检索'), '⭐⭐ 且**明写"不参与检索"** —— 这是 `reserved` 曾经的职责，改由文案承担')
   const h = mod.fillKindMarkers(HD)
   check(!h.includes(MK_LIST), 'handoff 的标记已替换')
-  check(h.includes('只能 fact / trap / howto / decision，或留空'), '填成四个可选值')
+  check(h.includes('fact / trap / howto / decision / history'), '填成**五个**可选值（决策 223 加了 history）',
+    (h.match(/fact[^\n]{0,60}/) ?? [''])[0])
 }
 
 console.log('\n【4】⭐ 改类型 ⇒ 三段都跟着变（同一进程内，不用重启）')
@@ -104,7 +109,9 @@ console.log('\n【4】⭐ 改类型 ⇒ 三段都跟着变（同一进程内，�
   )
   const line = errs.find((e) => e.includes('kind')) ?? ''
   check(line.includes('pitfall'), '报错里含新类型（旧版读编译期表 ⇒ 不含）')
-  check(!line.includes('history'), '⭐ 报错里**不含保留项**（旧版 `ENTRY_KINDS` 会把 history 列出来）')
+  // 🔴 **决策 223：报错里现在**应当**包含 `history`** —— 它已是合法可选项。
+  //    （旧版断言的是"不含保留项"，那个概念已不存在。）
+  check(line.includes('history'), '⭐⭐ 报错里**含 `history`**（它现在给模型选，是合法值）')
 }
 
 console.log('\n【5】静态反证：不许再出现写死的四值')

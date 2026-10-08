@@ -39,6 +39,11 @@ const chk = (ok, name, extra = '') => {
   else { fail += 1; console.log(`  🔴 ${name}${extra ? '  ← ' + extra : ''}`) }
 }
 const F = '```'
+/**
+ * 建一个规范块。
+ * 🔴 **决策 223：起始行不再有后缀** ⇒ `trunc` 参数只用来造**存量形态**的样本
+ *    （下面那条兼容读断言盯着"旧的带 ` truncate` 的行照样认得出"）。
+ */
 const specOf = (desc, trunc) => [trunc ? `${F}memj:spec truncate` : `${F}memj:spec`, desc, F].join('\n')
 const readDoc = (id) => readFileSync(join(lib, 'projects', `HANDOFF-${id}.md`), 'utf8')
 
@@ -50,15 +55,18 @@ console.log('═══ 【1】纯函数：`sectionSpecsOf` 只列**真的有块*
 {
   const doc = [
     '## 目标', '', specOf('这个项目要做什么'), '', '正文一。', '',
+    // ⚠️ 「当前进度」**故意用旧形态**（带 ` truncate`）—— 它就是存量 21 份文档的样子。
     '## 当前进度', '', specOf('做到哪了', true), '', '### 第一批', '', '做了 A。', '',
     '## 没有规范的一节', '', '只有正文。', '',
   ].join('\n')
   const specs = mod.sectionSpecsOf(doc)
   chk(specs.length === 2, '只回 2 条（第三节没有块 ⇒ 不在结果里）', JSON.stringify(specs.map((s) => s.title)))
-  chk(specs[0]?.title === '目标' && specs[0]?.spec === '这个项目要做什么' && specs[0]?.truncate === false,
-    '第一条：节名 / 规范 / 无截断标记', JSON.stringify(specs[0]))
-  chk(specs[1]?.title === '当前进度' && specs[1]?.truncate === true,
-    '⭐ 第二条带 `truncate` 标记（= 这一节参与自动截断）', JSON.stringify(specs[1]))
+  chk(specs[0]?.title === '目标' && specs[0]?.spec === '这个项目要做什么',
+    '第一条：节名 / 规范', JSON.stringify(specs[0]))
+  chk(specs[1]?.title === '当前进度' && specs[1]?.spec === '做到哪了',
+    '⭐⭐ 第二条是**旧形态**（`memj:spec truncate`）⇒ 照样读出来（存量兼容）', JSON.stringify(specs[1]))
+  // 🔴 决策 223：`SectionSpec` 里**没有** `truncate` 字段了
+  chk(specs.every((s) => s.truncate === undefined), '⭐ 结果里**没有** `truncate` 字段（概念已废）')
   chk(!specs.some((s) => s.title === '没有规范的一节'), '⚠️ 没有块的节**不在**结果里（前端据此不画按钮）')
 }
 
@@ -71,26 +79,30 @@ console.log('\n═══ 【2】纯函数：写（`setSectionSpecBlock`）——
     '## 下一步', '', specOf('待办', true), '', '- 第一件事', '',
   ].join('\n')
 
-  const r1 = mod.setSectionSpecBlock(doc, '目标', '新规范（两行）\n第二行', false)
+  const r1 = mod.setSectionSpecBlock(doc, '目标', '新规范（两行）\n第二行')
   chk(r1.status === 'ok', '改「目标」的规范 ⇒ ok', r1.status)
   chk(r1.narrative.includes(specOf('新规范（两行）\n第二行')), '⭐ 新规范是**多行**、逐字写进去了')
   chk(!r1.narrative.includes('旧规范'), '旧规范被换掉')
   chk(r1.narrative.includes('这是**正文**，一个字都不该动。'), '⭐⭐ 该节正文**一字不动**')
-  chk(r1.narrative.includes(specOf('待办', true)), '⭐⭐ 其它节的块（含 truncate 标记）**原样**')
+  // 🔴 决策 223：**写侧收紧** —— 改「目标」时，别处那个**旧形态**的块**会被规范化**吗？
+  //    ⚠️ 不会（`setSectionSpecBlock` 只替换**目标那一节**的块，别处逐字不动）
+  //    ⇒ 这条断言正是"局部替换"的证据。
+  chk(r1.narrative.includes(specOf('待办', true)), '⭐⭐ 其它节的块（含旧 ` truncate` 形态）**逐字原样**')
   chk(mod.sectionSpecsOf(r1.narrative).length === 2, '改完仍然是两个块（没多也没少）')
 
   // ⭐ 幂等：同样的内容再设一次 ⇒ **逐字节相同**（否则每次保存都会抖出 diff）
-  const again = mod.setSectionSpecBlock(r1.narrative, '目标', '新规范（两行）\n第二行', false)
+  const again = mod.setSectionSpecBlock(r1.narrative, '目标', '新规范（两行）\n第二行')
   chk(again.narrative === r1.narrative, '⭐⭐ 幂等：同样内容再设一次 ⇒ 结果逐字节相同')
 
-  // ⭐ 只动 truncate 标记（不动文字）
-  const r2 = mod.setSectionSpecBlock(doc, '下一步', '待办', false)
-  chk(r2.status === 'ok' && mod.sectionSpecsOf(r2.narrative).find((s) => s.title === '下一步')?.truncate === false,
-    '⭐ 只摘掉 `truncate` 标记也能生效（文字不变）')
-  chk(r2.narrative.includes(specOf('待办')), '  摘标记后那一行是**裸的** memj:spec', '')
+  // 🔴 决策 223：原来那两条"只动 truncate 标记"的断言**已删除** ——
+  //    那个标记没了，`setSectionSpecBlock` 也不再收它。
+  //    ⭐ 但**写侧收紧**这件事要验：改完之后**不会**再写出带后缀的行。
+  const r2 = mod.setSectionSpecBlock(doc, '下一步', '待办')
+  chk(r2.status === 'ok' && r2.narrative.includes(specOf('待办')),
+    '⭐ 改写后那一行是**裸的** `memj:spec`（写侧不再带后缀）', '')
 
   // 三态：节名不存在
-  const r3 = mod.setSectionSpecBlock(doc, '没这一节', 'x', false)
+  const r3 = mod.setSectionSpecBlock(doc, '没这一节', 'x')
   chk(r3.status === 'no-section' && r3.narrative === doc, '节名不存在 ⇒ `no-section` 且**原文一字不动**', r3.status)
 
   // 三态：有节但没块 ⇒ **绝不合成**
@@ -139,11 +151,11 @@ const P = 'spec220'
   const raw0 = readDoc(P)
   const before = mod.sectionSpecsOf(mod.narrativeFromProjectText(raw0))
   chk(before.length >= 2, `⭐ 新建项目自带规范块（${before.length} 个）`, JSON.stringify(before.map((s) => s.title)))
-  chk(before.some((s) => s.truncate), '  默认模板里有一节带 `truncate`（「当前进度」）')
+  // 🔴 决策 223：默认模板的规范块**不再带后缀**（归档规则改成 `desc` 里的自然语言）。
+  chk(!raw0.includes('```memj:spec truncate'), '⭐ 默认模板写出来的块**不带** `truncate` 后缀')
 
   // ── 改「目标」这一节 ──
-  const target = before.find((s) => s.title === '目标')
-  const r = await mod.setSectionSpec(P, '目标', '**新的规范**：这一段要说清项目总目标。', target.truncate)
+  const r = await mod.setSectionSpec(P, '目标', '**新的规范**：这一段要说清项目总目标。')
   chk(r.ok === true, '改「目标」的规范 ⇒ 成功', String(r.message).slice(0, 200))
 
   const raw1 = readDoc(P)
@@ -157,12 +169,12 @@ const P = 'spec220'
     '  封面区与「沉淀知识」节结构完好')
 
   // ── 幂等：内容不变 ⇒ 不写盘（文件逐字节相同） ──
-  const r2 = await mod.setSectionSpec(P, '目标', '**新的规范**：这一段要说清项目总目标。', target.truncate)
+  const r2 = await mod.setSectionSpec(P, '目标', '**新的规范**：这一段要说清项目总目标。')
   chk(r2.ok === true && String(r2.message).includes('没有变化'), '⭐ 内容没变 ⇒ 明说"未写入"', String(r2.message))
   chk(readDoc(P) === raw1, '⭐⭐ 内容没变时**文件逐字节不变**（不白刷 updatedAt）')
 
   // ── 节名写错 ──
-  const r3 = await mod.setSectionSpec(P, '没有这一节', 'x', false)
+  const r3 = await mod.setSectionSpec(P, '没有这一节', 'x')
   chk(r3.ok === false, '节名不存在 ⇒ 拒绝', String(r3.message).slice(0, 120))
   chk(readDoc(P) === raw1, '⭐ 被拒时**不写盘**')
 
@@ -177,7 +189,7 @@ const P = 'spec220'
     chk(!/^```memj:spec/m.test(stripped.split('## 当前进度')[0] ?? ''),
       '（前置）「目标」那一节的块真的被剥掉了')
     writeFileSync(join(lib, 'projects', `HANDOFF-${P}.md`), stripped, 'utf8')
-    const r4 = await mod.setSectionSpec(P, '目标', '硬塞', false)
+    const r4 = await mod.setSectionSpec(P, '目标', '硬塞')
     chk(r4.ok === false && String(r4.message).includes('没有书写规范块'),
       '⭐⭐ 有节无块 ⇒ 拒绝，且说明"本项目不会替已有文档合成规范"', String(r4.message).slice(0, 160))
     chk(readDoc(P) === stripped, '⭐⭐ 被拒时**原文一字不动**（真的没合成）')
@@ -188,30 +200,26 @@ const P = 'spec220'
 }
 
 // ══════════════════════════════════════════════════════════════════════
-console.log('\n═══ 【5】⭐⭐ `truncateSections` 镜像跟着正文走 ═══')
+console.log('\n═══ 【5】⭐⭐ 决策 223：`truncateSections` 不再被维护，但**存量值不丢** ═══')
 // ══════════════════════════════════════════════════════════════════════
 {
+  // 🔴 **这一节原来是"镜像跟着正文走"（两个方向都查过）** —— 那个字段现在**没有消费者**了
+  //    （归档规则改成各节规范里的自然语言）⇒ 停止维护是对的。
+  // ⭐ 但要证的是**两件事**：
+  //    ① 改规范**不再**去动 `truncateSections`（少了"两份值漂移"的风险）；
+  //    ② 🔴 **存量值不被清空** —— 本项目纪律："不再维护" ≠ "可以擦掉"。
   const fmOf = (raw) => mod.splitFrontmatter(raw).data ?? {}
   const raw1 = readDoc(P)
-  chk(JSON.stringify(fmOf(raw1)['truncateSections']) === JSON.stringify(['当前进度']),
-    '改之前：镜像 = 当前进度（正文反解同值）', JSON.stringify(fmOf(raw1)['truncateSections']))
+  const beforeVal = JSON.stringify(fmOf(raw1)['truncateSections'] ?? null)
 
-  // ① 给「目标」也打开自动截断 ⇒ 镜像应变两节
-  await mod.setSectionSpec(P, '目标', '**新的规范**：这一段要说清项目总目标。', true)
+  await mod.setSectionSpec(P, '目标', '**又改了一次规范**：为了验镜像不被刷新。')
   const raw2 = readDoc(P)
-  const mirror2 = mod.toStringArray(fmOf(raw2)['truncateSections'])
-  const fromBody2 = mod.truncateTitlesFromBlocks(mod.narrativeFromProjectText(raw2))
-  chk(JSON.stringify(mirror2) === JSON.stringify(fromBody2),
-    '⭐⭐ 镜像与**正文反解**一致（两个方向都查过）', `镜像=${JSON.stringify(mirror2)} 正文=${JSON.stringify(fromBody2)}`)
-  chk(mirror2.includes('当前进度') && mirror2.includes('目标'), '  两节都在', JSON.stringify(mirror2))
-
-  // ② 把「当前进度」的截断关掉 ⇒ 只剩「目标」
-  await mod.setSectionSpec(P, '当前进度', mod.sectionSpecsOf(mod.narrativeFromProjectText(raw2))
-    .find((s) => s.title === '当前进度').spec, false)
-  const raw3 = readDoc(P)
-  const mirror3 = mod.toStringArray(fmOf(raw3)['truncateSections'])
-  chk(JSON.stringify(mirror3) === JSON.stringify(['目标']),
-    '⭐⭐ 关掉一节的截断 ⇒ 镜像里就少一个（不是"只加不减"）', JSON.stringify(mirror3))
+  const afterVal = JSON.stringify(fmOf(raw2)['truncateSections'] ?? null)
+  chk(afterVal === beforeVal,
+    `⭐⭐ 改规范后 \`truncateSections\` **一动没动**（${beforeVal} → ${afterVal}）`)
+  chk(raw2.includes('**又改了一次规范**'), '  （上一条不是假阳性：规范确实改了）')
+  // ⛔ 反证：那个反解函数真的删了
+  chk(typeof mod.truncateTitlesFromBlocks !== 'function', '⛔ `truncateTitlesFromBlocks` 已删除（无人再反解）')
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -220,7 +228,7 @@ console.log('\n═══ 【6】⭐⭐ 改完的规范要被下一次 handoff �
 {
   // 🔴 这条最要紧：用户在界面上改的规范若不落在"盘上那份权威"里，
   //    下一轮 handoff 就会把它冲回模板默认值 —— 用户的编辑白做（且**不报错**）。
-  await mod.setSectionSpec(P, '有效做法', '这是**我手改的**有效做法规范。', false)
+  await mod.setSectionSpec(P, '有效做法', '这是**我手改的**有效做法规范。')
   const raw = readDoc(P)
   chk(raw.includes('这是**我手改的**有效做法规范。'), '（前置）规范已落盘')
 
@@ -242,8 +250,10 @@ console.log('\n═══ 【6】⭐⭐ 改完的规范要被下一次 handoff �
   chk(raw2.includes('这是**我手改的**有效做法规范。'),
     '⭐⭐ 手改的规范**被 handoff 保住了**（没被模板默认值冲回去）')
   chk(raw2.includes('总目标（被更新了一次）。'), '  那次 handoff 的正文改动也进去了')
-  chk(raw2.includes('**新的规范**：这一段要说清项目总目标。'),
-    '⭐⭐ 「目标」那条手改的规范也还在')
+  // ⚠️ 这里查的必须是**最后一次**写进去的那句 —— 【5】里「目标」又被改过一次
+  //    （我第一版写的是更早那句 ⇒ 假失败）。⭐ 判据：**引用"当前值"时要说清是哪一次写的**。
+  chk(raw2.includes('**又改了一次规范**：为了验镜像不被刷新。'),
+    '⭐⭐ 「目标」那条**最新**手改的规范也还在')
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -273,8 +283,8 @@ console.log('\n═══ 【8】API：`/project` 回规范清单 + `/edit` 的 s
   chk(r.status === 200, '/project 返回 200', `实际 ${r.status}`)
   chk(Array.isArray(r.body.sections) && r.body.sections.length >= 2,
     '⭐⭐ `/project` 回了 `sections`（前端据此画「编辑」按钮）', JSON.stringify(r.body.sections?.map?.((s) => s.title)))
-  chk(r.body.sections.every((s) => typeof s.title === 'string' && typeof s.spec === 'string' && typeof s.truncate === 'boolean'),
-    '  每条的形态是 `{title, spec, truncate}`')
+  chk(r.body.sections.every((s) => typeof s.title === 'string' && typeof s.spec === 'string' && s.truncate === undefined),
+    '  每条的形态是 `{title, spec}`（决策 223：不再有 `truncate`）')
   // ⭐ 与叙事同源：页面上"看到的"与"能改的"必须是同一份
   const titlesFromNarrative = mod.sectionsFromNarrative(r.body.narrative)
   chk(r.body.sections.every((s) => titlesFromNarrative.includes(s.title)),
@@ -282,12 +292,15 @@ console.log('\n═══ 【8】API：`/project` 回规范清单 + `/edit` 的 s
     `sections=${JSON.stringify(r.body.sections.map((s) => s.title))} 叙事=${JSON.stringify(titlesFromNarrative)}`)
 
   // ── 参数校验 ──
+  // 🔴 决策 223：请求体里的 `truncate` **已被忽略**（字段废除）⇒ 带上它也不再有用，
+  //    但**不该报错**（老前端/老缓存页面的请求要能照常工作）。
   r = await call('POST', '/plugins/dsh-memj/api/edit', { target: 'sectionSpec', id: P, spec: 'x', truncate: false })
   chk(r.status === 400, '缺 section ⇒ 400', `实际 ${r.status}`)
   r = await call('POST', '/plugins/dsh-memj/api/edit', { target: 'sectionSpec', id: P, section: '目标' })
   chk(r.status === 400, '缺 spec ⇒ 400', `实际 ${r.status}`)
 
   // ── 正常写 ──
+  // ⚠️ 故意**多带一个 `truncate: true`** —— 验"旧客户端多发一个已废字段不会坏事"。
   r = await call('POST', '/plugins/dsh-memj/api/edit', {
     target: 'sectionSpec', id: P, section: '下一步', spec: '走 API 写进来的规范。', truncate: true,
   })
@@ -295,12 +308,12 @@ console.log('\n═══ 【8】API：`/project` 回规范清单 + `/edit` 的 s
   const raw = readDoc(P)
   chk(mod.sectionSpecsOf(mod.narrativeFromProjectText(raw)).find((s) => s.title === '下一步')?.spec === '走 API 写进来的规范。',
     '⭐⭐ API 那条路真的落盘了')
-  chk(mod.truncateTitlesFromBlocks(mod.narrativeFromProjectText(raw)).includes('下一步'),
-    '  它的 `truncate: true` 也生效了（正文反解里有它）')
+  chk(!mod.narrativeFromProjectText(raw).includes('```memj:spec truncate'),
+    '⭐ 多带的 `truncate` **没有**在正文里写出后缀（写侧已收紧）')
 
   // ── 不存在的项目 ──
   r = await call('POST', '/plugins/dsh-memj/api/edit', {
-    target: 'sectionSpec', id: 'no-such-project-xyz', section: '目标', spec: 'x', truncate: false,
+    target: 'sectionSpec', id: 'no-such-project-xyz', section: '目标', spec: 'x',
   })
   chk(r.status === 400, '项目不存在 ⇒ 400（不是 500）', `实际 ${r.status}`)
 }

@@ -525,7 +525,7 @@
             <strong>宽松</strong>
           </label>
         </div>
-        <p class="set-desc">严格：新建主题必须有跨项目证据（本会话读过别的项目的知识），否则工具拒收。宽松：不作该项校验，是否新建完全由模型判断。两种模式都保留 desc 必填与近义主题回确认。</p>
+        <p class="set-desc"><b>默认宽松</b>（用户 2026-10-12 裁定）。严格：新建主题必须有跨项目证据（本会话读过别的项目的知识），否则工具拒收。宽松：不作该项校验，是否新建完全由模型判断。两种模式都保留 desc 必填与近义主题回确认。</p>
       </div>
       <div class="set-foot set-foot-inline">
         <button type="button" class="primary set-save" data-savepage="sink-theme">保存</button>
@@ -534,20 +534,31 @@
     </section>
 
     <section class="set-section">
-      <h3 class="set-section-title">当前进度自动截断归档</h3>
+      <!-- 🔴🔴 **决策 223（2026-10-12）改了这一节的语义 —— 标题与说明都重写过。**
+           归档**不再由工具执行**：规则写在**各节的书写规范**里（自然语言），由**模型**照做。
+           ⇒ 这两个数字**不再是"工具自动截断的开关"**，而是：
+             ① 回执里给模型的**参考值**（存量文档的规范里没写数字时，它有个数可对照）；
+             ② 默认模板那段的来源（新建项目时按它写进规范）。
+           ⚠️ **改这里的数字不会自动改已有文档的规范** —— 那要改文档自己那一节。 -->
+      <h3 class="set-section-title">归档的参考阈值</h3>
+      <p class="set-desc">
+        ⚠️ <b>归档现在由模型按各节的书写规范执行</b>（工具读不懂自然语言，不再自动截断）。
+        这两个数字的用途是：<b>交接回执里报给模型当参考值</b>，以及<b>新建项目时写进默认规范</b>。
+        想让某一节按别的阈值瘦身，<b>改那一节的书写规范</b>（项目详情页可以就地编辑）。
+      </p>
       <div class="set-item">
         <div class="set-row">
-          <label class="set-label" for="progress-warn">触发阈值</label>
+          <label class="set-label" for="progress-warn">建议触发阈值</label>
           <input type="number" id="progress-warn" min="1000" max="1000000" step="1000">
         </div>
-        <p class="set-desc">字符数。超过它就自动截断（默认 20000）。</p>
+        <p class="set-desc">字符数。规范里没写数字的文档，回执会建议模型"超过它就考虑归档"（默认 20000）。</p>
       </div>
       <div class="set-item">
         <div class="set-row">
-          <label class="set-label" for="progress-keep">截断目标</label>
+          <label class="set-label" for="progress-keep">建议归档目标</label>
           <input type="number" id="progress-keep" min="1000" max="1000000" step="1000">
         </div>
-        <p class="set-desc">截到不超过这个字符数为止（默认 12000）。两个数字必须分开：只用一个会让介于两者之间的文档也被截。</p>
+        <p class="set-desc">归档到不超过这个字符数为止（默认 12000）。同样只是建议值。</p>
       </div>
       <div class="set-foot set-foot-inline">
         <button type="button" class="primary set-save" data-savepage="sink-progress">保存</button>

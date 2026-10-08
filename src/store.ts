@@ -99,7 +99,8 @@ import {
   extractSpecBlockLines,
   stripSpecBlock,
   stripAllSpecBlocks,
-  truncateTitlesFromBlocks,
+  // 🔴 **决策 223（2026-10-12）：`truncateTitlesFromBlocks` 已删除** ——
+  //    归档不再由工具判定"哪几节能截"（改成模型按各节规范做）。
   // ⭐⭐ 决策 220：规范块的**读改通道**（人侧就地编辑规范用）。
   sectionSpecsOf,
   setSectionSpecBlock,
@@ -128,7 +129,6 @@ export {
   extractSpecBlockLines,
   stripSpecBlock,
   stripAllSpecBlocks,
-  truncateTitlesFromBlocks,
   sectionSpecsOf,
   setSectionSpecBlock,
   renderSpecBlockLines,

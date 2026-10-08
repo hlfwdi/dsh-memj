@@ -1631,12 +1631,8 @@ export async function handleApi(
           if (typeof payload.spec !== 'string') {
             return { status: 400, body: { ok: false, error: '缺少 spec（规范正文）。' } }
           }
-          result = await setSectionSpec(
-            id,
-            payload.section,
-            payload.spec,
-            payload.truncate === true,
-          )
+          // 🔴 **决策 223：不再收 `truncate`**（归档规则已改成规范里的自然语言）。
+          result = await setSectionSpec(id, payload.section, payload.spec)
           break
         case 'renameProject':
           result = await renameProject(id, payload.newId ?? '')
@@ -1892,7 +1888,8 @@ export async function handleApi(
         id: t.id,
         title: t.title,
         sectionCount: t.sections.length,
-        sections: t.sections.map((s) => ({ name: s.name, desc: s.desc, truncate: s.truncate === true })),
+        // 🔴 决策 223：不再回 `truncate`（归档规则已改成 `desc` 里的自然语言）。
+        sections: t.sections.map((s) => ({ name: s.name, desc: s.desc })),
         // ⭐ 内置的 default **不可删**（它是回落目标）。
         deletable: t.id !== 'default',
         errors: validateTemplate(t),

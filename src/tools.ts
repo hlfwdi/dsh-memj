@@ -2011,7 +2011,8 @@ export function registerTools(deps: ToolDeps): void {
                   (errs.length > 0 ? `\n  ⚠️ 该模板不合法：${errs.join('；')}` : ''),
               )
               for (const s of t.sections) {
-                lines.push(`  · \`${s.name}\` —— ${s.desc}${s.truncate === true ? '（可自动截断）' : ''}`)
+                // 🔴 决策 223：不再标"（可自动截断）"——归档规则已改成 `desc` 里的自然语言。
+                lines.push(`  · \`${s.name}\` —— ${s.desc}`)
               }
             }
             lines.push(
@@ -2041,12 +2042,12 @@ export function registerTools(deps: ToolDeps): void {
               ok: true,
               message:
                 `✅ 模板 \`${t.id}\`（${t.title}）已保存，共 ${t.sections.length} 节。\n` +
-                (t.sections.some((s) => s.truncate === true)
-                  ? ''
-                  : '⚠️ 本模板**没有**声明可自动截断的节 ⇒ 用它的文档**不会自动瘦身**。\n') +
-                '⭐ 在新建项目时用：`memj_handoff` 里传 `template: "' +
-                t.id +
-                '"`。\n' +
+                // 🔴 决策 223：不再判"有没有声明可自动截断的节"（那个标记已废除）。
+                //    ⚠️ 但**归档这件事仍然值得提一句** —— 它现在是**规范里的自然语言**，
+                //       而用户很容易漏写 ⇒ 提醒他"想让某节瘦身就把规则写进那一节的规范里"。
+                '⭐ **归档规则写在各节的书写规范里**（自然语言）：想让某一节自动瘦身，' +
+                '就在它那段规范里写清"超过多少字符、归档成什么类型、原处留什么"。\n' +
+                '⭐ 在新建项目时用：`memj_handoff` 里传 `template: "' + t.id + '"`。\n' +
                 '⚠️ **不影响任何已有文档**。',
             }
           }

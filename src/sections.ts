@@ -119,8 +119,17 @@ export const SPEC_SECTION = `## ${SPEC_TITLE}`
  */
 export const SPEC_BLOCK_FENCE = 'memj:spec'
 
-/** 围栏起始行：` ```memj:spec ` 或 ` ```memj:spec truncate `（标记即机器读的那一位）。 */
-const SPEC_BLOCK_OPEN_RE = new RegExp(`^\\s*\`\`\`${SPEC_BLOCK_FENCE}(?:\\s+(truncate))?\\s*$`, 'i')
+/**
+ * 围栏起始行：`` ```memj:spec ``。
+ *
+ * 🔴🔴 **决策 223（2026-10-12）：不再有 `truncate` 后缀** ——
+ *    归档改成由模型按各节规范做，工具不再执行 ⇒ 那个标记**没有消费者了**。
+ * ⚠️⚠️ **但解析侧必须对存量宽容**（否则存量 21 份文档的规范块会**整块失效**，
+ *    而那会让「节规范」功能——显示、就地编辑、交接点名——**全部静默失灵**）。
+ *    ⇒ 正则里**仍然接受**旧后缀（任意词，不只是 `truncate`），只是**丢弃它**。
+ *    ⭐ 判据：**放宽解析、收紧渲染** —— 读要能读旧的，写只写新的。
+ */
+const SPEC_BLOCK_OPEN_RE = new RegExp(`^\\s*\`\`\`${SPEC_BLOCK_FENCE}(?:\\s+\\S+)?\\s*$`, 'i')
 
 /** 围栏结束行：一个**裸的** ``` 行。 */
 const FENCE_CLOSE_RE = /^\s*```\s*$/
@@ -129,14 +138,12 @@ const FENCE_CLOSE_RE = /^\s*```\s*$/
  * ⭐ 判一行是不是规范块的**围栏起始行**。
  *
  * ⚠️ **宽容**（与 `.md` 模板的取向一致：选 md 就是为了让人能手改）：
- *   允许行首缩进、允许行尾空白、`truncate` 大小写不敏感。
+ *   允许行首缩进、允许行尾空白、**允许旧版遗留的后缀**（如 ` truncate`，已忽略）。
  * @param line - 一行。
- * @returns 是围栏起始行 ⇒ `{ truncate }`（该节是否声明可截断）；否则 `undefined`。
+ * @returns 是围栏起始行 ⇒ `true`；否则 `undefined`。
  */
-export function specBlockFenceInfo(line: string): { truncate: boolean } | undefined {
-  const m = SPEC_BLOCK_OPEN_RE.exec(line)
-  if (m === null) return undefined
-  return { truncate: m[1] !== undefined }
+export function specBlockFenceInfo(line: string): true | undefined {
+  return SPEC_BLOCK_OPEN_RE.test(line) ? true : undefined
 }
 
 /** 一个规范块在行数组里的位置（行号相对**传入的那个数组**）。 */
@@ -149,8 +156,6 @@ export interface SpecBlockRange {
   bodyEnd: number
   /** 结束围栏行下标。 */
   close: number
-  /** 该节是否声明可截断。 */
-  truncate: boolean
 }
 
 /**
@@ -170,7 +175,7 @@ export function specBlockRange(lines: readonly string[], from = 1): SpecBlockRan
     if (info === undefined) continue
     for (let j = i + 1; j < lines.length; j += 1) {
       if (FENCE_CLOSE_RE.test(lines[j] ?? '')) {
-        return { open: i, bodyStart: i + 1, bodyEnd: j, close: j, truncate: info.truncate }
+        return { open: i, bodyStart: i + 1, bodyEnd: j, close: j }
       }
     }
     return undefined // 起始行有了、结束行没有 ⇒ 不认
@@ -217,52 +222,23 @@ export function stripSpecBlock(lines: readonly string[]): string[] {
 }
 
 /**
- * ⭐⭐ **取"这份文档里哪几节声明了可自动截断"**（决策 209 —— 取代
- *   `truncateTitlesFromSpec()`）。
+ * 🔴🔴 **`truncateTitlesFromBlocks()` 已于 2026-10-12（决策 223）删除。**
  *
- * 🔴 **为什么权威在正文**（与节名同一取向，见 `docSectionsOf` 的注释）：
- *   规范块住正文，而正文是 `rebuildDerivedLayers()` **唯一逐字保留**的地方
- *   （实测 sha256 相同）⇒ 它不会被旁路重写抹掉。
+ * ── 它原来做什么 ────────────────────────────────────────────────────────────
+ * 从各节的规范块反解"**哪几节声明了可自动截断**"（判据是围栏起始行带不带 `truncate`）。
  *
- * ⚠️ **判据是"该节规范块的围栏起始行带不带 `truncate`"** ——
- *   与渲染侧共用同一份语法（`SPEC_BLOCK_FENCE`）⇒ 写与读**同源**。
- * ⚠️ 跳过围栏内的伪标题（与 `sectionsFromNarrative` 同规）。
- * @param narrative - 纯叙事文本（含规范块）。
- * @returns 可截断的节名数组（顺序即文档顺序）。
+ * ── 为什么删 ────────────────────────────────────────────────────────────────
+ * 用户裁定：**归档完全交给模型、规则写在各节的书写规范里（自然语言）**，
+ * 工具**不再执行归档**（它读不懂自然语言）⇒ "哪节能截"这个**结构化标记没有消费者了**。
+ * ⇒ 连带删掉的还有：`truncate` 的**解析**（围栏正则里的那个可选组）、
+ *   `SpecBlockRange.truncate` 字段、`renderSpecBlockLines()` 的第 2 个参数、
+ *   以及 `SECTION_SPEC_CLOSING` 里那句"（可自动截断归档）"的渲染。
+ *
+ * ⚠️ **围栏语法因此简化成**：`` ```memj:spec `` —— **不再有任何后缀**。
+ * ⭐ 但**解析侧对存量仍宽容**（见 `specBlockFenceInfo`）：带旧 `truncate` 后缀的行
+ *   **照样被认作起始行**，只是那个后缀**被忽略** ——
+ *   否则存量 21 份文档的规范块会**整块失效**（那是本项目最忌的静默失效）。
  */
-export function truncateTitlesFromBlocks(narrative: string): string[] {
-  const lines = narrative.split(/\r?\n/)
-  const out: string[] = []
-  let cur: { title: string; from: number } | undefined
-  let inFence = false
-  const flush = (to: number): void => {
-    if (cur === undefined) return
-    const inner = lines.slice(cur.from, to)
-    const r = specBlockRange(inner)
-    if (r !== undefined && r.truncate && !out.includes(cur.title)) out.push(cur.title)
-    cur = undefined
-  }
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i] ?? ''
-    // 🔴 **必须跳过所有围栏内的行**（否则规范块里若写了 `## 示例` 会被当成一节）。
-    if (specBlockFenceInfo(line) !== undefined || FENCE_CLOSE_RE.test(line)) {
-      inFence = !inFence
-      continue
-    }
-    if (inFence) continue
-    const m = /^##\s+(.+?)\s*$/.exec(line)
-    if (m !== null) {
-      flush(i)
-      const title = (m[1] ?? '').trim()
-      if (title !== '' && title !== KNOWLEDGE_TITLE && title !== SPEC_TITLE) {
-        cur = { title, from: i }
-      }
-      continue
-    }
-  }
-  flush(lines.length)
-  return out
-}
 
 // ══════════════════════════════════════════════════════════════════════════
 // ⭐⭐⭐ **规范块的读改通道**（决策 220）—— 「人侧就地编辑规范」的数据层
@@ -329,8 +305,6 @@ export interface SectionSpec {
   title: string
   /** 规范正文（围栏内的内容，已 trim；**可能为空**——手写的空块是合法的）。 */
   spec: string
-  /** 该节的围栏起始行有没有 `truncate` 标记（= 这一节参与自动截断归档）。 */
-  truncate: boolean
 }
 
 /**
@@ -352,7 +326,7 @@ export function sectionSpecsOf(narrative: string): SectionSpec[] {
     const seg = lines.slice(h.line, end)
     const r = specBlockRange(seg)
     if (r === undefined) continue
-    out.push({ title: h.title, spec: extractSpecBlock(seg), truncate: r.truncate })
+    out.push({ title: h.title, spec: extractSpecBlock(seg) })
   }
   return out
 }
@@ -363,12 +337,13 @@ export function sectionSpecsOf(narrative: string): SectionSpec[] {
  * 🔴 **闭合行必须是裸围栏**，不是带语言标记的那一串 —— 写成一样会让
  *    `specBlockRange()` **认不出闭合** ⇒ 规范块"不闭合" ⇒ 反解为空
  *    （决策 209 实测踩过，见 `handoff.ts` 的 `insertSpecBlocks`）。
+ * 🔴 **决策 223：起始行不再带任何后缀**（`truncate` 已废除）——
+ *    ⇒ **写出来的永远是最简形态**，而读侧对旧后缀宽容（见 `specBlockFenceInfo`）。
  * @param spec - 规范正文（可多行；空串 ⇒ 渲染出一个只有围栏的块）。
- * @param truncate - 该节是否声明可自动截断。
  * @returns 行数组（含起始围栏与闭合围栏）。
  */
-export function renderSpecBlockLines(spec: string, truncate: boolean): string[] {
-  const out = [`${FENCE_BARE}${SPEC_BLOCK_FENCE}${truncate ? ' truncate' : ''}`]
+export function renderSpecBlockLines(spec: string): string[] {
+  const out = [`${FENCE_BARE}${SPEC_BLOCK_FENCE}`]
   const body = spec.replace(/\r\n/g, '\n').trim()
   if (body !== '') out.push(...body.split('\n'))
   out.push(FENCE_BARE)
@@ -388,14 +363,12 @@ export function renderSpecBlockLines(spec: string, truncate: boolean): string[] 
  * @param narrative - 纯叙事文本。
  * @param title - 节名（**精确匹配**，已 trim）。
  * @param spec - 新的规范正文。
- * @param truncate - 新的截断标记。
  * @returns 新叙事与状态。
  */
 export function setSectionSpecBlock(
   narrative: string,
   title: string,
   spec: string,
-  truncate: boolean,
 ): { narrative: string; status: 'ok' | 'no-section' | 'no-block' } {
   const key = title.trim()
   const lines = narrative.split(/\r?\n/)
@@ -412,7 +385,7 @@ export function setSectionSpecBlock(
   const next = [
     ...lines.slice(0, start),
     ...seg.slice(0, r.open),
-    ...renderSpecBlockLines(spec, truncate),
+    ...renderSpecBlockLines(spec),
     ...seg.slice(r.close + 1),
     ...lines.slice(end),
   ]

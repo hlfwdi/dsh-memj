@@ -186,7 +186,7 @@ export function renderSnapshotList(snapshots: readonly ReadSnapshot[]): string {
  * @returns 模型可见文本；一节规范都没有时返回空串（**不输出空标题**）。
  */
 export function renderSectionSpecs(
-  specs: readonly { title: string; spec: string; truncate: boolean }[],
+  specs: readonly { title: string; spec: string }[],
 ): string {
   if (specs.length === 0) return ''
   const parts: string[] = [promptText('reads:section-spec-head', SECTION_SPEC_HEAD)]
@@ -196,7 +196,8 @@ export function renderSectionSpecs(
       .split(/\r?\n/)
       .map((l) => `    ${l}`)
       .join('\n')
-    parts.push(`· **${s.title}**${s.truncate ? '（可自动截断归档）' : ''}：`)
+    // 🔴 **决策 223：不再标注"（可自动截断归档）"** —— 那个标记已整个废除。
+    parts.push(`· **${s.title}**：`)
     parts.push(body)
   }
   parts.push('')

@@ -14,7 +14,15 @@ const B = await import('../lib/offline-bundle.js')
 
 // runHandoff 不在 offline-bundle 里（它依赖 store），从 index 取。
 const { runHandoff: rawRunHandoff } = mod
-const CFG = mod.DEFAULT_CONFIG
+// ⭐⭐ **本套件默认走「严格」模式**（2026-10-12 起必须**显式**传）。
+//
+// 🔴 为什么必须显式：`DEFAULT_CONFIG.themeCreation` 在 2026-10-12 由 `strict` 改成了 `loose`。
+//    而本套件多处（【6】【20】等）测的正是"**没有跨项目证据 ⇒ 拒绝建主题**"这条闸门
+//    —— 那是**严格模式独有**的行为。若继续沿用默认值，这些用例会**静默变成假绿**
+//    （不报错、只是再也测不到那道闸门）⇒ 必须在这里显式钉住 `'strict'`。
+// ⚠️ **宽松模式**的对照在【17】–【19】（那里用显式的 `LOOSE`，两侧同一份输入），
+//    新默认值的验证在 `scripts/test-theme-mode.mjs`【1】。
+const CFG = { ...mod.DEFAULT_CONFIG, themeCreation: 'strict' }
 
 // ══════════════════════════════════════════════════════════════
 // ⭐⭐ 决策 112 的测试适配（**如实说明，不是掩盖**）

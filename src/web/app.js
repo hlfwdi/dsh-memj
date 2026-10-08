@@ -1853,7 +1853,7 @@ async function renderProjectDetail(id, opts = {}) {
  * 给正文里每个规范块装上「编辑」按钮。
  *
  * @param {HTMLElement} mdWrap - `renderBody()` 的产物。
- * @param {Array<{title:string,spec:string,truncate:boolean}>} sections - 服务端给的规范块清单。
+ * @param {Array<{title:string,spec:string}>} sections - 服务端给的规范块清单。
  * @param {string} projectId - 项目 id（保存时回传）。
  * @param {boolean} isArchived - 归档项目**不可编辑**（决策 133，与其它写通道一致）。
  */
@@ -1909,7 +1909,7 @@ function firstPreAfter(mdWrap, head) {
  * @param {HTMLElement} anchor - 规范块的外层（按钮所在的那个 `div.spec-block`）。
  * @param {string} projectId - 项目 id。
  * @param {string} title - 节名。
- * @param {{spec:string,truncate:boolean}} info - 当前值（预填）。
+ * @param {{spec:string}} info - 当前值（预填）。
  */
 function openSpecEditor(anchor, projectId, title, info) {
   // ⚠️ 已经开着就**不重复插**（连点两下会插两个表单，保存时两个都发请求）。
@@ -1931,8 +1931,8 @@ function openSpecEditor(anchor, projectId, title, info) {
     ta.style.height = `${ta.scrollHeight}px`
   }
   ta.addEventListener('input', autoGrow)
-  const trunc = h('input', { type: 'checkbox' })
-  trunc.checked = info.truncate === true
+  // 🔴 **决策 223：「可自动截断」勾选已删除** —— 归档规则改成**写在规范正文里的自然语言**
+  //    （用户裁定："完全由章节的书写规范去定"）⇒ 不再需要那个结构化开关。
   const msg = h('span', { class: 'spec-editor-msg', text: '' })
 
   const save = h('button', {
@@ -1946,7 +1946,6 @@ function openSpecEditor(anchor, projectId, title, info) {
           id: projectId,
           section: title,
           spec: ta.value,
-          truncate: trunc.checked,
         })
         toast((r?.message ?? '已保存').split('\n')[0].slice(0, 60))
         // ⭐ 重画走 `applyRoute()`（不是直接调渲染函数）——它顺带处理
@@ -1964,10 +1963,10 @@ function openSpecEditor(anchor, projectId, title, info) {
     h('div', { class: 'spec-editor-head' },
       h('strong', { text: `编辑「${title}」的书写规范` }),
       h('span', { class: 'dim small', text: '⚠️ 只改这一份文档；不影响任何模板、也不影响别的项目。' }),
+      // ⭐ 提示用户"归档规则也写在这里" —— 这是决策 223 之后它的主要用途之一。
+      h('span', { class: 'dim small', text: '⭐ 想让这一节自动瘦身？把规则也写进来（如"超过 20000 字符时把较早的小节归档成 history 条目"）—— 由模型照它执行，工具只负责报字数。' }),
     ),
     ta,
-    h('label', { class: 'spec-editor-trunc' }, trunc,
-      h('span', { text: '这一节参与自动截断归档（超阈值时把较早的小节整节截走、存成 history 条目）' })),
     h('div', { class: 'spec-editor-foot' }, msg, save, cancel),
   )
   anchor.after(editor)
@@ -4731,7 +4730,7 @@ async function testJevConnection(providerId, model, msg, tMsg) {
 /** 模板页状态（当前正在编辑的表单）。 */
 const tplState = {
   items: [],
-  /** 表单里的节（`{ name, desc, truncate }`）。 */
+  /** 表单里的节（`{ name, desc }`）。 */
   sections: [],
 }
 
@@ -5172,7 +5171,7 @@ function loadTemplateIntoForm(t) {
   if (idEl) idEl.value = t.id
   if (titleEl) titleEl.value = t.title
   // ⚠️ **深拷一份**：直接引用 `t.sections` 会让"取消编辑"后仍改到列表里的对象。
-  tplState.sections = t.sections.map((s) => ({ name: s.name, desc: s.desc, truncate: s.truncate === true }))
+  tplState.sections = t.sections.map((s) => ({ name: s.name, desc: s.desc }))
   renderTemplateSections()
 }
 
@@ -5265,18 +5264,10 @@ function renderTemplateSections() {
     // ⚠️ 插进 DOM 之前量不到真实高度（`scrollHeight` 是 0）⇒ 等一次微任务再量。
     queueMicrotask(autoGrow)
 
-    const truncWrap = document.createElement('label')
-    truncWrap.className = 'tpl-sec-trunc'
-    const trunc = document.createElement('input')
-    trunc.type = 'checkbox'
-    trunc.checked = s.truncate === true
-    trunc.addEventListener('change', () => {
-      // ⭐⭐ 决策 206（用户 2026-10-02）：**可多选** —— 不再"勾一个取消其余"。
-      //    每节各自独立：各自与阈值比、各自截、各自归档。
-      s.truncate = trunc.checked
-    })
-    truncWrap.append(trunc, document.createTextNode('可截断'))
-
+    // 🔴 **决策 223（2026-10-12）：「可截断」勾选已删除** ——
+    //    归档规则改成**写在这一节的规范正文里的自然语言**（用户裁定：
+    //    "完全由章节的书写规范去定"）⇒ 那个结构化开关没有意义了。
+    //    ⭐ 所以这里只剩「节名 / 规范 / 删除」三样。
     const del = document.createElement('button')
     del.type = 'button'
     del.className = ''
@@ -5287,7 +5278,7 @@ function renderTemplateSections() {
       renderTemplateSections()
     })
 
-    row.append(name, desc, truncWrap, del)
+    row.append(name, desc, del)
     box.append(row)
   })
 }
@@ -5325,7 +5316,6 @@ async function saveTemplateForm() {
     sections: tplState.sections.map((s) => ({
       name: s.name.trim(),
       desc: s.desc.trim(),
-      ...(s.truncate === true ? { truncate: true } : {}),
     })),
   }
   try {
@@ -5378,7 +5368,7 @@ function bindTemplateButtons() {
   if (add && add.dataset['bound'] !== '1') {
     add.dataset['bound'] = '1'
     add.addEventListener('click', () => {
-      tplState.sections.push({ name: '', desc: '', truncate: false })
+      tplState.sections.push({ name: '', desc: '' })
       renderTemplateSections()
     })
   }
@@ -5390,7 +5380,7 @@ function bindTemplateButtons() {
       const titleEl = document.getElementById('tpl-title')
       if (idEl) idEl.value = ''
       if (titleEl) titleEl.value = ''
-      tplState.sections = [{ name: '', desc: '', truncate: false }]
+      tplState.sections = [{ name: '', desc: '' }]
       renderTemplateSections()
     })
   }

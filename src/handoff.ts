@@ -26,8 +26,8 @@
  *
  * | 模式 | 跨项目证据校验（快照.project ≠ 本次 project） |
  * |---|---|
- * | `strict`（默认） | ✅ **做**——这是全套机制里**唯一**的一处工具校验 |
- * | `loose` | ❌ **不做**——是否新建主题**完全由 LLM 判断** |
+ * | `strict` | ✅ **做**——这是全套机制里**唯一**的一处工具校验 |
+ * | `loose`（⭐ **默认**，2026-10-12 起） | ❌ **不做**——是否新建主题**完全由 LLM 判断** |
  *
  * ⚠️ **宽松模式只拆这道闸门，不拆别的东西**：`desc` 非空 / ≤200、近义 id 回确认、
  * `theme` 必须已存在——**两种模式都保留**（"能不能用"与"防永久性损坏"，不是"该不该建"）。
@@ -67,7 +67,7 @@ import {
   specBlockRange,
   stripAllSpecBlocks,
   stripSpecBlock,
-  truncateTitlesFromBlocks,
+  // 🔴 决策 223：`truncateTitlesFromBlocks` 已删除（归档不再由工具判定）。
 } from './sections.ts'
 import {
   loadEntryDoc,
@@ -93,7 +93,6 @@ import {
   loadTemplate,
   renderSpecBlocksSkeleton,
   TPL_GUIDANCE_NO_TRUNC,
-  truncateTitlesFromSpec,
   templateSectionNames,
   validateTemplate,
 } from './templates.ts'
@@ -106,19 +105,25 @@ import {
   pendingSnapshots,
 } from './reads.ts'
 import { narrativeFromProjectText } from './parse.ts'
-import {
-  countHistoryPlaceholders,
-  fillHistoryId,
-  historySlug,
-  newEntryId,
-  readHistoryLines,
-  truncateProgress,
-} from './history.ts'
+// 🔴 **决策 223（2026-10-12）：归档不再由工具执行** —— 那套函数（`truncateProgress` /
+//    `fillHistoryId` / `historySlug` / `newEntryId` / `countHistoryPlaceholders`）
+//    **已随机制一起删除**。这里只剩**读侧**（存量文档的「历史进展」指针要能读）。
+//    ⭐ 用户裁定：*"归档交给模型，工具嘛，因为没法识别就不要了。完全交给模型吧。"*
+import { readHistoryLines } from './history.ts'
 import { readNarrativeMirror, writeNarrativeMirror } from './narrative.ts'
 // ⭐ 决策 209：建项目回执里要报"本模板没有可截断的节"（那句文案走提示词页、可编辑）。
 // ⚠️ 决策 222 起本文件也用它填**插槽**（`{{sections}}`）⇒ `fillSlots` 一并引入。
 import { fillSlots, promptText } from './prompts.ts'
 import type { Template } from './templates.ts'
+
+/**
+ * 给"只有节正文（无标题行）"的片段**补一个占位标题**再做块级切分时用。
+ *
+ * 🔴 用途只有一个：`stripSpecBlock()` 期望"含标题行的该节"（它默认从下标 1 找块），
+ *    而 `splitH2()` 给的是**不含标题行**的 `lines` ⇒ 中间用一个不会被当真的标题接一下。
+ * ⚠️ 用 `## x` 而不是中文节名 —— 避免与工具维护的节名（「沉淀知识」等）撞上。
+ */
+const PLACEHOLDER_TITLE = 'x'
 
 /**
  * 规范块的**围栏那一行**（` ```memj:spec `）。
@@ -936,6 +941,44 @@ export function mergeNarrative(
   }
 
   const out: string[] = []
+  /**
+   * 🔴🔴 **2026-10-12 修一个【预先存在】的真 bug：规范块被写了两遍。**
+   *
+   * ── 现象（实测）────────────────────────────────────────────────────────────
+   * 建项目后**只写一部分节**再交接一次 ⇒ 那些**没写的节**下面会**多出一份规范块**：
+   *   · 第一次 handoff（建项目）：**6** 个块（正确）；
+   *   · 第二次（只写「当前进度」）：**11** 个块 ⇒ 未写的 5 节各多了一份。
+   * ⚠️ 它是**静默的**：文档照常能读、规范照常生效（`sectionSpecsOf` 取**第一个**块），
+   *    只是**每轮交接多长一份** —— 且只在"**没写全**"时发生，而那是**常态**。
+   *
+   * ── 根因 ────────────────────────────────────────────────────────────────────
+   * `splitH2()` **不剥规范块**（它把块的行原样收进 `s.lines`），
+   * 而下面又用 `blockFor(title)` **单独回填一次** ⇒ 两条通路各写一份。
+   * ⚠️ 只有"**从旧文档取正文**"的那两支会中招（`touched` 那支已经 `stripAllSpecBlocks` 过）。
+   *
+   * ── 修法 ────────────────────────────────────────────────────────────────────
+   * **取旧正文前先剥掉规范块**（`stripSpecBlock`）—— 块由 `blockFor()` 统一回填，
+   * 正文里不能再带一份。⭐ 判据：**同一个东西只能有一条写入通路**。
+   *
+   * 🔴 **为什么留这条注释**：它是我 `git stash` 到改动前、用同一场景跑出来的
+   *    （**不是我本轮引入的**）—— 也就是说它**潜伏了很久**，而"静默多长一份"
+   *    正是本项目最该警惕的那类失败。
+   */
+  /**
+   * 取"旧文档里某几节"的**正文**（已剥掉规范块）。
+   *
+   * 🔴 `splitH2` 的 `s.lines` **不含标题行**，而 `stripSpecBlock` 期望的是
+   *    "该节的行（**含标题行**）"（它默认从下标 1 开始找块，见 `specBlockRange` 的 `from = 1`）。
+   *    ⇒ 这里**补一个占位标题行**再剥，剥完把占位行去掉。
+   *    ⚠️ 占位标题只能用 `## x` 这种**不会被当成工具维护节**的名字（`splitH2` 会滤掉
+   *       「沉淀知识」/「本档写作规范」——不过这一步只做纯文本切片，不走 `splitH2`）。
+   */
+  const priorBody = (ss: readonly { lines: string[] }[]): string =>
+    ss
+      .map((s) => stripSpecBlock([`## ${PLACEHOLDER_TITLE}`, ...s.lines]).slice(1).join('\n'))
+      .join('\n')
+      .trim()
+
   // ── 标准节（= 该文档自己的节名）：本次写了用新的，没写沿用旧的 ──
   for (const title of titles) {
     if (touched.has(title)) {
@@ -950,7 +993,8 @@ export function mergeNarrative(
       out.push(`## ${title}`, '')
       const blk = blockFor(title)
       if (blk.length > 0) out.push(...blk, '')
-      const body = prior.map((s) => s.lines.join('\n')).join('\n').trim()
+      // 🔴 **必须先剥规范块**（见上面那段注释）—— 否则正文里那份与 `blk` 重复。
+      const body = priorBody(prior)
       if (body !== '') out.push(body, '')
     }
   }
@@ -963,6 +1007,7 @@ export function mergeNarrative(
     out.push(`## ${s.title}`, '')
     const blk = blockFor(s.title)
     if (blk.length > 0) out.push(...blk, '')
+    // ⚠️ `ins` 来自 `stripAllSpecBlocks(incoming)` ⇒ **已经剥过**，不用再剥。
     const body = s.lines.join('\n').trim()
     if (body !== '') out.push(body, '')
   }
@@ -973,7 +1018,8 @@ export function mergeNarrative(
     // ⭐ 决策 209：这一支同样要回填规范块（旧的没被碰过的自定义节）。
     const blk = blockFor(s.title)
     if (blk.length > 0) out.push(...blk, '')
-    const body = s.lines.join('\n').trim()
+    // 🔴 **同样必须先剥**（这一支是"自定义节 + 没被碰过"，中招方式与标准节那支一样）。
+    const body = priorBody([s])
     if (body !== '') out.push(body, '')
   }
 
@@ -1025,11 +1071,12 @@ export function insertSpecBlocks(text: string, tpl: Template): string {
     const s = descOf.get(title)
     // ⚠️ 已有规范块 ⇒ 原样保留（幂等）；模板里没这一节 ⇒ 不补。
     if (s !== undefined && specBlockRange(seg) === undefined) {
-      out.push('', `${FENCE_SPEC}${s.truncate === true ? ' truncate' : ''}`)
+      // 🔴 **决策 223：起始行不再带后缀**（`truncate` 已废除）。
+      out.push('', FENCE_SPEC)
       if (s.desc.trim() !== '') out.push(s.desc.trim())
       // 🔴 **闭合行是裸围栏**（不是 `FENCE_SPEC`）——我第一版两处都用了 `FENCE_SPEC`
       //    ⇒ 渲染出 ` ```memj:spec ` 当收尾 ⇒ `specBlockRange` **认不出闭合**
-      //    ⇒ 规范块"不闭合" ⇒ 反解为空、`truncateSections` 不写（实测抓到）。
+      //    ⇒ 规范块"不闭合" ⇒ 反解为空（实测抓到）。
       out.push(FENCE_BARE, '')
     }
     out.push(...seg.slice(1))
@@ -1111,57 +1158,59 @@ function narrativeTopSections(narrative: string): string[] {
 }
 
 /**
- * ⭐⭐ **该文档要自动截断的那些节**（决策 204 / 206）——**完全从文档自己身上取**。
+ * 🔴🔴 **`defaultTruncateTitle()` / `templateTruncateTitle()` 已于 2026-10-12（决策 223）删除。**
  *
- * 🔴🔴 **为什么不查模板**：模板**可以被改、被删**，而文档与它**解耦**
- *   ⇒ 文档必须**自描述**。光有节名不够（节名不表达"哪节能截"）。
+ * ── 它们原来做什么 ──────────────────────────────────────────────────────────
+ * 决定「**哪几节要自动截断**」—— 判据依次是：正文规范块的 `truncate` 标记 →
+ * 旧形态的「本档写作规范」节 → `frontmatter.truncateSections`。
  *
- * 🔴🔴 **2026-10-12 起：正文优先**（与节名同一取向，见 `docSectionsOf`）。
- *   原先只读 `frontmatter.truncateSections`，而那个字段会被
- *   `rebuildDerivedLayers()` 的旁路重写**抹掉**（实测复现）⇒ "哪节能截"丢失。
- *   现在：**规范块里写着的那份**（正文，权威）→ frontmatter。
+ * ── 为什么删 ────────────────────────────────────────────────────────────────
+ * 用户裁定：**归档完全交给模型**（规则写在各节的书写规范里，自然语言），
+ * 工具**不再执行归档**（它读不懂自然语言）⇒ "哪节能截"这个判定**没有消费者了**。
+ * ⇒ 连带删除：`truncateProgress()` 调用、`truncateTitle` 参数、
+ *   `frontmatter.truncateSections` 的**反解与写回**（字段本身仍在读侧兼容）。
  *
- * ⚠️ **判据顺序有意义（别调换）**：
- *   ① 正文规范块里解析出「有截断标记」的节 ⇒ 用它；
- *   ② 旧形态规范节（存量）⇒ 从它反解；
- *   ③ **都没有 ⇒ 以 `truncateSections` 为准**（空 = **真的不截**）。
- *
- * 🔴🔴 **2026-10-05 改（用户裁定）**：**③ 不再有"回落默认六节"那一支** ——
- *   `sections` 字段整个删掉了（模板走 md 之后，它只是节名的最后一份副本）。
- *   新语义一句话：**正文规范里没写 `truncate` ⇒ 就是不截**。
- *   ⭐ 判据：**"没声明"与"声明了但为空"必须是两个状态**；
- *      用"空 ⇒ 回落默认值"把前者伪装成后者，正是本项目反复踩的那类坑
- *      （老文档被静默补上默认六节的目标 ⇒ 截断开关悄悄被打开 / 关掉）。
- * @param truncateSections - 文档 frontmatter 里的截断目标节（**可多个**，决策 206）。
- * @param narrative - 纯叙事文本（含规范块；**权威来源**）。
- * @returns 要截断的节名数组；空数组 = 不截。
+ * ⚠️ **代价（用户明确知悉并接受）**：旧设计里"工具自动截断"这条**确定性**没了 ——
+ *    本项目记过"模型连报 7 次、一次没压"。本次把它请回来，换来的是
+ *    "**归档策略完全由书写规范决定**"。
+ * ⭐ 缓解：交接回执里**报出各节字符数**（模型有确切数字可对照规范的阈值）。
  */
-function defaultTruncateTitle(
-  truncateSections: readonly string[] | undefined,
-  narrative?: string,
-): string[] {
-  // ① ⭐⭐ **正文优先**（决策 209 改：从**各节自己的规范块**读）。
-  //    🔴 与决策 207 的区别：那时规范在**末尾一节**里、用行内列表反解；
-  //       现在规范**长在各节自己身上**（围栏起始行的 `truncate`）。
-  //    ⚠️ 语义不变：**"解析出来是空数组"= 真的不截**（不是"没找到"）。
-  const fromBlocks = truncateTitlesFromBlocks(narrative ?? '')
-  if (fromBlocks.length > 0) return fromBlocks
-  // ⚠️ **兼容决策 207 的旧形态**：文档里若还留着末尾的 `## 本档写作规范` 节
-  //    （存量、或用户手写的），仍从它反解 —— 否则那些文档会**静默变成"不截"**。
-  const legacy = extractSpecSection(narrative ?? '')
-  if (legacy.trim() !== '') return truncateTitlesFromSpec(legacy)
-  // ③ **以 frontmatter 的 `truncateSections` 为准**（空 = 真的不截）。
-  //    🔴 这里**不再有"回落默认六节"那一支**（2026-10-05 用户裁定，见函数注释）。
-  return (truncateSections ?? []).map((s) => s.trim()).filter((s) => s !== '')
+
+/** 各节的体量（用于回执里"报数"—— 决策 223）。 */
+export interface SectionSize {
+  title: string
+  chars: number
 }
 
 /**
- * ⭐ 从模板取"要截断的节名"（**可多个**，决策 206）。
- * @param t - 模板。
- * @returns 节名数组；没有节声明 `truncate` ⇒ **空数组**。
+ * ⭐⭐⭐ **算各节的字符数**（决策 223：工具从"执行者"改成"**监察者**"）。
+ *
+ * 🔴 **为什么必须有它**：归档交给模型之后，模型**唯一缺的就是"现在多少字"** ——
+ *    规范里写死了阈值（如"超过 20000 字符"），但模型**量不出来**。
+ *    ⇒ 工具把这个数字**摆在它眼前**，那条规范才**可自检**。
+ *
+ * ⚠️ **剔除规范块**（与既有的 `sectionCharCount` 同源）——
+ *    否则规范块自己的几百字会被算进配额，让"该不该归档"判断偏早。
+ * @param narrative - 纯叙事。
+ * @returns 各节字符数（**按字符数降序** —— 最该归档的自然浮到最上面）。
  */
-function templateTruncateTitle(t: { sections: Array<{ name: string; truncate?: boolean }> }): string[] {
-  return t.sections.filter((s) => s.truncate === true).map((s) => s.name)
+export function measureSections(narrative: string): SectionSize[] {
+  const lines = narrative.split(/\r?\n/)
+  const secs = splitH2(narrative)
+  const out: SectionSize[] = []
+  for (const s of secs) {
+    // ⚠️ `splitH2` 给的是"节内行"，但 `sectionCharCount` 要**含标题行**的形态
+    //    （它与截断判据同源，而截断算的就是含标题那一节）。
+    //    ⇒ 这里自己按 `title` 在正文里定位，保证与"人看到的那个节"一致。
+    const start = lines.findIndex((l) => l.trim() === `## ${s.title}`)
+    if (start === -1) continue
+    let end = lines.length
+    for (let k = start + 1; k < lines.length; k += 1) {
+      if (/^##\s+/.test(lines[k] ?? '')) { end = k; break }
+    }
+    out.push({ title: s.title, chars: sectionCharCount(lines.slice(start, end)) })
+  }
+  return out.sort((a, b) => b.chars - a.chars)
 }
 
 /**
@@ -1810,7 +1859,6 @@ export async function runHandoff(
   const isNewProjForTpl = existing === undefined
   let newSections: string[] = []
   let templateId = existing?.frontmatter.template ?? ''
-  let newTruncateSection: string[] = existing?.frontmatter.truncateSections ?? []
   /** ⭐ 本次真正用的那份模板（**只用于回执现报节数**，见下方赋值处）。 */
   let appliedTemplate: { id: string; sections: Array<{ name: string }> } | undefined
   /**
@@ -1827,11 +1875,10 @@ export async function runHandoff(
    *   ⇒ 把权威放在正文，这**整类**失败模式从结构上消失。
    */
   let docSections: readonly string[] = docSectionsOf(existing?.narrative ?? '')
-  /** 该文档要截断的**那些**节（决策 206：可多节；空数组 = 不截）。 */
-  let docTruncateTitle: string[] = defaultTruncateTitle(
-    existing?.frontmatter.truncateSections,
-    existing?.narrative,
-  )
+  // 🔴 **决策 223：`docTruncateTitle` 已删除** —— 工具不再判定"哪几节要截断"
+  //    （归档交给模型按各节规范做）⇒ 这一段整块不再需要。
+  // ⚠️ `frontmatter.truncateSections` **仍在读侧兼容**（存量文档里那行照旧读出、不报错），
+  //    只是**不再有人用它做决定**；写侧也不再刷新它（见下面 `mirrorTruncate` 的说明）。
 
   if (isNewProjForTpl) {
     const wantTpl = (req.template ?? '').trim()
@@ -1855,18 +1902,14 @@ export async function runHandoff(
         return { ...fail(`模板 \`${wantTpl}\` 不合法（它坏了，不是你的输入问题）：\n${tErrs.map((e) => `  · ${e}`).join('\n')}`), similarProjects: [] }
       }
       newSections = templateSectionNames(t)
-      newTruncateSection = templateTruncateTitle(t)
       templateId = wantTpl === 'default' ? '' : wantTpl
       docSections = newSections
-      docTruncateTitle = newTruncateSection
       appliedTemplate = t
     } else {
       // ⭐ 没指定 ⇒ 默认模板（**只有"新建"这一条路径**需要它）。
       const t = await loadDefaultTemplate()
       newSections = templateSectionNames(t)
-      newTruncateSection = templateTruncateTitle(t)
       docSections = newSections
-      docTruncateTitle = newTruncateSection
       appliedTemplate = t
     }
   }
@@ -2394,49 +2437,32 @@ export async function runHandoff(
   // ⚠️ **只在 `narrative` 步做**（没动叙事就不该截）。
   // ⚠️ **任何失败都不影响 handoff**：best-effort，问题只进回执。
   // ══════════════════════════════════════════════════════════════════════
-  let finalNarrative = withBlocks
+  // ══════════════════════════════════════════════════════════════════════
+  // ⭐⭐⭐ **各节体量的回报**（决策 223，2026-10-12 用户裁定）
+  //
+  // 🔴🔴 **这里原来跑的是"自动截断归档"（`runHistoryArchive`）—— 已整个删除。**
+  //    用户裁定：*"归档交给模型，工具嘛，因为没法识别就不要了。完全交给模型吧。
+  //    但本身对模型的强提醒和一定程度的校验还是要想办法的。"*
+  //    ⇒ 归档规则现在是**各节规范里的自然语言**，而**工具读不懂自然语言** ⇒
+  //      它无法再判断"该不该截" ⇒ **不执行**，改成**报数**（模型量不出来的那个数字）。
+  //
+  // ⚠️ **只在 `narrative` 步报**（没动叙事就不必提这件事）。
+  // ⚠️ **不再改文档**：本段**纯读**（旧版会落条目、改叙事）。
+  // ══════════════════════════════════════════════════════════════════════
+  const finalNarrative = withBlocks
   const historyLines: string[] = []
-  /** ⭐ 本次是否**真的归档了历史**（截断发生了）——孤本判据检测据此**跳过本轮**。 */
-  let historyArchived = false
-  /**
-   * ⭐⭐ **本次新建的 history 封面**——必须**并进 `allCovers`** 才能写进项目文档！
-   *
-   * 🔴🔴 **这是我实测踩到的一个真 bug**：条目正文落盘了、但封面没进文档，
-   *    于是 `scanLibrary` 查不到它 ⇒ **指针指向一个"查不到"的条目**
-   *    （而指针存在的全部意义就是"能读回"）。
-   *    ⚠️ 判据：**写了条目正文 ≠ 建了封面** —— 封面只由 `allCovers` 渲染进文档。
-   */
-  const historyCovers: Cover[] = []
-  try {
-    const trunc = await runHistoryArchive({
-      projectId,
-      // 🔴🔴 **决策 209 修**：这里原先传的是 `narrative` —— 而新建项目时
-      //    `withBlocks`（含规范块）是在它**之后**才算出来的 ⇒ 截断拿旧文本跑，
-      //    再把结果赋回 `finalNarrative` ⇒ **规范块被整个丢掉**（实测：文档里没有规范块、
-      //    `truncateSections` 也落空）。⭐ 判据：**"后面还会加工这份文本"时，
-      //    下游必须拿加工后的那一份**，否则前面的加工白做。
-      narrative: withBlocks,
-      existingNarrative: existing?.narrative,
-      config: env.config,
-      narrateNow,
-      sessionId,
-      // ⭐ 决策 204：该文档自己的截断目标（默认六节 == 「当前进度」；空串 = 不截）。
-      truncateTitle: docTruncateTitle,
-    })
-    finalNarrative = trunc.narrative
-    historyArchived = trunc.archived
-    historyLines.push(...trunc.lines)
-    historyCovers.push(...trunc.covers)
-  } catch (err) {
-    historyLines.push(
-      `\n📦 **历史归档未能完成**（不影响本次 handoff）：` +
-        `${err instanceof Error ? err.message : String(err)}`,
-    )
+  /** 🔴 决策 223：工具**永不**再自动归档 ⇒ 恒为 `false`（保留变量是为了少改下游）。 */
+  const historyArchived = false
+  if (narrateNow) {
+    historyLines.push(...reportSectionSizes(finalNarrative))
   }
 
-  // ⭐⭐ **history 封面必须并进来**（否则条目查不到、指针失效）——
-  //    见 `historyCovers` 的注释（那是实测踩到的真 bug）。
-  const allCovers = [...allCoversBase, ...historyCovers]
+  // ⭐⭐ **history 封面并进来**这一步**已不需要** —— 工具不再产生 history 条目。
+  //    ⚠️ **旧 bug 的教训仍然有效**（记在这里，别重蹈）：写了条目正文 ≠ 建了封面，
+  //       封面只由 `allCovers` 渲染进文档 ⇒ 当时"指针指向一个查不到的条目"。
+  //       ⭐ 模型现在自己走 `entries[]` 落 history 条目 ⇒ 走的是**正常的封面路径**，
+  //         这个坑对它不存在。
+  const allCovers = allCoversBase
 
   // ══════════════════════════════════════════════════════════════════════
   // ⭐⭐⭐ **本档写作规范节**（2026-10-12，模板与提示词解耦）
@@ -2491,11 +2517,9 @@ export async function runHandoff(
   // ⚠️ **顺序很重要**：必须在 `finalWithSpec` 算完之后取（规范节已被排除，
   //   `sectionsFromNarrative` 不会把「本档写作规范」算成一个叙事节）。
   const mirrorSections = sectionsFromNarrative(narrativeBody)
-  // ⭐⭐ 决策 209：截断声明**从各节自己的规范块反解**（`truncateTitlesFromBlocks`）；
-  //    存量文档的末尾规范节由 `defaultTruncateTitle` 那条兼容分支兜住。
-  const mirrorTruncate = truncateTitlesFromBlocks(narrativeBody)
-  /** 正文里**有没有规范块**（决定 `truncateSections` 用镜像值还是沿用旧值）。 */
-  const hasSpecBlock = specBlockRange(narrativeBody.split(/\r?\n/)) !== undefined || legacySpec !== ''
+  // 🔴 **决策 223：`mirrorTruncate` / `hasSpecBlock` 已删除** ——
+  //    `truncateSections` 这个镜像**不再维护**（没人读它了，见 `writeProjectDoc` 那处的说明）。
+  //    ⚠️ 保留 `mirrorSections`（节名镜像**仍在用** —— 它是索引/兼容读的来源之一）。
 
   await writeProjectDoc(
     projectId,
@@ -2524,15 +2548,13 @@ export async function runHandoff(
       //       而那个翻转**源头已经删了**。
       // ⭐ 建文档用的模板 id（决策 204）：**必须沿用已有的**（纯记录，但别擦）。
       template: existing !== undefined ? (existing.frontmatter.template ?? '') : templateId,
-      // ⭐⭐ 自动截断目标节：**正文规范块的镜像**（决策 209）。
-      //    ⚠️ 与 `sections` 同一纪律：老文档（两个字段都空）**保持空**，
-      //       否则会把它推进"以 `truncateSections` 为准"的分支 ⇒ 静默不截。
-      //    ⭐ 判据：**"正文里有规范块"与"正文里一个块都没有"要分开** ——
-      //       前者才用镜像值（哪怕是空数组：那是"真的不截"）；
-      //       后者（老文档 / 还没迁移）**沿用旧值**。
-      truncateSections: hasSpecBlock || (existing?.frontmatter.truncateSections ?? []).length > 0
-        ? (hasSpecBlock ? mirrorTruncate : newTruncateSection)
-        : (existing?.frontmatter.truncateSections ?? []),
+      // 🔴🔴 **`truncateSections` 字段已于 2026-10-12（决策 223）停止维护。**
+      //    · 它原先记的是"哪几节参与**工具自动截断**"（正文规范块 `truncate` 标记的镜像）；
+      //    · 那套机制整个废除（归档交给模型、规则写成自然语言）⇒ **无人再读它**。
+      //    ⚠️ **存量值原样透传**（不主动清）——理由与 `archivedAt` 同类：
+      //      它可能还想保留历史痕迹，而**清空它属于"改用户数据"**，该由迁移脚本决定。
+      //      ⭐ 判据：**"不再维护" ≠ "可以擦掉"** —— 前者是停止写，后者是破坏。
+      truncateSections: existing?.frontmatter.truncateSections ?? [],
     },
     finalWithSpec,
     allCovers,
@@ -2779,36 +2801,28 @@ export async function runHandoff(
     //       （那正是"回执在撒谎"的一类）。现在：本研究文档记着的节名在前，
     //       文档里实际出现的其它节（如 LLM 自己加的自定义节）附后。
     const order = docSections
-    // ⭐ 截断目标也按**该文档自己的**（默认六节时就是「当前进度」）。
-    //    ⭐⭐ 决策 206：**可多节** ⇒ 合计它们的字符数做阈值判断，
-    //       并在"已超阈值"那句里**逐个列出**（否则用户看不出是哪一节超了）。
-    const truncTitles = docTruncateTitle
-    const truncSet = new Set(truncTitles)
-    const progressChars = truncTitles.reduce((a, t) => a + (sizes.get(t) ?? 0), 0)
+    // 🔴🔴 **决策 223：这里不再判"可截断节合计 / 是否超阈值"。**
+    //    · 旧版把"哪几节能截"的字符数加起来、和 `progressCharsWarn` 比，报"已超过阈值"；
+    //    · 现在**归档阈值写在各节的规范里**（自然语言），而**工具读不懂它** ⇒
+    //      **不再替模型做这个判断**（猜错了就是撒谎），只如实报**每一节各多少字符**。
+    //    ⭐ 判据：**"我不知道阈值"时就不要输出"是否超阈值"** ——
+    //      报数（确定的事实）与判断（我不掌握的东西）必须分开。
     const total = [...sizes.values()].reduce((a, b) => a + b, 0)
-    if (progressChars > 0 || sizes.size > 0) {
-      const warn = env.config.progressCharsWarn
-      const over = progressChars > warn
+    if (sizes.size > 0) {
       const shown = [
         ...order.filter((t) => sizes.has(t)),
         ...[...sizes.keys()].filter((t) => !order.includes(t)),
       ]
-      const detail = shown
-        .map((t) => (truncSet.has(t) ? `**${t} ${sizes.get(t)}**` : `${t} ${sizes.get(t)}`))
-        .join(' ｜ ')
-      // ⚠️ 多节时写出每节各多少（单节时就是那一节的数），措辞按节数分叉。
-      const perSec = truncTitles
-        .filter((t) => (sizes.get(t) ?? 0) > 0)
-        .map((t) => `${t} ${sizes.get(t)}`)
-        .join('、')
+      const detail = shown.map((t) => `${t} ${sizes.get(t)}`).join(' ｜ ')
+      lines.push(`📋 **叙事共 ${total} 字符**，${shown.length} 节：\n    ${detail}`)
+      // ⚠️ 存量文档的规范里**没有数字** ⇒ 它们无从自检。
+      //    ⭐ 把设置页那两个**旧旋钮**当作"默认参考值"报出来 ——
+      //      这是**不改用户文档**的前提下，让存量文档也有数字可对照的最低成本做法。
+      const warn = env.config.progressCharsWarn
+      const keep = env.config.progressCharsKeep
       lines.push(
-        `📋 **叙事共 ${total} 字符**，${shown.length} 节：\n    ${detail}` +
-          (progressChars > 0
-            ? `\n📏 **可截断节合计 ${progressChars} 字符**（${perSec}；阈值 ${warn}）。` +
-              (over
-                ? '\n    ⚠️ **已超过阈值**——请把已完结的历史归并（判据见 `context()` 的压缩规范）。'
-                : '')
-            : ''),
+        `    ⭐ 归档阈值优先看**各节自己的规范**（那才是权威）；` +
+          `规范里没写数字时，可参考旧旋钮的默认值：**超过 ${warn} 字符**时归档、**压到 ${keep} 以内**。`,
       )
     }
   }
@@ -3218,119 +3232,46 @@ export async function runHandoff(
 }
 
 /**
- * ⭐⭐ **历史归档：超过阈值就自动截断**（决策 136）。
+ * ⭐⭐⭐ **各节体量报告**（决策 223，2026-10-12 用户裁定）—— 工具在这里**只报数、不归档**。
  *
- * 流程：① 截断「当前进度」（`truncateProgress`）⇒ ② 把截走的原文落成
- * `kind:'history'` 的条目 ⇒ ③ 回填「历史进展」行里的 entry id 指针。
+ * ── 🔴🔴 它取代了什么（`runHistoryArchive` 已删除）────────────────────────────
+ * 旧机制：工具**自动**截断「当前进度」、落 `kind:'history'` 条目、回填指针。
+ * 它当时的存在理由写着：
+ * > 压缩规范写了判据、也加了触发条件（回执每次报体量），**连报 7 次、一次没压**
+ * > ——根因是"**要模型自己动手**"。截断由工具自己做 ⇒ **那个失败模式从此不存在**。
  *
- * 🔴🔴 **为什么必须有它**：压缩规范写了判据、也加了触发条件（回执每次报体量），
- *    **连报 7 次、一次没压** —— 根因是"**要模型自己动手**"。
- *    截断由工具自己做 ⇒ ⭐ **那个失败模式从此不存在**。
+ * **用户 2026-10-12 裁定把它换掉**（原话）：
+ * > *"什么阈值触发，压缩目标，要不要截断，怎么归档，归档到什么类型
+ * >  完全由章节的书写规范去定。"*
+ * > *"归档交给模型，工具嘛，因为没法识别就不要了。完全交给模型吧。
+ * >  但本身对模型的强提醒和一定程度的校验还是要想办法的。"*
  *
- * ⚠️ **与压缩的语义差别**：压缩**会丢**（归并掉细节）；截断**不丢**
- *    （原文逐字进条目，且「历史进展」里留了**完整 entry id 指针**可读回）。
+ * ⇒ 根因是：**归档规则改成了自然语言（写在各节规范里），而工具读不懂自然语言**
+ *   ⇒ 它无法再判断"该不该截、截到哪"。
+ *   ⭐ **于是它换了个位置：从"执行者"变成"监察者"** ——
+ *     把**模型量不出来的那个数字**（各节现在多少字符）摆到它眼前。
  *
- * @param args - 见各字段注释。
- * @returns 新的叙事（可能未变）与回执行。
+ * ── 🔴 为什么"报数"就是那条"强提醒"────────────────────────────────────────
+ * 规范里写死了阈值（如"超过 20000 字符时……"），而**模型自己数不出字数** ——
+ * 没有这个数字，那条规范**根本无法自检**（它不知道现在超了没有）。
+ * ⇒ 报数 + 已有的「本次没动的节」点名（决策 222），合起来就是提醒的全部。
+ *
+ * ⚠️ **不再改文档**：本函数**纯读**，不产生条目、不碰叙事
+ *    （旧版会落盘 ⇒ 现在落盘的只有 `memj_handoff` 自己的那一次）。
+ * @param narrative - 本次落盘**之后**的叙事（这样报的数就是模型下次看到的那份）。
+ * @returns 回执行（可能为空数组）。
  */
-async function runHistoryArchive(args: {
-  projectId: string
-  narrative: string
-  existingNarrative: string | undefined
-  config: MemjConfig
-  narrateNow: boolean
-  sessionId: string
-  /**
-   * ⭐⭐ **该文档要截断哪些节**（决策 204 / 206）——**可多节**。
-   * 空数组 = 本模板不声明自动截断 ⇒ 不截（如实报，不算错误）。
-   */
-  truncateTitle: readonly string[]
-}): Promise<{ narrative: string; lines: string[]; archived: boolean; covers: Cover[] }> {
-  const lines: string[] = []
-  const { projectId, config } = args
-  // ⚠️ **只在 `narrative` 步做**：没动叙事就不该截（否则"只落知识"也会顺带改文档）。
-  if (!args.narrateNow) return { narrative: args.narrative, lines, archived: false, covers: [] }
-
-  // ⭐ **已有的「历史进展」行要保留**（它们指向更早归档的条目）——
-  //    从**旧文档**里取（而不是从本次新叙事里取：本次叙事可能是按节改的、不含那一节）。
-  const src = args.existingNarrative ?? args.narrative
-  const priorLines = readHistoryLines(src)
-
-  // 🔴🔴 **两个配额都要传**（实测踩到过）：只传 `keep` 会让"在 keep 与 warn 之间"
-  //     的文档**也被截**，而用户的本意是"**超过阈值才动手、截到 12000 以内**"。
-  // ⭐ 第 5 参 = **该文档自己的截断目标节**（决策 204 / 206；默认六节时 == 「当前进度」）。
-  const r = truncateProgress(
-    args.narrative,
-    config.progressCharsWarn,
-    config.progressCharsKeep,
-    priorLines,
-    args.truncateTitle,
-  )
-  if (r.warning !== '') {
-    lines.push(`\n📦 **历史归档未执行**：${r.warning}`)
-    return { narrative: args.narrative, lines, archived: false, covers: [] }
-  }
-  if (r.chunks.length === 0) return { narrative: args.narrative, lines, archived: false, covers: [] }
-
-  // ── 落盘：每组一条 `kind:'history'` 的条目 ──
-  let narrative = r.narrative
-  const created: Array<{ slug: string; id: string; summary: string; count: number }> = []
-  const covers: Cover[] = []
-  for (let i = 0; i < r.chunks.length; i += 1) {
-    const c = r.chunks[i]
-    if (c === undefined) continue
-    const id = newEntryId()
-    const slug = historySlug(projectId, c.slugPart)
-    const cover: Cover = {
-      id,
-      project: projectId,
-      // ⚠️ **不挂主题**：它不是知识（挂主题会污染跨项目主题视图）。
-      theme: [],
-      global: false,
-      kind: 'history',
-      tags: ['历史进展'],
-      title: c.title,
-      desc: `「${PROGRESS_TITLE}」自动截断时归档的原文（${c.summary}）；当要查这一段的历史细节时读它。`,
-      ref: '', // 由 writeEntryDoc 生成
-      ext: false,
-      createdAt: nowIsoNow(),
-      updatedAt: nowIsoNow(),
-      archivedAt: '',
-    }
-    // 🔴 **必须走 `writeEntryDoc`**（唯一落盘处，它负责 path/slug 规范与 frontmatter）。
-    cover.ref = await writeEntryDoc(cover, slug, c.body, { sessionId: args.sessionId, from: 'history-archive' })
-    covers.push(cover)
-    // ⭐ 回填指针（**完整 UUID** —— `memj_read` 只认完整 id）。
-    narrative = fillHistoryId(narrative, i, id)
-    created.push({ slug, id, summary: c.summary, count: c.sections.length })
-  }
-
-  // 🔴 **回填后必须复核"没有残留占位符"**——实测踩到过：
-  //    组数与占位符数目对不上（或 `fillHistoryId` 的序号错位）时，
-  //    文档里会留下一串 `{{ENTRY_ID}}`，而**那行指针就废了**。
-  //    ⚠️ 工具**不猜**：如实报出来（不静默）。
-  if (countHistoryPlaceholders(narrative) > 0) {
-    lines.push(
-      `\n⚠️ **历史归档：指针回填不完整** —— 文档里仍留有 ${countHistoryPlaceholders(narrative)} 处占位符，` +
-        '请用 `memj_read` 核对「历史进展」小节（这是工具侧的问题，请报告）。',
-    )
-  }
-
-  if (created.length > 0) {
-    lines.push(
-      `\n📦 **历史归档（自动截断）**：「${PROGRESS_TITLE}」${r.beforeChars} → ${r.afterChars} 字符` +
-        `（目标 ${config.progressCharsKeep}）。\n` +
-        created
-          .map(
-            (c) =>
-              `    · **${c.summary}**（${c.count} 节）⇒ 条目 \`${c.id}\`（\`kind: history\`，slug \`${c.slug}\`）`,
-          )
-          .join('\n') +
-        '\n    ⭐ 原文**逐字保留**在该条目里，用 `memj_read({ id: "<完整 UUID>" })` 可读回；' +
-        '\n    ⚠️ history 条目**不参与检索**（不会混进 `memj_search` 结果）。',
-    )
-  }
-  return { narrative, lines, archived: created.length > 0, covers }
+function reportSectionSizes(narrative: string): string[] {
+  const sizes = measureSections(narrative)
+  if (sizes.length === 0) return []
+  const body = sizes.map((s) => `    · ${s.title}　${s.chars} 字符`).join('\n')
+  return [
+    `\n📏 **各节体量**（对照**各节自己的书写规范**，判断哪一节该归档了）：\n${body}\n` +
+      '    ⭐ 规范里的阈值（如"超过 20000 字符"）就写在各节的规范块里；' +
+      '工具**不会替你归档**（它读不懂那段自然语言），**归档由你按规范执行**：\n' +
+      '    用 `entries` 落成 `kind: history` 的条目（**不参与检索**，是留档），' +
+      '原处只留**完整 uuid + 一句话批次主题**。',
+  ]
 }
 
 /** 当前时间的 ISO 串（小工具，避免重复 `new Date()`）。 */

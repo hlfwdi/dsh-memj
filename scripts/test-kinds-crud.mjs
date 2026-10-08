@@ -43,7 +43,9 @@ console.log('\n【1】内置默认表（与决策 214 的唯一词表同源）')
   const b = mod.builtinKindDefs()
   check(b.length === 5, `5 条（实得 ${b.length}）`)
   check(b.every((d) => d.builtin === true), '全部标 builtin')
-  check(b.filter((d) => d.reserved).map((d) => d.id).join() === 'history', '只有 history 是 reserved')
+  // 🔴 **决策 223（2026-10-12 用户裁定）：`history` 已不再是保留项** ——
+  //    归档从"工具自动做"改成"模型按各节规范做" ⇒ 它**必须给模型选**。
+  check(b.filter((d) => d.reserved).length === 0, '⭐ 内置类型里**没有**保留项了（history 已开放）')
   check(
     JSON.stringify(b.map((d) => d.id)) === JSON.stringify(mod.ENTRY_KINDS),
     'id 与 ENTRY_KINDS 逐字一致（没抄第二份）',
@@ -85,7 +87,21 @@ console.log('\n【4】三条内置保护')
   check(mod.validateKinds(defs).length === 0, '完整表 ⇒ 无错误')
   check(mod.validateKinds(defs.filter((d) => d.id !== 'trap')).some((e) => e.includes('不能删除')), '删内置 ⇒ 报"不能删除"')
   check(mod.validateKinds(mk('fact', { label: '事实' })).some((e) => e.includes('显示名**不能改')), '改内置显示名 ⇒ 报错')
-  check(mod.validateKinds(mk('history', { reserved: false })).some((e) => e.includes('保留项')), '摘掉 history 保留标记 ⇒ 报错')
+  // 🔴 **决策 223：内置类型里已没有保留项** ⇒ 原来那条"摘掉 history 的保留标记 ⇒ 报错"
+  //    **没有作用对象了**（`b.reserved` 恒为 false ⇒ 那一支走不到）。
+  //
+  // ⭐ 那怎么证"防线还在"？—— **运行期造不出来**（`builtinKindDefs()` 直接读编译期
+  //    常量 `ENTRY_KIND_DEFS`，`setCurrentKindDefs` 改的是另一份 `currentDefs`）。
+  //    ⇒ 改用**静态反证**（本项目对"不许出现的第二份实现"就是这么验的）：
+  //      那条校验必须**仍在源码里**，只是当前走不到。
+  //    🔴 判据：**空转的防线 ≠ 多余的防线** —— 它的触发条件是数据，不是代码。
+  {
+    const src = readFileSync(join(process.cwd(), 'src', 'kinds.ts'), 'utf8')
+    check(src.includes('不能把它的"保留"标记去掉'),
+      '⭐⭐ 保留项的校验**仍在源码里**（当前空转，但机制没被删掉）')
+    check(src.includes('if (b.reserved && !mine.reserved)'),
+      '  ⇒ 触发条件那句也在')
+  }
   check(mod.validateKinds([...defs, { ...defs[5], id: 'X1' }]).some((e) => e.includes('不合法')), '大写 id ⇒ 报不合法')
   check(mod.validateKinds([...defs, { ...defs[5], id: 'x1' }]).some((e) => e.includes('重复')), '重复 id ⇒ 报错')
   check(mod.validateKinds([{ ...defs[5], when: ' ' }]).some((e) => e.includes('什么时候用')), 'when 为空 ⇒ 报错')

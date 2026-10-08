@@ -86,14 +86,15 @@ console.log('\n【2】模板校验')
   check('节名 = 沉淀知识 ⇒ 拒绝',
     validate(mk([{ name: '沉淀知识', desc: 'x' }])).some((e) => e.includes('由工具维护')))
   check('desc 为空 ⇒ 拒绝', validate(mk([{ name: '目标', desc: '' }])).some((e) => e.includes('desc')))
-  // ⭐⭐ 决策 206（2026-10-02）：**多个 truncate 现在是允许的**（用户要求"可多选"）。
-  //    ⚠️ 原先这条断言是"两个 truncate ⇒ 拒绝" —— 判据随设计更新，不是代码 bug。
-  check('多个 truncate ⇒ **允许**（决策 206）',
-    validate(mk([{ name: 'A', desc: 'x', truncate: true }, { name: 'B', desc: 'y', truncate: true }])).length === 0)
-  check('3 个 truncate 也允许', validate(mk([
-    { name: 'A', desc: 'x', truncate: true }, { name: 'B', desc: 'y', truncate: true }, { name: 'C', desc: 'z', truncate: true },
-  ])).length === 0)
-  check('0 个 truncate ⇒ 允许', validate(mk([{ name: 'A', desc: 'x' }])).length === 0)
+  // 🔴 **决策 223（2026-10-12）：`truncate` 字段已从模板里删除** ——
+  //    归档规则改成**写进 `desc` 的自然语言**，模板层不再有那个开关。
+  //    ⭐ 所以这组断言从"允许多个 truncate"变成"**多传了也无害、但不生效**"
+  //      （解析侧对存量宽容：老 `.json` 模板里带着它 ⇒ 忽略、不报错）。
+  check('⭐ 传了 `truncate` 也不再有任何效果（字段已废）',
+    validate(mk([{ name: 'A', desc: 'x', truncate: true }])).length === 0)
+  check('  ⇒ 解析回来**没有** truncate 字段',
+    mod.normalizeTemplate({ id: 'z', sections: [{ name: 'A', desc: 'x', truncate: true }] })
+      ?.sections.every((s) => s.truncate === undefined) === true)
   check('id 非法 ⇒ 拒绝', validate(mk([{ name: 'A', desc: 'x' }])).length === 0 && validate({ version: 1, id: 'BAD ID', title: 'T', sections: [{ name: 'A', desc: 'x' }] }).length > 0)
 }
 
@@ -152,49 +153,33 @@ console.log('\n【4】API 契约')
   check('GET 接口只收 GET（405）', r7.status === 405)
 }
 
-console.log('\n【5b】⭐⭐ 多节截断（决策 206）—— 各自独立')
+console.log('\n【5b】⭐⭐ 决策 223：`truncateProgress` 已删除 —— 工具**不截断、只报数**')
 {
-  // ⚠️ `truncateProgress` 在 **offline-bundle** 里（`lib/index.js` 是插件主入口，不含它）。
-  const { truncateProgress } = B
-  // 造一份文档：两节都超标。
-  // ⚠️ **每节必须有 ≥3 个 `###` 小节** —— 截断有"**至少保留一个小节**"的规则
-  //    （否则等于把这一节清空）。第一版我只放了 2 个 ⇒ 只截走 1 个、留下的那个
-  //    正是我拿来断言"已被截走"的那段 ⇒ **假失败**。
-  const big = (tag) => `### 第3批\n\n${tag.repeat(300)}\n\n### 第2批\n\n${tag.repeat(300)}\n\n### 第1批\n\n${tag.repeat(300)}\n`
-  const doc = [
-    '# HANDOFF — x', '',
-    '## 甲节', '', big('甲'), '',
-    '## 乙节', '', big('乙'), '',
-    '## 丙节', '', '短的。', '',
-  ].join('\n')
-
-  // ① 只截「甲节」⇒ 只有甲被截
-  const one = truncateProgress(doc, 100, 50, [], ['甲节'])
-  check('单节：截到 1 个归档块', one.chunks.length > 0 && one.warning === '', `chunks=${one.chunks.length} warn=${one.warning}`)
-  check('单节：甲节被截（最早的「第1批」已移走）', !one.narrative.includes('### 第1批\n\n' + '甲'.repeat(300)))
-  check('单节：乙节**没被动**（乙的最早那批还在）', one.narrative.includes('### 第1批\n\n' + '乙'.repeat(300)))
-
-  // ② 两节都列为可截 ⇒ **两块**都被截（各自独立）
-  const two = truncateProgress(doc, 100, 50, [], ['甲节', '乙节'])
-  check('多节：两节各自产出归档块（chunks ≥ 2）', two.chunks.length >= 2, `chunks=${two.chunks.length}`)
-  check('多节：甲节被截', !two.narrative.includes('### 第1批\n\n' + '甲'.repeat(300)))
-  check('多节：乙节也被截', !two.narrative.includes('### 第1批\n\n' + '乙'.repeat(300)))
-  check('多节：丙节（未列）**原样保留**', two.narrative.includes('丙节') && two.narrative.includes('短的。'))
-
-  // ③ 兼容：老的单值字符串形态仍然可用
-  const legacy = truncateProgress(doc, 100, 50, [], '甲节')
-  check('兼容：单值字符串参数仍可用', legacy.chunks.length > 0)
-
-  // ④ 空数组 = 不截（明确报，不是错误）
-  const none = truncateProgress(doc, 100, 50, [], [])
-  check('空数组 ⇒ 不截 + 明确说明', none.chunks.length === 0 && none.warning.includes('没有声明'))
+  // 🔴 **这一节原来是"多节截断各自独立"（决策 206）** —— 那套机制已按用户裁定删除：
+  //    > *"归档交给模型，工具嘛，因为没法识别就不要了。完全交给模型吧。
+  //    >  但本身对模型的强提醒和一定程度的校验还是要想办法的。"*
+  //    ⇒ 现在要证的恰好**相反**：工具**不再有任何截断能力**，
+  //      它只提供**各节字符数**（模型量不出来的那个数字）。
+  check('⛔ `truncateProgress` 已删除（连同整套自动截断）',
+    typeof B.truncateProgress !== 'function' && typeof mod.truncateProgress !== 'function')
+  check('⛔ `historySlug` / `fillHistoryId` 等一并删除',
+    typeof B.historySlug !== 'function' && typeof B.fillHistoryId !== 'function')
+  // ⭐ 取而代之的是 `measureSections`（报数）—— 它是"强提醒"的原料。
+  const big = (tag) => `### 第3批\n\n${tag.repeat(300)}\n\n### 第2批\n\n${tag.repeat(300)}\n`
+  const doc = ['# HANDOFF — x', '', '## 甲节', '', big('甲'), '', '## 乙节', '', big('乙'), '', '## 丙节', '', '短的。', ''].join('\n')
+  const sizes = mod.measureSections(doc)
+  check('⭐ `measureSections` 报出各节字符数', sizes.length === 3, JSON.stringify(sizes.map((s) => s.title)))
+  check('  ⇒ 按字符数降序（最该归档的在最前）', /甲节|乙节/.test(sizes[0]?.title ?? ''), JSON.stringify(sizes))
+  check('  ⇒ 短的那节排在最后', sizes[sizes.length - 1]?.title === '丙节')
+  // ⭐ 它**只读**（同一个输入跑两次结果一样；不改任何东西）
+  check('⭐⭐ 纯函数、不改输入', doc === ['# HANDOFF — x', '', '## 甲节', '', big('甲'), '', '## 乙节', '', big('乙'), '', '## 丙节', '', '短的。', ''].join('\n'))
 }
 
 console.log('\n【5】⭐⭐ 模板不回溯已有文档（用户裁定核心）')
 {
   await saveTpl({
     version: 1, id: 'nb-tpl', title: 'NB',
-    sections: [{ name: '目标', desc: 'g' }, { name: '进展', desc: 'p', truncate: true }],
+    sections: [{ name: '目标', desc: 'g' }, { name: '进展', desc: 'p' }],
   })
   // 用模板建项目
   const r1 = await runHandoff(
@@ -205,7 +190,11 @@ console.log('\n【5】⭐⭐ 模板不回溯已有文档（用户裁定核心）
   const d1 = await loadProjectDoc('nb-proj')
   // ⭐ 2026-10-05：封面的 `sections` 字段已删除 ⇒ 观察点换成**正文**（它本来就是权威）。
   check('文档的节名正确', mod.sectionsFromNarrative(d1?.narrative ?? '').join(',') === '目标,进展')
-  check('文档记了截断节（数组，决策 206）', (d1?.frontmatter.truncateSections ?? []).join(',') === '进展')
+  // 🔴 **决策 223：`truncateSections` 不再被维护** —— 归档规则改成各节规范里的自然语言，
+  //    那个字段**没有消费者**了 ⇒ 新建的文档里它是空的（这是**正确**行为，不是缺陷）。
+  //    ⚠️ 存量值仍会**原样透传**（不主动清空）—— 见下面第 211 行那条断言。
+  check('⭐ `truncateSections` 不再被写（决策 223）',
+    (d1?.frontmatter.truncateSections ?? []).length === 0)
   check('文档记了模板 id', d1?.frontmatter.template === 'nb-tpl')
 
   // ⭐ 再传另一个模板更新它 —— 应被**忽略**
@@ -223,7 +212,7 @@ console.log('\n【5】⭐⭐ 模板不回溯已有文档（用户裁定核心）
   await delTpl('nb-tpl')
   const d3 = await loadProjectDoc('nb-proj')
   check('⭐ 模板被删后，文档的节名不受影响', mod.sectionsFromNarrative(d3?.narrative ?? '').join(',') === '目标,进展')
-  check('  截断节也还在', (d3?.frontmatter.truncateSections ?? []).join(',') === '进展')
+  check('  `truncateSections` 仍是空的（不再被维护）', (d3?.frontmatter.truncateSections ?? []).length === 0)
   // 而且还能正常 handoff
   await appendDocRead('s-nb', { project: 'nb-proj', turn: 3, readAt: new Date().toISOString(), full: true, sections: [] })
   const r3 = await runHandoff(

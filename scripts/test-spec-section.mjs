@@ -31,10 +31,10 @@ const check = (name, ok, extra = '') => {
 const F = '```'
 const FENCE = `${F}memj:spec`
 
-console.log('\n【1】新形态：抓取 / 切除 / 反解（决策 209）')
+console.log('\n【1】新形态：抓取 / 切除（决策 209）')
 {
   const sec = ['## 目标', '', FENCE, '这个项目要做什么', F, '', '正文一行。']
-  check('specBlockRange 找得到', mod.specBlockRange(sec)?.truncate === false)
+  check('specBlockRange 找得到', mod.specBlockRange(sec) !== undefined)
   check('extractSpecBlock 取到规范文字', mod.extractSpecBlock(sec) === '这个项目要做什么')
   check('extractSpecBlockLines 取到原文行（含围栏）',
     JSON.stringify(mod.extractSpecBlockLines(sec)) === JSON.stringify([FENCE, '这个项目要做什么', F]))
@@ -44,28 +44,46 @@ console.log('\n【1】新形态：抓取 / 切除 / 反解（决策 209）')
   check('没有规范块 ⇒ 原样返回', mod.stripSpecBlock(['## 甲', '', 'x']).join('\n') === '## 甲\n\nx')
 }
 {
-  const doc = ['## 目标', '', FENCE, 'g', F, '', '## 当前进度', '', `${FENCE} truncate`, 'p', F, '', '## 下一步', '', FENCE, 'n', F, ''].join('\n')
-  check('truncateTitlesFromBlocks 反解出可截断节', JSON.stringify(mod.truncateTitlesFromBlocks(doc)) === '["当前进度"]')
+  const doc = ['## 目标', '', FENCE, 'g', F, '', '## 当前进度', '', FENCE, 'p', F, '', '## 下一步', '', FENCE, 'n', F, ''].join('\n')
   check('围栏里的伪标题不算节', JSON.stringify(mod.sectionsFromNarrative(doc)) === '["目标","当前进度","下一步"]')
   const broken = ['## 甲', '', FENCE, '规范没关围栏', ''].join('\n')
   check('⭐ 围栏不闭合 ⇒ 当作没有规范块（不半取）', mod.specBlockRange(broken.split('\n')) === undefined)
-  check('  ⇒ 反解也为空', mod.truncateTitlesFromBlocks(broken).length === 0)
 }
 {
   const sec = ['## 甲', '', FENCE, '第一行', '第二行', '第三行', F]
   check('多行规范块能取全', mod.extractSpecBlock(sec) === '第一行\n第二行\n第三行')
-  const t = ['## 甲', '', `${FENCE} truncate`, '第一行', '第二行', F].join('\n')
-  check('⭐⭐ 多行 + 可截断 ⇒ 声明不丢（旧形态会丢）', JSON.stringify(mod.truncateTitlesFromBlocks(t)) === '["甲"]')
+}
+
+console.log('\n【1b】⭐⭐ 决策 223：`truncate` 标记**已废除**，但**读侧必须宽容**')
+{
+  // 🔴 **这是本次改造最要紧的一条兼容性断言**：
+  //    存量 21 份文档的围栏起始行**写着 ` truncate`**（那时它是机器标记）。
+  //    若不宽容 ⇒ 那些行**认不出是起始行** ⇒ 规范块整块失效
+  //    ⇒ 「节规范」功能（显示、就地编辑、交接点名）**全部静默失灵**。
+  //    ⭐ 判据：**放宽解析、收紧渲染** —— 读要能读旧的，写只写新的。
+  const legacyOpen = `${FENCE} truncate`
+  const sec = ['## 甲', '', legacyOpen, '规范文字', F]
+  check('⭐ 带旧 `truncate` 后缀的行**仍被认作起始行**',
+    mod.specBlockFenceInfo(legacyOpen) === true)
+  check('  ⇒ 规范块照样能取出', mod.specBlockRange(sec) !== undefined)
+  check('  ⇒ 规范文字照样取到', mod.extractSpecBlock(sec) === '规范文字')
+  // ⭐ 渲染侧：**只写最简形态**（不再带后缀）
+  const rendered = mod.renderSpecBlockLines('新的规范')
+  check('⭐ 渲染出的起始行**不带任何后缀**', rendered[0] === FENCE, rendered[0])
+  // 🔴 反证：`truncateTitlesFromBlocks` 真的删了
+  check('⛔ `truncateTitlesFromBlocks` 已删除（归档不再由工具判定）',
+    typeof mod.truncateTitlesFromBlocks !== 'function')
 }
 
 console.log('\n【2】旧形态兼容读（决策 207 的存量文档）')
 {
+  // ⚠️ **这两个函数仍然活着**（`handoff.ts` 用它保住存量文档末尾那节「本档写作规范」）
+  //    ⇒ 它们的断言**必须留着**（只去掉"反解可截断节"那一条 —— 那个消费者已删）。
   const legacy = ['## 目标', '', '正文', '', '## 本档写作规范', '', '本文档共 **2 节**：', '',
-    '- `## 目标` —— g', `- \`## 进展\` —— p${mod.TPL_GUIDANCE_TRUNC_MARK}`, '',
+    '- `## 目标` —— g', '- `## 进展` —— p', '',
     '## 沉淀知识', '', '<!-- memj:entry', '...', '-->', '<!-- /memj:entry -->'].join('\n')
   const spec = mod.extractSpecSection(legacy)
   check('extractSpecSection 取得旧形态那一节', spec.startsWith('## 本档写作规范'))
-  check('⭐ truncateTitlesFromSpec 反解出「进展」', JSON.stringify(mod.truncateTitlesFromSpec(spec)) === '["进展"]')
   const cut = mod.cutSpecSection(legacy)
   check('cutSpecSection 砍掉它', !cut.includes('本档写作规范'))
   check('  且保住「沉淀知识」', cut.includes('沉淀知识'))
@@ -76,16 +94,19 @@ console.log('\n【2】旧形态兼容读（决策 207 的存量文档）')
 
 console.log('\n【3】模板 md：desc 住在规范块里')
 {
+  // 🔴 **决策 223：`truncate` 字段已从 `TemplateSection` 删除** ⇒ 这里的样例
+  //    不再带它；断言也改成"渲染出的起始行**不带后缀**"。
   const t = { version: 1, id: 't1', title: 'T', sections: [
     { name: '目标', desc: '这个项目要做什么' },
-    { name: '进展', desc: '做到哪了', truncate: true },
+    { name: '进展', desc: '做到哪了' },
   ] }
   const md = mod.renderTemplateDoc(t)
   check('渲染出规范块', md.includes(FENCE))
-  check('渲染出 truncate 标记', md.includes(`${FENCE} truncate`))
+  check('⭐ 起始行**不带任何后缀**（`truncate` 已废除）', !md.includes(`${FENCE} truncate`))
   const back = mod.parseTemplateDoc(md, 't1')
   check('解析回来 desc 一致', back?.sections.map((s) => s.desc).join('|') === '这个项目要做什么|做到哪了')
-  check('解析回来 truncate 一致', back?.sections[1]?.truncate === true && back?.sections[0]?.truncate !== true)
+  check('⭐ 解析回来**没有** truncate 字段（不再有这个概念）',
+    back?.sections.every((s) => s.truncate === undefined) === true)
   check('⭐⭐ 幂等（再渲染逐字相同）', mod.renderTemplateDoc(back) === md)
 }
 
@@ -93,12 +114,12 @@ console.log('\n【4】建项目：骨架连规范块一起长出来')
 {
   const t = { version: 1, id: 't1', title: 'T', sections: [
     { name: '目标', desc: 'g' },
-    { name: '进展', desc: 'p', truncate: true },
+    { name: '进展', desc: 'p' },
   ] }
   const sk = mod.renderSpecBlocksSkeleton(t)
   check('骨架含规范块', sk.includes(FENCE))
   check('骨架的节名正确', JSON.stringify(mod.sectionsFromNarrative(sk)) === '["目标","进展"]')
-  check('骨架的截断声明正确', JSON.stringify(mod.truncateTitlesFromBlocks(sk)) === '["进展"]')
+  check('⭐ 骨架的起始行也不带后缀', !sk.includes(`${FENCE} truncate`))
 }
 
 console.log('\n【5】端到端：用模板建项目 ⇒ 文档里每节都有规范块')
@@ -106,7 +127,7 @@ console.log('\n【5】端到端：用模板建项目 ⇒ 文档里每节都有�
   const CFG = { progressCharsWarn: 20000, progressCharsKeep: 12000 }
   await mod.saveTemplate({ version: 1, id: 'e2e-tpl', title: 'E2E', sections: [
     { name: '研究目标', desc: '这家公司要回答什么问题' },
-    { name: '证据', desc: '一手材料', truncate: true },
+    { name: '证据', desc: '一手材料' },
   ] })
   await mod.appendDocRead('s-e2e', { project: 'e2e-proj', turn: 1, readAt: new Date().toISOString(), full: true, sections: [] })
   const r = await mod.runHandoff(
@@ -118,9 +139,12 @@ console.log('\n【5】端到端：用模板建项目 ⇒ 文档里每节都有�
   check('⭐ 文档正文里每节都有规范块', d?.narrative.includes(FENCE) === true)
   check('⭐ 规范块里是该模板的 desc', d?.narrative.includes('这家公司要回答什么问题') === true)
   check('⭐⭐ 文档里**没有**末尾的「本档写作规范」节', !d?.narrative.includes('## 本档写作规范'))
-  check('⭐ frontmatter 的 truncateSections 从规范块反解', (d?.frontmatter.truncateSections ?? []).join(',') === '证据')
   // ⭐ 2026-10-05：`sections` 字段已删 ⇒ 直接看正文（权威）。
   check('⭐ 正文里的节名正确', mod.sectionsFromNarrative(d?.narrative ?? '').join(',') === '研究目标,证据')
+  // 🔴 **决策 223：`truncateSections` 不再被维护** ⇒ 不再断言它被刷新。
+  //    ⚠️ 但**存量值要原样透传**（不主动清空）⇒ 新建文档它是空的，这是对的。
+  check('⭐ `truncateSections` 不再被写（决策 223）',
+    (d?.frontmatter.truncateSections ?? []).length === 0)
 
   await mod.appendDocRead('s-e2e', { project: 'e2e-proj', turn: 2, readAt: new Date().toISOString(), full: true, sections: [] })
   const r2 = await mod.runHandoff(

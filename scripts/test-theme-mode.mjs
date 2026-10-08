@@ -3,7 +3,7 @@
  *
  * 覆盖两类：
  *  A. **`settings.ts` 的纯逻辑**——路径解析、YAML 定点改写（这是新代码里最容易出错的部分）；
- *  B. **模式开关的行为契约**——`DEFAULT_CONFIG` 必须是 strict、取值受控。
+ *  B. **模式开关的行为契约**——`DEFAULT_CONFIG` 必须是 **loose**（2026-10-12 改）、取值受控。
  *
  * ⚠️ 双模式的**端到端正反对照**在 `test-handoff.mjs`【17】–【19】；
  *    接口层的 GET/POST 在 `test-web-api.mjs`【8】。本文件补的是**模块内部契约**。
@@ -50,17 +50,24 @@ const check = (n, c, e = '') => {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-console.log('【1】配置契约：默认必须是 strict、取值受控（决策 95）')
+console.log('【1】配置契约：默认必须是 loose、取值受控（决策 95；默认值 2026-10-12 由 strict 改为 loose）')
 // ══════════════════════════════════════════════════════════════════════
-check('⭐ 默认 themeCreation = strict', mod.DEFAULT_CONFIG.themeCreation === 'strict',
+// ⭐ 用户 2026-10-12 裁定：默认改为宽松。本组断言跟着改——
+//    ⚠️ 它测的是"**默认值是什么**"，默认值变了就该跟着变（不是"绕过"）。
+check('⭐ 默认 themeCreation = loose', mod.DEFAULT_CONFIG.themeCreation === 'loose',
   String(mod.DEFAULT_CONFIG.themeCreation))
 check('合法取值只有 strict / loose',
   JSON.stringify([...THEME_CREATION_VALUES].sort()) === JSON.stringify(['loose', 'strict']),
   JSON.stringify(THEME_CREATION_VALUES))
 // ⚠️ schemastery 的 Config 是 schema 对象，`Config(raw)` 会校验并填默认值。
 check('schemastery 接受 loose', mod.Config({ themeCreation: 'loose' }).themeCreation === 'loose')
-check('schemastery 未给时填 strict 默认值',
-  mod.Config({}).themeCreation === 'strict', String(mod.Config({}).themeCreation))
+check('schemastery 接受 strict（严格仍是可选值，只是不再是默认）',
+  mod.Config({ themeCreation: 'strict' }).themeCreation === 'strict')
+check('schemastery 未给时填 loose 默认值',
+  mod.Config({}).themeCreation === 'loose', String(mod.Config({}).themeCreation))
+check('⭐ `DEFAULT_CONFIG` 与 schemastery 默认值**一致**（两处必须同步）',
+  mod.DEFAULT_CONFIG.themeCreation === mod.Config({}).themeCreation,
+  `${mod.DEFAULT_CONFIG.themeCreation} vs ${mod.Config({}).themeCreation}`)
 check('⭐ schemastery **拒绝**非法取值', (() => {
   try { mod.Config({ themeCreation: 'yolo' }); return false } catch { return true }
 })())
