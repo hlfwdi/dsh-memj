@@ -30,6 +30,40 @@ export const SNAPSHOT_CLOSING: string =
 
 registerPromptDefault('reads:snapshot-closing', SNAPSHOT_CLOSING)
 
+// ⭐⭐⭐ **各节写作规范的对照提示**（决策 221，2026-10-12 用户要求）。
+//
+// ── 它解决什么问题（用户实测发现的）────────────────────────────────────────
+// 用户看到 `dsh-memj` 的「目标」节有 18616 字符、0 个 `###`，而它自己的规范
+// 明写着"只保留总目标与最新批次、以 `###` 子章节划分" —— 问"为什么之前 handoff
+// 没按这个规范做？"。查证结论：**规范从 2026-10-07 写进正文起，27 次 handoff
+// 里「目标」节一次都没被写过**（每次只写「当前进度」）。
+//
+// 🔴 所以缺口**不是"没按规范写"，而是"没人提醒这一节该被整理"**：
+//    `memj_read` 明明把规范原文交给了模型（它就在正文里），但它
+//    **混在几万字的正文中间**，而模型当时要写的是别的一节 ⇒ 视线不会落到它上面。
+//
+// ⭐ 判据（用户拍板）：**写前必读那道硬闸门已经存在**（不读就拒绝 handoff）
+//    ⇒ 既然工具**已经强制模型读一遍**，那就在**那一刻**把各节的规范
+//    **集中、显眼地**交出去，而不是让它们散落在正文各处。
+//
+// ⚠️ **与 2026-10-12 退役的那条"按需注入写作指导"的区别**（别当成走回头路）：
+//    · 退役的那条：**从模板重新渲染**一份指导 ⇒ 与正文是**两个来源**，会漂；
+//    · 本条：**从正文里读出来、原样列出**（`sectionSpecsOf(narrative)`）
+//      ⇒ 与正文**同一次读取、同一个来源**，结构上不可能不一致。
+//
+// 🔴 **必须写成【单段字面量】**（不要在源码里用 `+` 拼多段）：
+//    `prompt-writeback.ts` 的定位器只支持单段形态，多段拼接会被判 `unsupported`
+//    ⇒ **设置页上不会出现"写回"按钮**（我第一版就是拼了三段，实测被它挡下）。
+export const SECTION_SPEC_HEAD: string =
+  `📐 **本文档各节的写作规范**（逐节对照——写之前先看有没有哪一节已经不符合它自己的规范）：`
+
+registerPromptDefault('reads:section-spec-head', SECTION_SPEC_HEAD)
+
+export const SECTION_SPEC_CLOSING: string =
+  `⚠️ 上面每一条都取自**这份文档自己的正文**（不是通用清单）。若某节的内容已经明显不符合它自己的规范，**顺手整理它**——「没写某一节」只能靠这一眼发现，工具不会替你检查。`
+
+registerPromptDefault('reads:section-spec-closing', SECTION_SPEC_CLOSING)
+
 /**
  * 记一条读快照（由 `memj_read` 在**成功读到正文后**调用）。
  *
@@ -114,5 +148,32 @@ export function renderSnapshotList(snapshots: readonly ReadSnapshot[]): string {
   }
   parts.push('')
   parts.push(promptText('reads:snapshot-closing', SNAPSHOT_CLOSING))
+  return parts.join('\n')
+}
+
+/**
+ * ⭐⭐ **把本文档各节的写作规范渲染成"集中一处"的一段**（决策 221）。
+ *
+ * 🔴 **它只在【读项目文档】时用、且只列"真的有规范块"的节** ——
+ *    没有规范块的节**不编造**（决策 207：不知道它该有什么规范）。
+ * @param specs - 各节的规范（`sectionSpecsOf()` 的产物）。
+ * @returns 模型可见文本；一节规范都没有时返回空串（**不输出空标题**）。
+ */
+export function renderSectionSpecs(
+  specs: readonly { title: string; spec: string; truncate: boolean }[],
+): string {
+  if (specs.length === 0) return ''
+  const parts: string[] = [promptText('reads:section-spec-head', SECTION_SPEC_HEAD)]
+  for (const s of specs) {
+    // ⭐ 规范原文**逐字**列出（多行照原样缩进），不做摘要、不改写。
+    const body = s.spec
+      .split(/\r?\n/)
+      .map((l) => `    ${l}`)
+      .join('\n')
+    parts.push(`· **${s.title}**${s.truncate ? '（可自动截断归档）' : ''}：`)
+    parts.push(body)
+  }
+  parts.push('')
+  parts.push(promptText('reads:section-spec-closing', SECTION_SPEC_CLOSING))
   return parts.join('\n')
 }

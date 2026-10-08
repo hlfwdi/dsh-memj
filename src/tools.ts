@@ -49,6 +49,9 @@ import { recordRead, renderSnapshotList, pendingSnapshots } from './reads.ts'
 import { decideRead } from './read.ts'
 // ⭐⭐⭐ 提示词运行期覆盖（本次新增）：`safeRegister` 用它把工具描述改成 getter。
 import { fillSlots, promptText, registerPromptDefault } from './prompts.ts'
+// ⭐⭐ 决策 221：读项目文档时要把「各节写作规范」集中交出（读侧与那段文案的唯一出处）。
+import { renderSectionSpecs } from './reads.ts'
+import { sectionSpecsOf } from './sections.ts'
 // ⭐ 决策 205：模板工具的两段式确认（纯函数，可单测）。
 import { decideTemplateTool } from './template-tool.ts'
 // ⭐ 模板写作指导的骨架（可编辑常量与插槽标记都在 templates.ts）。
@@ -638,6 +641,15 @@ export function registerTools(deps: ToolDeps): void {
               sectionMatched: { type: 'boolean', required: true },
               size: { type: 'integer', required: true },
               notice: { type: 'string', required: true },
+              /**
+               * ⭐⭐⭐ **决策 221：本文档各节的写作规范**（集中一处，读项目文档时才有）。
+               *
+               * 🔴 **为什么要有它**：规范原本散落在几万字的正文里，模型读文档时
+               *    视线只落在"它这次要写的那一节"⇒ 没有任何东西提醒它"别的节该整理了"。
+               *    实测代价见 `reads:section-spec-head` 的目录说明（「目标」节 27 次没被碰过）。
+               * ⚠️ 它**只在读项目文档时非空**（读知识条目时恒为空串）。
+               */
+              sectionSpecs: { type: 'string', required: true },
             },
           },
           render: (_args, value) => {
@@ -645,6 +657,7 @@ export function registerTools(deps: ToolDeps): void {
               found: boolean; title: string; mode: string; content: string
               availableSections: string[]; sectionRequested: string
               sectionMatched: boolean; size: number; notice: string
+              sectionSpecs?: string
               sectionGroups: Array<{ title: string; chars: number; children: Array<{ title: string; chars: number }> }>
             }
             if (!v.found) {
@@ -662,6 +675,12 @@ export function registerTools(deps: ToolDeps): void {
               }]
             }
             const parts: string[] = []
+            // ⭐⭐⭐ **决策 221：规范清单排在【最前面】**（读项目文档时才有）。
+            //    🔴 **位置是刻意的**：它是"写之前该看的东西"，排在正文之前
+            //       才不会又被几万字正文淹掉（那正是它原先失效的原因）。
+            //    ⚠️ 它三个分支（按节读 / 节名清单 / 全文）**都要带上** ——
+            //       模型可能只读一节就动笔，那时更需要看到"别的节也有规范"。
+            if ((v.sectionSpecs ?? '') !== '') parts.push(String(v.sectionSpecs), '', '---', '')
             if (v.mode === 'section-list' || v.mode === 'section-miss') {
               if (v.notice !== '') parts.push(v.notice, '')
               // ⭐⭐ **分两级列出**（决策 134）：顶层节是**可写单位**（`docSection`），
@@ -714,7 +733,7 @@ export function registerTools(deps: ToolDeps): void {
                 found: false, id: projectId, title: '', mode: 'not-found', content: '',
                 sectionGroups: [],
                 availableSections: [], sectionRequested: '', sectionMatched: false,
-                size: 0, notice: `没有项目 \`${projectId}\`（不存在它的交接文档）。`,
+                size: 0, sectionSpecs: '', notice: `没有项目 \`${projectId}\`（不存在它的交接文档）。`,
               }
             }
             // 🔴 **归档项目不可读**（决策 133）：归档的语义是"**项目本身**不再参与工具调用"，
@@ -725,7 +744,7 @@ export function registerTools(deps: ToolDeps): void {
                 found: false, id: projectId, title: '', mode: 'archived', content: '',
                 sectionGroups: [],
                 availableSections: [], sectionRequested: '', sectionMatched: false,
-                size: 0,
+                size: 0, sectionSpecs: '',
                 notice: `项目 \`${projectId}\` **已归档**，信息不可用（归档时间 ${pdoc.frontmatter.archivedAt}）。`,
               }
             }
@@ -801,6 +820,22 @@ export function registerTools(deps: ToolDeps): void {
             //    （它们现在是"渲染那一节"的骨架）⇒ 提示词账本里**继续保留**，
             //    只是不再有"读文档时额外附一份"这条通路。
 
+            // ⭐⭐⭐ **决策 221（2026-10-12 用户要求）：把各节规范集中交出去。**
+            //
+            // 🔴 **它解决什么**（用户当场发现的问题）：「目标」节的规范明写着
+            //    "只保留总目标与最新批次、以 `###` 划分"，而它积到 18616 字符、0 个 `###`。
+            //    查证：**规范进正文之后的 27 次 handoff 里，「目标」节一次都没被写过**
+            //    （每次都只写「当前进度」）⇒ 缺口不是"没按规范写"，而是
+            //    **"没有任何东西提醒这一节该被整理"**。
+            //
+            // ⭐ 判据：**写前必读那道硬闸门已经存在** ⇒ 既然工具已经强制模型读一遍，
+            //    就该在**那一刻**把规范**集中、显眼**地交出去（原先它们散在几万字正文里）。
+            //
+            // ⚠️ **与上面"已退役的按需注入"的区别**（不是走回头路）：
+            //    · 退役的那条从**模板重新渲染** ⇒ 与正文两个来源、会漂；
+            //    · 本条**从这份文档的正文里读出来原样列出** ⇒ 同一次读取、同一来源。
+            const specBlock = renderSectionSpecs(sectionSpecsOf(pdoc.narrative))
+
             return {
               found: true,
               id: projectId,
@@ -808,6 +843,8 @@ export function registerTools(deps: ToolDeps): void {
               mode: decision.mode,
               // ⭐ 规范就在正文里（见上面的退役说明）⇒ **原样返回 `decision.content`**。
               content: decision.content,
+              // ⭐⭐ 集中版的规范清单（决策 221）——渲染时**排在正文之前**。
+              sectionSpecs: specBlock,
               availableSections: decision.availableSections,
               sectionGroups: decision.sectionGroups,
               sectionRequested: decision.sectionRequested,
@@ -823,7 +860,7 @@ export function registerTools(deps: ToolDeps): void {
               found: false, id: '', title: '', mode: 'not-found', content: '',
               sectionGroups: [],
               availableSections: [], sectionRequested: '', sectionMatched: false,
-              size: 0,
+              size: 0, sectionSpecs: '',
               notice:
                 '要给 `id`（知识条目的 UUID，来自 memj_search）' +
                 '或 `project`（项目文档 id，如 `dsh-memj`）其中之一。',
@@ -844,7 +881,7 @@ export function registerTools(deps: ToolDeps): void {
               found: false, id, title: found.cover.title, mode: 'archived', content: '',
               sectionGroups: [],
               availableSections: [], sectionRequested: '', sectionMatched: false,
-              size: 0,
+              size: 0, sectionSpecs: '',
               notice: `该条目**已归档**，信息不可用（归档时间 ${found.cover.archivedAt}）。`,
             }
           }
@@ -853,7 +890,7 @@ export function registerTools(deps: ToolDeps): void {
               found: false, id, title: '', mode: 'not-found', content: '',
               sectionGroups: [],
               availableSections: [], sectionRequested: '', sectionMatched: false,
-              size: 0, notice: '',
+              size: 0, sectionSpecs: '', notice: '',
             }
           }
           const cover = found.cover
@@ -864,7 +901,7 @@ export function registerTools(deps: ToolDeps): void {
               found: false, id, title: '', mode: 'body-missing', content: '',
               sectionGroups: [],
               availableSections: [], sectionRequested: '', sectionMatched: false,
-              size: 0,
+              size: 0, sectionSpecs: '',
               notice: `封面存在但正文读不到：${cover.ref}${cover.ext ? '（外部引用，文件可能已被移动或删除）' : ''}`,
             }
           }
@@ -904,6 +941,9 @@ export function registerTools(deps: ToolDeps): void {
             title: doc.title,
             mode: decision.mode,
             content: decision.content,
+            // ⚠️ 读**知识条目**时恒为空串（规范清单只对项目文档有意义）——
+            //    schema 里它是 `required` ⇒ 这个字段必须出现（决策 221）。
+            sectionSpecs: '',
             availableSections: decision.availableSections,
             sectionGroups: decision.sectionGroups,
             sectionRequested: decision.sectionRequested,

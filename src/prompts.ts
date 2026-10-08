@@ -839,6 +839,34 @@ const PROMPT_SPECS_RAW: readonly PromptSpec[] = [
     editable: true,
     checks: [{ kind: 'nonEmpty' }],
   },
+  // ⭐⭐⭐ `memj_read` 读**项目文档**时，那段「各节写作规范」的表头与收尾
+  //    （决策 221，2026-10-12 用户要求："专门提醒一下模型，要按照章节下面的规范说明去做"）。
+  //    🔴 **为什么必须走这条通道（而不是硬编码在 `tools.ts` 里）**：
+  //       它就是"写给模型的写作指导"，按本项目的分层判据（决策 124）
+  //       ——**会经常改的"怎么做"⇒ 归提示词页**；且它逐字进模型上下文，
+  //       措辞一松，模型就又会忽略各节的规范。
+  //    ⚠️ **与 `tpl:guidance-*` 的区别**：那几条是**从模板渲染**（另一个来源，会漂）；
+  //       这两条的**内容由正文现读**，它们只是**外壳文案**。
+  {
+    key: 'reads:section-spec-head',
+    injectMode: '工具返回值（进模型上下文；不进 node 0、不破前缀缓存）',
+    breaksCache: 'no',
+    sourceFile: F.reads,
+    sourceConst: 'SECTION_SPEC_HEAD',
+    hotReload: 'immediate',
+    editable: true,
+    checks: [{ kind: 'nonEmpty' }],
+  },
+  {
+    key: 'reads:section-spec-closing',
+    injectMode: '工具返回值（进模型上下文；不进 node 0、不破前缀缓存）',
+    breaksCache: 'no',
+    sourceFile: F.reads,
+    sourceConst: 'SECTION_SPEC_CLOSING',
+    hotReload: 'immediate',
+    editable: true,
+    checks: [{ kind: 'nonEmpty' }],
+  },
 
   // ⚠️⚠️ **决策 209（2026-10-05）：`tpl:guidance-*` 五条已退役三条。**
   //    规范不再住"文档末尾那一节"，而是**长在各节自己身上**
