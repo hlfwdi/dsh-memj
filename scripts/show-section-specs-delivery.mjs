@@ -7,14 +7,18 @@
  *      真调 `memj_read.execute()`，再按 `output.render()` 的口径拼出模型看到的字符串。
  *
  * 用法：node scripts/show-section-specs-delivery.mjs [库根] [项目id]
+ *   ⭐ 默认库根按**本仓库位置**派生（`<仓根>/../verify/memj-spec220-lib`）——**不写死部署路径**。
  */
 import { pathToFileURL } from 'node:url'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
+const HERE = dirname(fileURLToPath(import.meta.url))
 const libRoot = process.argv[2] ??
-  'D:\\dsh-standalone-0.1.5-rc.2\\workplaces\\2026-09-28_20-21-31-362\\verify\\memj-spec220-lib'
+  join(HERE, '..', '..', 'verify', 'memj-spec220-lib')
 const PID = process.argv[3] ?? 'dsh-power-control'
 process.env['MEMJ_DATA_DIR'] = libRoot
+console.log(`[库根] ${libRoot}`)
 
 const mod = await import(pathToFileURL(join(process.cwd(), 'lib', 'index.js')).href)
 

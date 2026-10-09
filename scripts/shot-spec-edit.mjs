@@ -7,10 +7,15 @@
  *
  * 用法：node shot-spec-edit.mjs [port] [projectId] [outDir]
  *   ⚠️ 起浏览器时**不带 `--headless`**（在用户能看见的窗口里跑）。
+ *   ⭐ 默认输出目录按**本仓库位置**派生（`<仓根>/../verify`）——**不写死部署路径**。
  */
+import { dirname, join as joinPath } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const HERE = dirname(fileURLToPath(import.meta.url))
 const PORT = Number(process.argv[2] ?? 3107)
 const PID = process.argv[3] ?? 'dsh-power-control'
-const OUT = process.argv[4] ?? 'D:\\dsh-standalone-0.1.5-rc.2\\workplaces\\2026-09-28_20-21-31-362\\verify'
+const OUT = process.argv[4] ?? joinPath(HERE, '..', '..', 'verify')
 const CDP = Number(process.env['CDP_PORT'] ?? 9231)
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))

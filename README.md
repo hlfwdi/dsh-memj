@@ -268,6 +268,25 @@ pnpm run check      # 上面三合一
 - **不自动修复断链的外部引用**：只报告 + 给人一个"重填路径"的入口，**不猜路径**。
 - **不迁移工作区里现存的 `HANDOFF-*.md`**。
 
+## 发布（给维护者）
+
+```bash
+pnpm publish        # prepublishOnly = build + 发布闸门，两道都过才发得出去
+```
+
+🔴🔴 **`lib/` 是构建产物、被 `.gitignore` 排除，而 `files` 又必须列它** ——
+这两条都对，**错在它们之间没有守卫**：
+
+> **从 git 克隆出来的仓库里直接 `npm pack`，打出来的是个 10.3 KB 的空壳包**
+> （只有 `LICENSE` / `README.md` / `cordis.patch.yml` / `package.json`），
+> 而 npm **不报错** —— `files` 里列了不存在的路径，它只是**跳过**。
+> ⚠️ 回执上 name / version / shasum 一应俱全，**看起来完全正常**。
+
+⭐ 判据：**要断言的是「产物」，不是「配置」**。所以 `scripts/check-pack.mjs`
+**实测打包**（`npm pack --dry-run --json`）再断言里面真有 `lib/index.js` / `lib/client.js`，
+**不看 `files` 字段**。它同时挂在 `prepublishOnly` 和测试套件里
+（前者保证发布时必过，后者保证**平时就能报红**）。
+
 ## License
 
 MIT

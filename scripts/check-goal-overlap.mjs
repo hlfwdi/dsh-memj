@@ -9,11 +9,17 @@
  *    ⚠️ 不用"关键词命中"（会虚高），用**逐字子串**（与本项目"挂靠依据核对"同一取向：
  *       连续字符命中才算数）。
  *
- * 用法：node scripts/check-goal-overlap.mjs
+ * 用法：node scripts/check-goal-overlap.mjs [项目 id]
+ *   ⭐ 默认 `dsh-memj`；库根按本项目规则派生（`MEMJ_DATA_DIR` → `~/.dsh-memj`），**不写死路径**。
  */
 import { readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 
-const DOC = 'C:\\Users\\jojoman\\.dsh-memj\\projects\\HANDOFF-dsh-memj.md'
+const LIB_ROOT = process.env['MEMJ_DATA_DIR'] ?? join(homedir(), '.dsh-memj')
+const PROJECT = process.argv[2] ?? 'dsh-memj'
+const DOC = join(LIB_ROOT, 'projects', `HANDOFF-${PROJECT}.md`)
+console.log(`[库根] ${LIB_ROOT}\n[文档] ${DOC}`)
 const text = readFileSync(DOC, 'utf8')
 
 /** 按 `## ` 切顶层节。 */

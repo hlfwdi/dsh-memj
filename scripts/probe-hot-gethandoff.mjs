@@ -22,8 +22,15 @@ const check = (name, cond, extra = '') => {
   else { fail += 1; console.log(`  ❌ ${name} ${extra}`) }
 }
 
-// ⚠️ 用**临时库根**，避免探针碰到真库（本项目纪律：隔离库）。
-process.env['MEMJ_DATA_DIR'] ??= 'C:\\Users\\jojoman\\.dsh-memj'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+
+// ⭐ **派生库根**（与 `src/paths.ts` 同一条规则：`MEMJ_DATA_DIR` → `~/.dsh-memj`）。
+//    ⚠️ 曾写死 `C:\Users\<用户名>\.dsh-memj` ⇒ 换机器/换用户时**静默走错库**。
+//    ⚠️ 且原注释写着"用临时库根"，而代码给的**是生产库** —— 注释与实现不一致，
+//       已按实现改正：本探针**只跑纯函数**（不读盘、不写库），所以用默认库根也无副作用；
+//       要隔离就跑 `MEMJ_DATA_DIR=<副本> node scripts/probe-hot-gethandoff.mjs`。
+process.env['MEMJ_DATA_DIR'] ??= join(homedir(), '.dsh-memj')
 const mod = await import('../lib/index.js')
 
 console.log('════════ 【A】纯函数：从事件里解析 get-handoff ════════\n')

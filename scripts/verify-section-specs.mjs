@@ -11,8 +11,10 @@
  */
 import { mkdtempSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { dirname, join } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+
+const HERE = dirname(fileURLToPath(import.meta.url))
 
 let pass = 0
 let fail = 0
@@ -85,8 +87,7 @@ console.log('═══ ① 纯函数：规范清单的渲染形态 ═══')
 console.log('\n═══ ③ 真实数据：一份真实生产文档（库副本）═══')
 {
   const { existsSync, readFileSync } = await import('node:fs')
-  const real = 'D:\\dsh-standalone-0.1.5-rc.2\\workplaces\\2026-09-28_20-21-31-362' +
-    '\\verify\\memj-spec220-lib\\projects\\HANDOFF-dsh-power-control.md'
+  const real = join(HERE, '..', '..', 'verify', 'memj-spec220-lib', 'projects', 'HANDOFF-dsh-power-control.md')
   if (!existsSync(real)) {
     console.log('  （库副本不在本机 ⇒ 本组跳过，如实记下；核心判据已在①②里验过）')
   } else {

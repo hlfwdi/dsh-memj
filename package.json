@@ -22,7 +22,8 @@
     "build:raw": "tsdown && node scripts/copy-web.mjs",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.client.json",
     "test": "node scripts/run-all-tests.mjs",
-    "check": "pnpm run typecheck && pnpm run build && pnpm run test"
+    "check": "pnpm run typecheck && pnpm run build && pnpm run test",
+    "prepublishOnly": "node scripts/build.mjs && node scripts/check-pack.mjs"
   },
   "exports": {
     ".": {
@@ -44,6 +45,10 @@
     "README.md"
   ],
   "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"

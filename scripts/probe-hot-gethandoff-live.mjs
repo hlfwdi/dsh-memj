@@ -10,24 +10,71 @@
  * ⚠️ **只读**：不写任何库、不改任何会话。
  * 用法：node scripts/probe-hot-gethandoff-live.mjs
  */
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync, existsSync, readdirSync } from 'node:fs'
 import { zstdDecompressSync } from 'node:zlib'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 
-process.env['MEMJ_DATA_DIR'] ??= 'C:\\Users\\jojoman\\.dsh-memj'
+// ⭐ **派生库根**（与 `src/paths.ts` 同一条规则：`MEMJ_DATA_DIR` → `~/.dsh-memj`）。
+//    ⚠️ 曾写死 `C:\Users\<用户名>\.dsh-memj` ⇒ 换机器/换用户时**静默走错库**
+//       （与本项目既有判据同族：写死的路径会让"没有那条数据"与"路径不对"表现一样）。
+process.env['MEMJ_DATA_DIR'] ??= join(homedir(), '.dsh-memj')
 const mod = await import('../lib/index.js')
 
 let pass = 0
 let fail = 0
+let skip = 0
 const check = (name, cond, extra = '') => {
   if (cond) { pass += 1; console.log(`  ✅ ${name}`) }
   else { fail += 1; console.log(`  ❌ ${name} ${extra}`) }
 }
+/** 缺素材时用它：**明确跳过**，不计红（否则是假红）。 */
+const skipNote = (what, why) => {
+  skip += 1
+  console.log(`  ⏭️ 跳过：${what}\n     ${why}`)
+}
+
+// ⭐ **会话日志路径不写死**：它指向**本机某个特定历史会话**（一次性的取证素材），
+//    换机器 / 换部署根必然不存在。
+//    ⚠️ 曾写死 `D:\dsh-standalone-…\home\sessions\…` ⇒ 在别人机器上它会**报"文件不存在"**，
+//       而那看起来像"功能坏了"（实际是路径不对）—— 与本项目既有判据同族。
+//    ⇒ 改成：**默认从 `DSH_HOME` 派生**，或由 `MEMJ_PROBE_SESSIONS_DIR` 显式指定。
+//    🔴 **缺素材时【跳过】而不是报红** —— 这条探针证的是"解析函数对真实日志有效"，
+//       没有那份日志时**它证不了任何东西**，报红是假红。
+const SESSIONS_DIR =
+  process.env['MEMJ_PROBE_SESSIONS_DIR'] ??
+  join(process.env['DSH_HOME'] ?? join(homedir(), '.dsh'), 'sessions')
 
 const SID = 'session-68cf45d8-07e5-41e5-bd61-416a396de270'
-const FILE = `D:\\dsh-standalone-0.1.5-rc.2\\home\\sessions\\--D-dsh-standalone-0.1.5-rc.2-workplaces-2026-09-18_15-36-50-913--\\${SID}\\session.v3.jsonl.zstd`
+/** 在会话根下找 `<任意工作区目录>/<sid>/session.v3.jsonl.zstd`（一次性的取证素材）。 */
+function findSessionFile(sid) {
+  if (!existsSync(SESSIONS_DIR)) return null
+  for (const d of readdirSync(SESSIONS_DIR)) {
+    const p = join(SESSIONS_DIR, d, sid, 'session.v3.jsonl.zstd')
+    if (existsSync(p)) return p
+  }
+  return null
+}
+
+const FILE = findSessionFile(SID)
 
 console.log('════════ 【B】真实会话：读出 get-handoff 痕迹 ════════\n')
-check('（前提）会话文件存在（**只读**）', existsSync(FILE), FILE)
+console.log(`[会话根] ${SESSIONS_DIR}`)
+
+if (FILE === null) {
+  skipNote(
+    '【B】【C】两段（逐字取证）',
+    `没找到那两个历史会话（素材是**一台机器上的一次性日志**，换机器必然没有）。\n` +
+      `     要跑它：把会话根指对 —— \n` +
+      `       MEMJ_PROBE_SESSIONS_DIR=<部署根>\\home\\sessions  node scripts/probe-hot-gethandoff-live.mjs\n` +
+      `     ⚠️ 这两段证的是"解析函数对**真实日志**有效"；没有那份日志时它**证不了任何东西**，\n` +
+      `        所以这里是跳过、不是失败。纯函数那一半在 probe-hot-gethandoff.mjs（不依赖素材）。`,
+  )
+  console.log(`\n════════ 结果：通过 ${pass} / 失败 ${fail} / 跳过 ${skip} ════════`)
+  process.exit(0)
+}
+
+check('（前提）会话文件存在（**只读**）', true, FILE)
 
 /** 多帧 zstd 按 magic 切片逐帧解（与 `verify/zstd-grep.mjs` 同款做法）。 */
 function decodeAll(file) {
@@ -50,7 +97,7 @@ function decodeAll(file) {
   return Buffer.concat(parts).toString('utf8')
 }
 
-const text = existsSync(FILE) ? decodeAll(FILE) : ''
+const text = decodeAll(FILE)
 check('（前提）解出内容', text.length > 1000, `${text.length} 字符`)
 
 /** 逐行解析事件（JSONL；坏行跳过）。 */
@@ -98,9 +145,13 @@ console.log('\n════════ 【C】`memj_handoff` 痕迹（用户 20
 //    实测根因：那次交接是**用 `memj_handoff` 工具**做的（5 次），
 //    而它与 `get-handoff`（命令）**是两条不同的路径** ⇒ 两条判据都要有。
 const SID2 = 'session-0b0e6863-12d1-465a-b34e-d0ee8551699e'
-const FILE2 = `D:\\dsh-standalone-0.1.5-rc.2\\home\\sessions\\--D-dsh-standalone-0.1.5-rc.2-workplaces-2026-09-20_11-33-20-098--\\${SID2}\\session.v3.jsonl.zstd`
-check('（前提）第二个会话文件存在', existsSync(FILE2))
-const text2 = existsSync(FILE2) ? decodeAll(FILE2) : ''
+const FILE2 = findSessionFile(SID2)
+if (FILE2 === null) {
+  skipNote('【C】段（`memj_handoff` 痕迹）', `同一个会话根下没找到 ${SID2}`)
+} else {
+  check('（前提）第二个会话文件存在', true, FILE2)
+}
+const text2 = FILE2 !== null ? decodeAll(FILE2) : ''
 const events2 = []
 for (const line of text2.split('\n')) {
   const t = line.trim()
@@ -122,5 +173,5 @@ check('⭐（关键）取的是**最新**那次，不是早期那几次（前 4 
 check('⚠️（反证）去掉所有 memj_handoff 调用 ⇒ 判不出',
   mod.parseHandoffFromEvents(events2.filter((e) => e?.type !== 'tool/call' || e.data?.name !== 'memj_handoff'), KNOWN2).project === '未知')
 
-console.log(`\n════════ 结果：通过 ${pass} / 失败 ${fail} ════════`)
+console.log(`\n════════ 结果：通过 ${pass} / 失败 ${fail} / 跳过 ${skip} ════════`)
 if (fail > 0) process.exitCode = 1
