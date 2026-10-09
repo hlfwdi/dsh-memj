@@ -59,6 +59,43 @@ console.log('═══ 【1】`measureSections()`：各节字符数（强提醒�
   ].join('\n')
   const s2 = mod.measureSections(withSpec)
   chk((s2[0]?.chars ?? 999) < 100, `⭐ 规范块**剔出配额**（目标节仅 ${s2[0]?.chars} 字符）`, JSON.stringify(s2))
+
+  // ══════════════════════════════════════════════════════════════════════
+  // ⭐⭐ 2026-10-09（第二百零六批）：**子节也要量出来**
+  // 🔴 为什么加这一组：归档挪走的正是 `###` 子节，而第一版只报顶层 `##` 节
+  //    ⇒ 实测后果是**调用方自己去写脚本量子节**（还量错了边界）。
+  //    ⭐ 判据：**报数要报到"能够直接动手"的那一级。**
+  // ══════════════════════════════════════════════════════════════════════
+  const withSubs = [
+    '## 当前进度', '',
+    '### 第三批（最后）', '', 'y'.repeat(100), '',
+    '### 第一批（最早）', '', 'z'.repeat(900), '',
+    '### 第二批（中间）', '', 'w'.repeat(400), '',
+    '## 下一步', '', '待办。', '',
+  ].join('\n')
+  const s3 = mod.measureSections(withSubs)
+  const prog = s3.find((s) => s.title === '当前进度')
+  chk(Array.isArray(prog?.children) && prog.children.length === 3,
+    `⭐⭐ 「当前进度」报出 **3 个子节**（实得 ${prog?.children?.length ?? 'undefined'}）`,
+    JSON.stringify(prog?.children?.map((c) => c.title)))
+  // 子节按字符数降序 ⇒ 最该挪的自然浮到最上面
+  const c0 = prog?.children?.[0]
+  chk(c0?.title.includes('第一批（最早）'),
+    `⭐⭐ 子节也是**按字符数降序**（最该归档的在最前，实得「${c0?.title}」）`)
+  chk((c0?.chars ?? 0) > 900, `  ⇒ 它的字符数含标题行（实得 ${c0?.chars}）`)
+  // 没有子节的节 ⇒ 空数组（不是 undefined —— 调用方不必防两种形态）
+  const nxt = s3.find((s) => s.title === '下一步')
+  chk(Array.isArray(nxt?.children) && nxt.children.length === 0,
+    '⭐ 没有子节的节 ⇒ `children` 是**空数组**（不是 undefined）')
+  // ⚠️ 顶层字数必须**仍然含所有子节**（两级加起来不能对不上）
+  const sumSubs = (prog?.children ?? []).reduce((n, c) => n + c.chars, 0)
+  chk((prog?.chars ?? 0) >= sumSubs,
+    `⭐ 顶层字数 ≥ 子节之和（${prog?.chars} ≥ ${sumSubs}）—— 两级能对得上`)
+  // 反证臂：**没有 `###` 的文档** ⇒ children 必须为空（不能凭空造出子节）
+  const noSubs = mod.measureSections(['## 甲', '', '正文。', ''].join('\n'))
+  chk(noSubs[0]?.children?.length === 0,
+    '⭐ 反证：没有 `###` 的节 ⇒ 不凭空造子节',
+    JSON.stringify(noSubs[0]?.children))
 }
 
 console.log('\n═══ 【2】⛔ 反证：旧机制的函数**确实不在了** ═══')

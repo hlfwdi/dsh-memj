@@ -273,6 +273,26 @@ export function parseKindsDoc(text: string): KindDef[] | undefined {
  *   否则用户手删掉文件里某一行内置项 ⇒ 存量那些知识**当场变非法值**。
  *   ⭐ 判据：**文件是"用户可编辑的一份"，不是"唯一真相"** ——
  *     内置项的存在性由代码保证，不由文件保证。
+ *
+ * ── 🔴🔴 2026-10-09（修 C）：内置项的【身份字段】再也不能被文件压住 ──────────
+ * **症状**：决策 223（`893f936`）改了 `history` 的 `label`，但**库里的 `kinds.md`
+ *   还是旧的**（它写在这次提交**之前**）。而本函数当时只补"**id 缺失**"的内置项、
+ *   **不更新已存在项的字段** ⇒ 文件那份一直生效。
+ * **为什么它会"卡死"**（比不生效更糟）：
+ *   `validateKinds()` 要求"**库里的 label 必须等于源码内置的 label**"（内置项不可改名）
+ *   ⇒ 源码改了 label 之后，**库那张表再也存不回去**（`saveKinds` 必被拒），
+ *     而"改源码"又会被本函数的磁盘优先盖住 ⇒ ⭐ **两条路互相堵死**。
+ * **为什么只在重启后暴露**：旧进程那次读盘若失败（`.catch` 吞掉）会回落源码值，
+ *   看着一切正常 ⇒ 这是"**对的结果、错的原因**"，重启才把不一致揭穿。
+ *
+ * ── ✅ 修法：按「身份 vs 内容」分流（本项目的既有判据）──────────────────────
+ * | 字段 | 性质 | 谁说了算 |
+ * |---|---|---|
+ * | `id` / `builtin` / `label` / `reserved` | **身份**（用户改不了，校验也锁着） | ⭐ **源码** |
+ * | `when` / `guide` | **内容**（决策 217 用户裁定"可编辑但不可删除"） | ⭐ **文件**（保住用户的编辑） |
+ * ⇒ 内置项的**身份随代码前进**、**内容随用户**，两边各管各的。
+ * ⚠️ **不能把 `when`/`guide` 也同步成源码** —— 那会**静默抹掉用户对内置项的编辑**
+ *   （决策 217 明确允许改它们；`validateKinds` 也刻意不校验这两项）。
  * @returns 生效的类型表（**保证含全部内置项**，且至少 1 条）。
  */
 export async function loadKinds(): Promise<KindDef[]> {
@@ -283,7 +303,19 @@ export async function loadKinds(): Promise<KindDef[]> {
   } catch {
     fromFile = undefined
   }
-  const base = fromFile ?? builtinKindDefs()
+  // 文件读不出来 ⇒ 整体回落内置表（"还没配过"的常态）。
+  if (fromFile === undefined) return builtinKindDefs()
+
+  // ⭐ **身份字段以源码为准**（修 C 的核心）：内置项只要 id 在文件里出现，
+  //    就把 `label` / `builtin` / `reserved` 换成源码那份；
+  //    `when` / `guide` **原样保留**（那是用户可编辑的内容）。
+  const byId = new Map(builtinKindDefs().map((d) => [d.id, d]))
+  const base = fromFile.map((d) => {
+    const b = byId.get(d.id)
+    if (b === undefined) return d // 用户自定义的类型 ⇒ 完全按文件
+    return { ...d, label: b.label, builtin: b.builtin, reserved: b.reserved }
+  })
+
   // ⭐ 补回缺失的内置项（放在**原位**：按内置顺序插到前面，保持稳定）。
   const have = new Set(base.map((d) => d.id))
   const missing = builtinKindDefs().filter((d) => !have.has(d.id))

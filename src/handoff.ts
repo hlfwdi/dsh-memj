@@ -93,6 +93,7 @@ import {
   loadTemplate,
   renderSpecBlocksSkeleton,
   TPL_GUIDANCE_NO_TRUNC,
+  templateDeclaresArchiving,
   templateSectionNames,
   validateTemplate,
 } from './templates.ts'
@@ -1180,6 +1181,16 @@ function narrativeTopSections(narrative: string): string[] {
 export interface SectionSize {
   title: string
   chars: number
+  /**
+   * 它下面的 `###` 子节（**按字符数降序**；没有子节就是空数组）。
+   *
+   * 🔴 **为什么要这一层**（2026-10-09 修）：**归档挪走的正是 `###` 子节**，
+   *   而第一版只报顶层 `##` 节 ⇒ 模型看到"当前进度 33853 字符"却**不知道该挪哪几段**，
+   *   实测后果：**它自己去写脚本量子节**（还量错了边界）。
+   *   ⭐ 判据：**报数要报到"能够直接动手"的那一级** ——
+   *   只报总量而操作对象是子节，等于把最关键的一步留给调用方去猜。
+   */
+  children: SectionSize[]
 }
 
 /**
@@ -1191,6 +1202,9 @@ export interface SectionSize {
  *
  * ⚠️ **剔除规范块**（与既有的 `sectionCharCount` 同源）——
  *    否则规范块自己的几百字会被算进配额，让"该不该归档"判断偏早。
+ *
+ * ⭐ **两级都报**（2026-10-09 加）：顶层 `##` 节 + 它下面的 `###` 子节。
+ *    归档的对象是 `###` 子节 ⇒ **不报子节，调用方就没法直接动手**。
  * @param narrative - 纯叙事。
  * @returns 各节字符数（**按字符数降序** —— 最该归档的自然浮到最上面）。
  */
@@ -1208,7 +1222,39 @@ export function measureSections(narrative: string): SectionSize[] {
     for (let k = start + 1; k < lines.length; k += 1) {
       if (/^##\s+/.test(lines[k] ?? '')) { end = k; break }
     }
-    out.push({ title: s.title, chars: sectionCharCount(lines.slice(start, end)) })
+    const body = lines.slice(start, end)
+    out.push({
+      title: s.title,
+      chars: sectionCharCount(body),
+      children: measureSubsections(body),
+    })
+  }
+  return out.sort((a, b) => b.chars - a.chars)
+}
+
+/**
+ * ⭐ **算一节内部各 `###` 子节的字符数**（按字符数降序）。
+ *
+ * 🔴 **边界取法必须与"归档时整节挪走"一致**：一个子节 = 从它的 `### ` 行起，
+ *    **到下一个 `###` 或 `##` 之前**（`##` 不会出现在这里，因为入参就是"一节的正文"）。
+ * ⚠️ **首个 `###` 之前的内容**（如节首说明）**单独算作一节**——
+ *    否则那部分字数**凭空消失**，两次报告加不起来会让调用方以为丢了东西。
+ * @param sectionLines - **含 `##` 标题行**的那一节的全部行。
+ * @returns 子节体量（没有 `###` ⇒ 空数组）。
+ */
+function measureSubsections(sectionLines: readonly string[]): SectionSize[] {
+  const marks: number[] = []
+  for (let i = 0; i < sectionLines.length; i += 1) {
+    if (/^###\s+/.test(sectionLines[i] ?? '')) marks.push(i)
+  }
+  if (marks.length === 0) return []
+  const out: SectionSize[] = []
+  for (let m = 0; m < marks.length; m += 1) {
+    const from = marks[m] ?? 0
+    const to = m + 1 < marks.length ? (marks[m + 1] ?? sectionLines.length) : sectionLines.length
+    const chunk = sectionLines.slice(from, to)
+    const title = (chunk[0] ?? '').replace(/^###\s+/, '').trim()
+    out.push({ title, chars: sectionCharCount(chunk), children: [] })
   }
   return out.sort((a, b) => b.chars - a.chars)
 }
@@ -1860,7 +1906,7 @@ export async function runHandoff(
   let newSections: string[] = []
   let templateId = existing?.frontmatter.template ?? ''
   /** ⭐ 本次真正用的那份模板（**只用于回执现报节数**，见下方赋值处）。 */
-  let appliedTemplate: { id: string; sections: Array<{ name: string }> } | undefined
+  let appliedTemplate: Template | undefined
   /**
    * ⭐⭐⭐ **该文档的节名**（所有按节工作的机制都用它）。
    *
@@ -2681,7 +2727,14 @@ export async function runHandoff(
       //    · "没有可截断节 ⇒ 文档不会瘦身" ⇒ 那是**模板级**的事实，不是这份文档的正文。
       //    ⚠️ 判据：**能由回执说清的事，不要塞进文档正文**（正文是给人读的项目记录）。
       `🔴 **末节 \`## 沉淀知识\` 由工具维护**（放封面）—— 它不是叙事节，不要写它。`,
-      ...(appliedTemplate !== undefined && appliedTemplate.sections.every((s) => (s as { truncate?: boolean }).truncate !== true)
+      // 🔴🔴 **决策 223 之后这个判据曾是【恒真】的**（2026-10-09 修）：
+      //   旧判据 = `sections.every(s => s.truncate !== true)`，而 `truncate` 这个字段
+      //   **已从 `TemplateSection` 删除**、`normalizeTemplate` 也不读它 ⇒ 恒为 `undefined`
+      //   ⇒ `every(...)` **恒为 true** ⇒ 每份新建项目的回执都说这句话（不再是"没声明才说"），
+      //   而它说的是**已废除的机制**（工具早已不自动截断了）。
+      //   ⭐ 新判据换成**新机制的真事实**：这一节的规范里**有没有写归档规则**。
+      //   ⚠️ 判据必须指向"真实存在的东西" —— 指向一个被删掉的字段，就必然恒真。
+      ...(appliedTemplate !== undefined && !templateDeclaresArchiving(appliedTemplate)
         ? [promptText('tpl:guidance-no-trunc', TPL_GUIDANCE_NO_TRUNC)]
         : []),
       `库里现有项目：${[...existingProjects, projectId].map((p) => `\`${p}\``).join('、')}`,
@@ -2849,7 +2902,13 @@ export async function runHandoff(
         // ⭐ 外链逐条标注路径，并**明说工具没有动它**——与 `memj_promote` /
         //    `memj_update` 对库外文件的那条边界一致。
         const extNote = c.ext ? `｜⭐ **外部引用**：\`${c.ref}\`（**只登记封面，未改动该文件**）` : ''
-        lines.push(`  · **${c.title}**（\`${c.id.slice(0, 8)}\`）${tags}${g}${extNote}`)
+        // 🔴🔴 **回声里的 id 必须给【完整 uuid】**（2026-10-09 修）：
+        //   原来这里是 `c.id.slice(0, 8)` ⇒ 模型只拿到 8 位前缀，
+        //   而"归档指针要写完整 uuid"这条规矩**同时也在生效** ⇒
+        //   实测后果：**模型把 8 位"补全"成了完整格式，后 8 段全是编的**（死链）。
+        //   ⭐ 判据：**凡是"下一步要照着抄"的值，就不能给片段** ——
+        //   给了片段而要求完整，等于**逼调用方去猜**（或去别处取），两害相权它多半会猜。
+        lines.push(`  · **${c.title}**（\`${c.id}\`）${tags}${g}${extNote}`)
       }
     }
     // ⭐ **覆盖要单独报**（决策 104）：它与"新增"语义不同，混在一起会让人
@@ -2859,7 +2918,8 @@ export async function runHandoff(
         `⭐ **覆盖了 ${overwritten.length} 条已有知识**（\`overwrite: true\`，就地更新、未新增文件）：`,
       )
       for (const c of overwritten) {
-        lines.push(`  · **${c.title}**（\`${c.id.slice(0, 8)}\`）`)
+        // 🔴 同"新增"那条：**覆盖也要给完整 uuid**（下一步可能照抄它）。
+        lines.push(`  · **${c.title}**（\`${c.id}\`）`)
       }
     }
   }
@@ -3264,9 +3324,18 @@ export async function runHandoff(
 function reportSectionSizes(narrative: string): string[] {
   const sizes = measureSections(narrative)
   if (sizes.length === 0) return []
-  const body = sizes.map((s) => `    · ${s.title}　${s.chars} 字符`).join('\n')
+  const lines: string[] = []
+  for (const s of sizes) {
+    lines.push(`    · ${s.title}　${s.chars} 字符`)
+    // ⭐⭐ **子节也要列**（2026-10-09 加）：归档挪走的正是 `###` 子节，
+    //    只给顶层总数 ⇒ 调用方**不知道该挪哪几段**（实测它只好自己去写脚本量）。
+    //    ⚠️ 只列**有子节**的节，且子节按字符数降序（最该挪的浮到最上面）。
+    for (const c of s.children) lines.push(`        - ${c.title}　${c.chars} 字符`)
+  }
   return [
-    `\n📏 **各节体量**（对照**各节自己的书写规范**，判断哪一节该归档了）：\n${body}\n` +
+    `\n📏 **各节体量**（对照**各节自己的书写规范**，判断哪一节该归档了；` +
+      '**归档挪走的是 `###` 子节**，所以它们也一并列出）：\n' +
+      `${lines.join('\n')}\n` +
       '    ⭐ 规范里的阈值（如"超过 20000 字符"）就写在各节的规范块里；' +
       '工具**不会替你归档**（它读不懂那段自然语言），**归档由你按规范执行**：\n' +
       '    用 `entries` 落成 `kind: history` 的条目（**不参与检索**，是留档），' +

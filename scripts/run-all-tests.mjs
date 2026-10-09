@@ -69,6 +69,19 @@ const SUITES = [
   //    设成全局会误伤 `handoff:prompt-steps`（第一版就是这么错的，被 check-prompt-specs 抓到）。
   //    另含"改类型 ⇒ 三段文本都跟着变"的联动反证。
   ['知识类型→提示词', 'test-kind-prompts.mjs', []],
+  // ── ⭐⭐⭐ kind 的 enum/description 必须【每轮现算】（2026-10-09 修 B）──
+  //    🔴 守的是一个**存在很久且完全静默**的 bug：`kindParam()` 返回的对象带 getter，
+  //       而调用点写成 `{ ...kindParam(...) }` —— **展开运算符走 `[[Get]]`、求值一次**
+  //       ⇒ getter 不被带过去 ⇒ `enum` 退化成**注册时快照**。
+  //       现场：库里 `kinds.md` 修好了、`/kinds` 已回 5 个值，而工具**仍拒收** `kind:'history'`。
+  //    ⭐ 本套件含**反证臂**："不调安装器 ⇒ enum 不是 getter"（证明它真能报红）。
+  ['kind 动态枚举', 'test-kind-dynamic-enum.mjs', []],
+  // ── ⭐⭐⭐ 内置项的【身份】字段以源码为准（2026-10-09 修 C）──
+  //    🔴 守的是"库表被卡死"：源码改了内置项 label ⇒ `validateKinds` 要求两边一致
+  //       ⇒ 库那份**再也存不回去**（改库被拒 / 改源码被磁盘优先盖）。
+  //    ⭐ 判据：**身份（id/label/builtin/reserved）随源码、内容（when/guide）随用户**。
+  //    ⚠️ 它**必须用库副本**（自证 `kindsFilePath()` 落在临时目录）—— 会写 `kinds.md`。
+  ['kind 身份随源码', 'test-kinds-merge-source.mjs', []],
   // ── ⭐⭐⭐ handoff 的 template 参数（2026-10-07 补暴露）──
   //    ⭐ 重点：schema 里**真的有** `template`（回归闸门）、传它**真按那份模板建节**、
   //    传不存在的 id **报错并列出可用**（不静默回落）。

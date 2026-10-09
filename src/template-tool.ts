@@ -97,13 +97,19 @@ export function confirmMessage(req: TemplateToolRequest): string {
   const names = secs
     .map((s) => (s !== null && typeof s === 'object' ? String((s as { name?: unknown }).name ?? '') : ''))
     .filter((s) => s !== '')
-  const trunc = secs.filter(
-    (s) => s !== null && typeof s === 'object' && (s as { truncate?: unknown }).truncate === true,
-  ).length
+  // 🔴 **决策 223（2026-10-09 修）**：这里原来数的是"有几节声明了 `truncate`" ——
+  //   而那个字段**已废除** ⇒ 计数**恒为 0** ⇒ 待确认回执**永远**说"没有可截断的节"。
+  //   ⭐ 换成新机制的真事实：这些节的**规范里有没有写归档规则**。
+  const hasArchiving = secs.some(
+    (s) => s !== null && typeof s === 'object' && /归档|history/i.test(String((s as { desc?: unknown }).desc ?? '')),
+  )
   return (
     `⏸️ **待确认**：要新建/覆盖模板 \`${id}\`${title !== '' ? `（${title}）` : ''}，共 ${names.length} 节：\n` +
     (names.length > 0 ? `${names.map((n) => `  · ${n}`).join('\n')}\n` : '') +
-    (trunc === 0 ? '⚠️ 本模板**没有**声明可自动截断的节 ⇒ 用它的文档**不会自动瘦身**（超过阈值也不截）。\n' : '') +
+    (hasArchiving
+      ? ''
+      : '⚠️ **这些节的规范里都没有写归档规则** ⇒ 用它的文档**超长时不会自动瘦身**。\n' +
+        '⭐ 归档现在由模型按**各节规范里的自然语言**执行；若希望某一节瘦身，把规则写进那一节的 `desc`。\n') +
     '\n请把这个模板**逐节告诉用户并取得同意**；用户同意后，带 `confirm: true` 重调一次。\n' +
     '⚠️ 本次**什么都没做**（模板尚未写入）。'
   )

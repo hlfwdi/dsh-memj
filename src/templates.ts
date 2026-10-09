@@ -97,10 +97,18 @@ export const TPL_GUIDANCE_ROW: string = '- `## {{name}}` —— {{desc}}{{trunc}
  *   ⇒ 删掉它，那些文档会**静默变成"不截"**（`a113fcb` 事故同族）。
  */
 export const TPL_GUIDANCE_TRUNC_MARK: string = '　⭐ **本节的较早内容会被自动截断归档**'
-/** ✅ **仍在使用**：建项目回执里报"本模板没有声明可截断的节 ⇒ 文档不会自动瘦身"。 */
+/**
+ * ✅ **仍在使用**：建项目回执里报"这份模板的规范里**没写**归档规则 ⇒ 文档不会自动瘦身"。
+ *
+ * 🔴 **2026-10-09 修**：它原先的触发判据是 `sections.every(s => s.truncate !== true)` ——
+ *   而 `truncate` **已从 `TemplateSection` 删除** ⇒ 那个判据**恒真**
+ *   ⇒ 这句话会**无条件**出现在每份新建项目的回执里，而它说的是**已废除的机制**。
+ *   现在改由 {@link templateDeclaresArchiving} 判"规范里有没有写归档规则"（见 `handoff.ts`）。
+ */
 export const TPL_GUIDANCE_NO_TRUNC: string =
-  `⚠️ **本模板没有声明可截断的节** ⇒ 文档**不会自动瘦身**（超过阈值也不会截）。
-压缩需要你按上面的规范手动归并。`
+  `⚠️ **本模板的任何一节规范里都没有写归档规则** ⇒ 文档超长时**不会自动瘦身**。
+⭐ 归档现在是**按各节规范里的自然语言**执行的（工具不再自动截断）——
+想让某一节瘦身，就把规则写进那一节的规范里。`
 /** @deprecated 决策 209 退役（那句话改由回执报，不再写进文档）。 */
 export const TPL_GUIDANCE_FOOT: string =
   '🔴 **`## {{knowledgeTitle}}` 由工具生成**（放封面，不是你写的），**不在上面这几节里**。'
@@ -364,6 +372,30 @@ export function templateWarnings(t: Template): string[] {
  */
 export function templateSectionNames(t: Template): string[] {
   return t.sections.map((s) => s.name)
+}
+
+/**
+ * ⭐ **这份模板有没有在任何一节的规范里写「归档规则」**（决策 223 之后的新判据）。
+ *
+ * ── 为什么要它 ─────────────────────────────────────────────────────────────
+ * 🔴🔴 旧判据是 `sections.every(s => s.truncate !== true)` —— 而 `truncate`
+ *   这个字段**已从 `TemplateSection` 删除**（决策 223）、`normalizeTemplate()` 也不读它
+ *   ⇒ 它**恒为 `undefined`** ⇒ `every(...)` **恒为 `true`**
+ *   ⇒ **每一份新建项目的回执都会说那句"文档不会自动瘦身"**，而它说的是**已废除的机制**。
+ *   ⭐ 判据必须指向**真实存在的东西**；指向一个被删掉的字段，就必然恒真。
+ *
+ * ── 现在的判据 ─────────────────────────────────────────────────────────────
+ * 归档规则**写在 `desc` 里的自然语言中**（工具读不懂它，但**能看出它有没有被写**）——
+ * 于是这里只做一件可机械判定的事：**任一节的 `desc` 里有没有提到归档**。
+ *
+ * ⚠️ **边界（这是"提醒"不是"校验"）**：正则按关键词判，**认不出自由措辞**
+ *   （用户若写"超过 2 万就把最早的挪到条目里"而不出现"归档/history" ⇒ 会判成"没写"）。
+ *   ⇒ 假阴性的方向是**多说一句提醒**，不影响功能；所以**不必**把它做成精确解析。
+ * @param t - 模板。
+ * @returns 有任一节提到归档 ⇒ `true`。
+ */
+export function templateDeclaresArchiving(t: Template): boolean {
+  return t.sections.some((s) => /归档|history/i.test(s.desc))
 }
 
 /**

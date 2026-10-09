@@ -98,7 +98,7 @@ console.log('\n【2】端到端：传 template 真的按那份模板建节')
       title: '单元测试模板',
       sections: [
         { name: '甲节', desc: '第一段要写什么。' },
-        { name: '乙节', desc: '第二段要写什么。', truncate: true },
+        { name: '乙节', desc: '第二段要写什么。' },
         { name: '丙节', desc: '第三段要写什么。' },
       ],
     },

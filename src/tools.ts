@@ -54,8 +54,10 @@ import { renderSectionSpecs } from './reads.ts'
 import { sectionSpecsOf } from './sections.ts'
 // ⭐ 决策 205：模板工具的两段式确认（纯函数，可单测）。
 import { decideTemplateTool } from './template-tool.ts'
-// ⭐ 模板写作指导的骨架（可编辑常量与插槽标记都在 templates.ts）。
-import { TPL_GUIDANCE_TRUNC_MARK } from './templates.ts'
+// 🔴 **决策 223 的清理（2026-10-09 做的这批）**：这里原来还 import 了 `TPL_GUIDANCE_TRUNC_MARK` ——
+//   那个常量是"本节的较早内容会被自动截断归档"那句标记，**已随机制一起废除**，
+//   全文件**只剩 import 那一行**（0 个消费者）⇒ 删掉。
+//   ⚠️ 常量本身**仍留在 `templates.ts`**（它登记进了提示词账本，删常量会让账本对不上）。
 import { KNOWLEDGE_TITLE } from './sections.ts'
 // ⭐⭐ 把工具 schema 渲染成人读文本（**只为展示**，见 `safeRegister` 里的说明）。
 import { renderOutputText, renderParametersText } from './prompt-catalog.ts'
@@ -189,39 +191,55 @@ export function registerTools(deps: ToolDeps): void {
    * ⇒ ⭐ 把两者都做成 getter，**改完类型下一轮即时生效、不用重启**。
    *
    * ⚠️ **`parameters` 是 `defineTool` 一次性构造的普通对象** ⇒
-   *    这里返回的也必须是**它当场能吃下的形态**（对象字面量 + getter）。
-   * ⚠️ 两个 getter 都**必须在对象字面量之后**定义 ——
-   *    `defineTool` 对**顶层** `description` 做的是普通属性赋值，会覆盖提前定义的同名 getter；
-   *    但**参数对象内部**的这一层它不碰（实测：`enum` getter 自决策 215 起一直有效）。
+   *    这里返回的也必须是**它当场能吃下的形态**。
+   *
+   * 🔴🔴 **2026-10-09 重大修正：上面那句"getter 一直有效"是错的，而且【不能】靠 getter 修。**
+   *
+   * ── 第一层错：getter 被【对象展开】吃掉了（曾经的真实状态）────────────────
+   *   本函数**返回**的对象带 getter，但 5 个调用点全写成 `{ ...kindParam(...) }`，
+   *   而 **展开运算符走 `[[Get]]`**：读值、然后在新对象上建**数据属性**
+   *   ⇒ **getter 不会被带过去**（实测：`{...o}` 之后 `getOwnPropertyDescriptor(x,'enum').get` 为 undefined）。
+   *   ⭐ 后果：enum 退化成**注册时快照**，与决策 215 的初衷正好相反。
+   *
+   * ── 🔴🔴 第二层错（更根本，2026-10-09 实测才知道）：**DSH 根本不接受动态 schema**
+   *   我第一版修法是"用一个 symbol 标记穿过展开，再在最终对象上重装 getter"。
+   *   **结果 4 个工具整条注册失败**：
+   *   ```
+   *   JsonSchemaError: unsupported JSON schema:
+   *     parameters.entries.items.properties.kind must be a value schema object
+   *   ```
+   *   ⭐ 根因（查 `dsh-tools/lib/index.js` 的 `isJsonSchemaRecord`）：
+   *   它要求参数对象 **只有 own enumerable string keys**
+   *   （`hasOnlyEnumerableStringKeys`：`Reflect.ownKeys(v).every(k => typeof k === 'string' && …)`）
+   *   ⇒ **symbol 键直接不合格**；而**访问器属性**同样过不了 "value schema object"。
+   *   ⇒ 🔴 **DSH 会把 `parameters` 编译成 JSON Schema**（见「知识来源」那条知识），
+   *     所以"每轮现算的 schema"**在参数层从原理上做不到**。
+   *   ⚠️ 更讽刺的是：**原来那个"展开吃掉 getter"的 bug，恰好让 schema 变成了静态数据属性** ——
+   *     它**无意中满足了 DSH 的要求**。所以那 5 个工具一直能注册。
+   *     ⭐ 判据：**"能注册上"不等于"设计对了"** —— 两者在这里恰好由同一个 bug 维持。
+   *
+   * ── ✅ 正确做法（两级，各管各的）────────────────────────────────────────────
+   * | 层 | 谁负责 | 怎么保证"用户加的类能用" |
+   * |---|---|---|
+   * | **参数层**（`enum`） | ⭐ **注册时快照，静态** —— DSH 的要求 | 用户改类型后**下次重启**生效（`enum` 只影响"模型能否填"，是**建议面**）|
+   * | **运行期**（`execute` 里） | ⭐ **现算校验**（`isEntryKind` 读进程内词表） | ⭐ **改完立即生效**，且报错**列出当前全部合法值** |
+   * ⇒ 这就是库里那条知识给的判据：**"把闸门从参数层移到运行时校验"** ——
+   *   拦住集合不变、报错信息量更大、且**不受 DSH 的 schema 限制**。
    * @param descOf - **现算描述**的函数（各处文案不同，但都从当前词表取）。
-   * @returns 可直接放进 `parameters` 的 schema 片段。
+   * @returns 可直接放进 `parameters` 的 schema 片段（**普通数据属性**）。
    */
-  const kindParam = (descOf: () => string): { type: 'string'; enum: string[]; description: string } => {
-    const o = {
-      type: 'string' as const,
-      /** 占位：紧接着被下面的 getter 覆盖。 */
-      description: '',
-      /** 占位：同上。 */
-      enum: [] as string[],
-    }
-    Object.defineProperty(o, 'enum', {
-      enumerable: true,
-      configurable: true,
-      // ⭐ **每轮现算** —— 读的是"当前生效的词表"（`schema.ts` 的进程内当前值），
-      //    并**排除保留项**（`history` 不给模型选）。
-      get: () => {
-        const reserved = new Set(currentReservedKinds())
-        return currentKindsOf().filter((id) => !reserved.has(id))
-      },
-    })
-    Object.defineProperty(o, 'description', {
-      enumerable: true,
-      configurable: true,
-      // ⭐⭐ **描述也每轮现算**（决策 217）—— 见上面那段"同一个 schema 内部自相矛盾"。
-      get: descOf,
-    })
-    return o
-  }
+  const kindParam = (descOf: () => string): { type: 'string'; enum: string[]; description: string } => ({
+    type: 'string' as const,
+    /**
+     * ⚠️ **注册时的快照**（不再做成 getter）—— 理由上面那段。
+     * 🔴 **它只用于"告诉模型有哪些可选"**，**不是**最终闸门：
+     *   真正的合法性判断在 `execute` 里走 `isEntryKind()`（读**进程内当前词表**）。
+     * ⭐ 所以"用户新加的类型在模型填了之后会不会被拒"这件事，**由运行期那一层保证**。
+     */
+    enum: currentKindsOf().filter((id) => !new Set(currentReservedKinds()).has(id)),
+    /** 描述是**纯展示文本**，做成快照没有副作用（改类型后重启即更新）。 */
+    description: descOf(),
+  })
 
   /**
    * 逐个注册，**一个失败不拖垮其余**（同 `dsh-memory` 的教训）。
@@ -1204,8 +1222,19 @@ export function registerTools(deps: ToolDeps): void {
               '· `drop` **删除**该节\n' +
               '🔴 **缺省是 `append` 是故意的**：忘给参数时**只会追加、不会覆盖**' +
               '（要覆盖必须显式说 `replace`）。\n' +
-              '⭐ **「当前进度」的瘦身不用你做**：`memj_handoff` 会**自动**把较早的小节' +
-              '截走、归档成 `kind: history` 的条目 ⇒ ⛔ 不要为了"压缩"而手工 `replace`/`drop`。\n' +
+              // 🔴🔴 决策 223 之后这句曾**反向误导**（2026-10-09 修）：
+              //   旧文案写着"**瘦身不用你做**：`memj_handoff` 会**自动**把较早的小节截走
+              //   ⇒ ⛔ **不要为了"压缩"而手工 `replace`/`drop`**" ——
+              //   而工具**已经不再自动归档**了，手工做它**正是现在唯一正确的做法**
+              //   ⇒ 那条在**劝退模型做唯一该做的事**（比"过时"更坏：它是反向指引）。
+              //   ⭐ 现在是：**瘦身就是你的事**，规则写在各节规范里（工具只报数）。
+              // 🔴 **2026-10-09 补指路**：这里只讲"参数怎么用"，**完整流程不在这**
+              //   （它归运行时上下文的「文档瘦身 / 归档」那一节，决策 124 的分层）。
+              //   ⚠️ 但仍要点名两个**与本参数直接相关**的坑 —— 它们正是用错这个参数造成的。
+              '⭐ **文档瘦身/归档由你按各节规范执行**（决策 223）：规则写在**各节规范里**' +
+              '（自然语言），**工具不会替你归档**。超阈值时**就用 `replace`/`drop` 动手**。\n' +
+              '⭐ **完整四步流程见运行时上下文「文档瘦身 / 归档」**；⚠️ 尤其别拿 `replace`' +
+              '去改「历史进展」那种**累积容器**（它的语义是**替换整节** ⇒ 会抹掉已有指针）。\n' +
               '⚠️ 追加时 `doc` 只给正文片段、**不要带节标题**；' +
               '`drop` 后若留下空壳节，回执会报警（工具分不清"故意删空"与"误删"）。',
           },
@@ -1926,7 +1955,9 @@ export function registerTools(deps: ToolDeps): void {
             additionalProperties: false,
             description:
               '`create` 时给。⭐ `desc` 必填（**这一节要干嘛**，会写进该节标题下的规范块）；' +
-              '`truncate` **可多节**设 true（各自独立），**一节都不设 = 该文档不会自动截断**。',
+              '⭐ **归档规则也写在 `desc` 里**（自然语言）：想让某一节自动瘦身，就在它那段规范里' +
+              '写清"超过多少字符、把什么归档成什么类型、原处留什么"。⚠️ **把数字写死**' +
+              '（如"超过 20000 字符"）—— 因为工具会把实际字数报给模型，有确切数字才对照得上。',
             properties: {
               id: {
                 type: 'string',
@@ -1952,10 +1983,14 @@ export function registerTools(deps: ToolDeps): void {
                         '⭐ **这一节的书写规范**（必填）—— 它会写进该节标题下的规范块。' +
                         '**没有字数上限**（不占截断配额；超过 2000 字只给提醒，不阻断保存）。',
                     },
-                    truncate: {
-                      type: 'boolean',
-                      description: '该节是否参与自动截断（**可多节**设 true，各自独立；一节都不设 = 不自动截断）。',
-                    },
+                    // 🔴🔴 **决策 223 删掉了 `truncate` 字段（2026-10-09 从这里也删干净）**：
+                    //   它已从 `TemplateSection` 接口删除、`renderTemplateDoc` 不渲染、
+                    //   `parseTemplateDoc` 不读 ⇒ 之前 schema 里**还留着它**，
+                    //   模型能传、**传了被静默丢掉**（不报错、不生效）。
+                    //   ⚠️ 与"不再维护但透传"的 `frontmatter.truncateSections` **不是一回事** ——
+                    //      那个是**存量数据**（要保住），这个是**给模型的入口**（必须撤掉，
+                    //      否则等于告诉模型"这个旋钮有用"）。
+                    //   ⭐ 判据：**参数 schema 里不该留"传了也不生效"的字段**。
                   },
                 },
               },

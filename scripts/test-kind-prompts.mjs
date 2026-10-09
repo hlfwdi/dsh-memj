@@ -34,10 +34,31 @@ const check = (c, n, ex = '') => {
 }
 const MK_CAT = '<' + '!--memj:kind-catalog--' + '>'
 const MK_LIST = '<' + '!--memj:kind-list--' + '>'
+/**
+ * 从源码里取出一个**模板串常量**的正文。
+ *
+ * 🔴🔴 **必须还原写入端的转义**（2026-10-09 修）：
+ *   原来这里是 `` = `([\s\S]*?)`\n `` —— **非贪婪**，遇到**第一个反引号**就停。
+ *    那个写法在"正文里没有反引号"时看着是对的；
+ *    ⚠️ 而模板串里的**行内代码反引号是转义成 `\`` 的** ⇒ 正文里一出现行内代码，
+ *    正则会**在第一个 `\`` 处截断**（实测：抓到 4525 / 实际 8843 字符），
+ *    且**不报错** —— 于是"标记不在""骨架丢了"这类**假红**成片出现。
+ *    ⭐ 判据（本项目既有）：**要读"这个项目自己的格式"时，用项目自己的解析器** ——
+ *    这里就是 `prompt-writeback.ts` 的 `locateTemplateBody()` + `unescapeFromTemplate()`
+ *    （**与写回同源**，写入端怎么转义，读侧就怎么还原）。
+ * @param file - `src/` 下的文件名。
+ * @param name - 常量名。
+ * @returns 常量正文（**未转义的**）；取不到时回空串。
+ */
 const readConst = (file, name) => {
   const src = readFileSync(join(process.cwd(), 'src', file), 'utf8')
-  const m = new RegExp('export const ' + name + ' = `([\\s\\S]*?)`\\n').exec(src)
-  return m?.[1] ?? ''
+  const loc = mod.locateTemplateBody(src, name)
+  if (loc === undefined) return ''
+  // ⚠️ `locateTemplateBody` 回的是**字符偏移**（`bodyStart`/`bodyEnd`），**不是行号**
+  //    —— 第一版我按行切，切出空串（三个常量全读不到 ⇒ 12 条假红）。
+  //    ⭐ 判据：**用别人的定位器前先确认它的下标是"行"还是"字符"**（看它怎么算的就知道了）。
+  const body = src.slice(loc.bodyStart, loc.bodyEnd)
+  return mod.unescapeFromTemplate(body, loc.quote)
 }
 const CT = readConst('context.ts', 'CONTEXT_TEXT')
 const HD = readConst('tool-descriptions.ts', 'MEMJ_HANDOFF_DESCRIPTION')
@@ -162,7 +183,30 @@ console.log('\n【5】静态反证：不许再出现写死的四值')
   check(hits.length === 0, `全部 ${files.length} 个源码文件里没有写死四值 / \`ENTRY_KINDS.join()\``, hits.slice(0, 4).join(' | '))
 
   const tools = readFileSync(join(process.cwd(), 'src', 'tools.ts'), 'utf8')
-  check(/get: descOf/.test(tools), 'kindParam 的 description 用了 getter（每轮现算）')
+  /**
+   * 🔴🔴 **本条断言在 2026-10-09 被【改写】**（原来断言的是 `get: descOf` = "description 用 getter"）。
+   *
+   * ── 为什么改判据（而不是改代码去迁就它）──────────────────────────────────
+   * 那条旧断言守的是**一个从原理上做不到的设计**：
+   *   · `kindParam` 曾经把 `enum`/`description` 做成 getter（想"每轮现算"）；
+   *   · 🔴 **但 DSH 不允许动态 schema** —— `dsh-tools` 的 `isJsonSchemaRecord`
+   *     要求参数对象**只有 own enumerable string keys**（`hasOnlyEnumerableStringKeys`），
+   *     且必须是"value schema object" ⇒ **访问器属性直接判不合格**：
+   *     `JsonSchemaError: parameters.…properties.kind must be a value schema object`
+   *     ⇒ **整个工具注册失败**（我实测过：4 个工具一起挂）。
+   *   · ⚠️ 而 5 个调用点写的 `{ ...kindParam(...) }` 恰好把 getter **求值成静态值**，
+   *     **无意中满足了 DSH** ⇒ 所以这个"坏设计"一直没暴露。
+   * ⇒ ✅ **正确设计是两级**：**参数层静态快照**（满足 DSH）+ **运行期现算校验**
+   *   （`handoff.ts` 的 `isEntryKind` / `selectableKindList`，读进程内词表）。
+   *   ⭐ 那条判据由 `test-kind-dynamic-enum.mjs` 专门守着（含反证臂）。
+   *
+   * ⭐ 判据：**设计变了就改判据，不去改代码迁就旧判据**；
+   *   但**改判据前要先确认"是判据过期还是代码真错"** —— 这里是前者（旧的从原理上做不到）。
+   */
+  check(!/get: descOf/.test(tools),
+    'kindParam【不再】用 getter（DSH 不接受动态 schema；动态性改由运行期保证）')
+  check(/enum:\s*currentKindsOf\(\)/.test(tools),
+    'kindParam 的 enum 是注册时快照（普通数据属性）')
 }
 
 console.log(`\n═══ 知识类型 → 提示词联动：通过 ${pass} / 失败 ${fail} ═══`)
