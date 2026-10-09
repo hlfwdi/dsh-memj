@@ -28,6 +28,7 @@
  *   顺序是"**先造出产物，再断言产物真的被装进去了**"。
  */
 import { execFileSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -36,6 +37,25 @@ const root = join(here, '..')
 
 /** 必须在 tarball 里的文件（相对仓库根，npm 用 `/` 分隔）。 */
 const REQUIRED = ['lib/index.js', 'lib/client.js', 'cordis.patch.yml', 'README.md', 'LICENSE']
+
+/**
+ * README 里引用的图片**必须随包发出去**。
+ *
+ * 🔴 **为什么单独断言它**：npm 页面用的是**包内**的 README。
+ *   `files` 里漏掉 `docs/` ⇒ README 照发，但**图全裂**（GitHub 上却完全正常，
+ *   因为那边读的是仓库）⇒ ⭐ **本地与 GitHub 都看不出问题，只有 npm 读者看得见**。
+ *   ⇒ 这正是本项目一贯的判据：**要断言的是产物**，而"两边表现不一致"的地方
+ *     必须有一条只有它才能发现的检查。
+ */
+function readmeImages() {
+  let text
+  try {
+    text = readFileSync(new URL('../README.md', import.meta.url), 'utf8')
+  } catch {
+    return []
+  }
+  return [...text.matchAll(/\]\((docs\/[^)]+\.(?:png|jpe?g|webp|gif))\)/gi)].map((m) => m[1])
+}
 
 /** 低于这个文件数 ⇒ 一定是"空壳包"（实测正常包是 16 个）。 */
 const MIN_FILES = 10
@@ -81,9 +101,26 @@ if (missing.length > 0) {
 if (total < MIN_FILES) {
   console.error(
     `\n❌ tarball 只有 ${total} 个文件（少于下限 ${MIN_FILES}）—— 这多半是个空壳包。\n` +
-      '   实测正常包是 16 个（含 lib/ 下 10 个产物 + web/3 个 + 3 个根文件）。',
+      '   实测正常包是 26 个（lib/ 下 10 个产物 + web/3 个 + 根文件 + README 引用的截图）。',
   )
   process.exit(1)
 }
 
-console.log(`\n✅ 发布闸门通过：${total} 个文件，lib/ 与网页资源都在包里。`)
+// ── ③ README 引用的图片必须真的在包里（否则 npm 页面上图全裂）───────────
+const images = readmeImages()
+if (images.length > 0) {
+  const missingImages = images.filter((f) => !files.has(f))
+  if (missingImages.length > 0) {
+    console.error(
+      `\n❌ README 引用了 ${images.length} 张图，其中 ${missingImages.length} 张**不在 tarball 里**：\n` +
+        missingImages.map((f) => `     · ${f}`).join('\n') +
+        '\n   ⚠️ npm 页面用的是**包内**的 README ⇒ 这些图在 npm 上是**裂的**，\n' +
+        '      而 GitHub 上完全正常（那边读仓库）⇒ **本地与 GitHub 都看不出问题**。\n' +
+        '   ⇒ 把 `docs/screenshots` 加进 package.json 的 `files`。',
+    )
+    process.exit(1)
+  }
+  console.log(`   README 引用的 ${images.length} 张截图都在包里。`)
+}
+
+console.log(`\n✅ 发布闸门通过：${total} 个文件，lib/、网页资源与 README 截图都在包里。`)

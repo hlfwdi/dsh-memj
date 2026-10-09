@@ -42,7 +42,8 @@
     "!lib/offline-bundle.js",
     "!lib/offline-bundle.d.ts",
     "cordis.patch.yml",
-    "README.md"
+    "README.md",
+    "docs/screenshots"
   ],
   "license": "MIT",
   "publishConfig": {
