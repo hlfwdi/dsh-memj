@@ -18,12 +18,20 @@
 import { spawn } from 'node:child_process'
 import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { edgePath, labPath, skipIfUnavailable } from './shared/lab-paths.mjs'
 
-const EDGE = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
-const TEST = 'D:\\dsh_test\\2026-09-02_13-51-19-115'
+// ⚠️ **路径一律派生，不写死**（2026-10-09 为公开发布清理，见 `shared/lab-paths.mjs`）。
+const EDGE = edgePath()
+const TEST = labPath()
 const PORT = process.argv[2] ?? '3098'
 const CDP_PORT = 9419
+
+skipIfUnavailable('发送侧广播链路（插件前端 bundle 真的会广播会话切换）', [
+  ...(EDGE === '' ? ['没找到 Edge —— 用 MEMJ_EDGE=<msedge.exe 路径> 指定'] : []),
+  ...(TEST === '' ? ['没设 MEMJ_LAB_ROOT —— 它指向放着 testhome/ 与插件工程的那份素材'] : []),
+])
 
 let pass = 0
 let fail = 0
@@ -35,7 +43,13 @@ const check = (name, cond, extra = '') => {
 console.log('════════ 发送侧：客户端 bundle 的广播契约 ════════\n')
 
 // ── ① 静态检查：bundle 里真的有 BroadcastChannel + 正确频道名 ──
-const clientJs = join('D:/dsh_workplace/2026-09-02_13-51-19-115/plugins-next/dsh-memj', 'lib/client.js')
+// ⚠️ **指向本仓的 `lib/client.js`，不是那个已废弃的母仓**
+//    （2026-10-09 清理：原来写死 `D:\dsh_workplace\…\plugins-next\dsh-memj`，
+//     而那个仓**已被本仓取代**（两仓分叉：src 50 → 57 个文件）。
+//     用 `import.meta.url` 派生 ⇒ 永远检查**本仓刚构建出来的那份**，
+//     也正是真正要发出去的那份 —— 与"断言产物、不断言配置"同一条判据）。
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
+const clientJs = join(REPO_ROOT, 'lib', 'client.js')
 const src = existsSync(clientJs) ? readFileSync(clientJs, 'utf8') : ''
 check('client.js 存在', src !== '')
 check('⭐ bundle 里有 `BroadcastChannel`', src.includes('BroadcastChannel'))

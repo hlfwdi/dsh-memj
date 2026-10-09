@@ -11,11 +11,18 @@ import { spawn } from 'node:child_process'
 import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { edgePath, labPath, skipIfUnavailable } from './shared/lab-paths.mjs'
 
-const EDGE = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
-const TEST = 'D:\\dsh_test\\2026-09-02_13-51-19-115'
+// ⚠️ **路径一律派生，不写死**（2026-10-09 为公开发布清理，见 `shared/lab-paths.mjs`）。
+const EDGE = edgePath()
+const TEST = labPath()
 const PORT = process.argv[2] ?? '3098'
 const CDP_PORT = 9421
+
+skipIfUnavailable('预算旋钮在设置面板、且不在实时状态页', [
+  ...(EDGE === '' ? ['没找到 Edge —— 用 MEMJ_EDGE=<msedge.exe 路径> 指定'] : []),
+  ...(TEST === '' ? ['没设 MEMJ_LAB_ROOT —— 它指向放着 testhome/ 的那份一次性素材'] : []),
+])
 
 let pass = 0
 let fail = 0

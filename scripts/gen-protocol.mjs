@@ -12,9 +12,14 @@
 //
 // ⚠️ **直接从设计文档抽取**，不依赖手工中间文件（同 check-protocol.mjs）。
 import { readFileSync, writeFileSync } from 'node:fs'
+import { designDocPath, requirePath } from './shared/lab-paths.mjs'
 
-const DESIGN_DOC =
-  process.env['MEMJ_DESIGN_DOC'] ?? 'D:\\dsh_test\\2026-09-02_13-51-19-115\\memj-design.md'
+// ⚠️ **不写死本机路径**（2026-10-09 为公开发布清理，见 `shared/lab-paths.mjs`）。
+const DESIGN_DOC = requirePath(
+  process.env['MEMJ_DESIGN_DOC'] ?? designDocPath(),
+  '设计文档 memj-design.md（§6 协议全文）',
+  'MEMJ_DESIGN_DOC=<路径> node scripts/gen-protocol.mjs',
+)
 
 /** 从设计文档里抽出 §6「协议全文」那个 ```text 代码块的内容。 */
 function extractProtocolFromDesign() {

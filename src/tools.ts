@@ -130,7 +130,9 @@ export function sessionIdOf(agent: { session?: { id?: unknown } } | undefined): 
 /**
  * ⭐⭐ 取**当前轮次号**（决策 112 的"有效期粒度 = 一个完整轮次"）。
  *
- * ── 来源（已核 `D:\dsh_src_alpha` 源码，非猜测）─────────────────────────────
+ * ── 来源（已核 DSH 上游源码，非猜测：`@deepseek-ai/dsh-agent` 的会话与投影定义）
+ *    ⚠️ 这里**不写本地源码目录**（那是一台机器上的检出位置，对读者无意义且不该公开）——
+ *    要复核就看下面这几个**包内路径**，它们在任何安装里都存在。
  * · 会话事件 `turn/start` / `turn/end` 带 `turn: number`
  *   （`packages/core/session/src/types.d.ts`）；
  * · agent-loop 把边界折成投影、key = **`turnBoundary`**

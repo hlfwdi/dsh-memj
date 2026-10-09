@@ -14,9 +14,16 @@
 // 先前版本读 `_proto_raw.txt`（人工抽取的临时文件），一旦它被清理，
 // 校验就报 ENOENT 而**看起来像协议不一致**，是很容易误判的假失败。
 import { readFileSync } from 'node:fs'
+import { designDocPath, requirePath } from './shared/lab-paths.mjs'
 
-const DESIGN_DOC =
-  process.env['MEMJ_DESIGN_DOC'] ?? 'D:\\dsh_test\\2026-09-02_13-51-19-115\\memj-design.md'
+// ⚠️ **不写死本机路径**（2026-10-09 为公开发布清理，见 `shared/lab-paths.mjs`）。
+//    原来这里写着 `D:\dsh_test\…\memj-design.md` ⇒ 对别人是死路径，
+//    而且**报出来的像"协议不一致"**（其实只是文件没找到）——本项目最烦的那种误判。
+const DESIGN_DOC = requirePath(
+  process.env['MEMJ_DESIGN_DOC'] ?? designDocPath(),
+  '设计文档 memj-design.md（§6 协议全文）',
+  'MEMJ_DESIGN_DOC=<路径> node scripts/check-protocol.mjs',
+)
 
 /** 从设计文档里抽出 §6「协议全文」那个 ```text 代码块的内容。 */
 function extractProtocolFromDesign() {

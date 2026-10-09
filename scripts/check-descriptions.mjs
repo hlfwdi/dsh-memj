@@ -25,11 +25,14 @@
 //
 // 用法：node scripts/check-descriptions.mjs [设计文档路径]
 import { readFileSync } from 'node:fs'
+import { designDocPath, requirePath } from './shared/lab-paths.mjs'
 
-const DESIGN_DOC =
-  process.argv[2] ??
-  process.env['MEMJ_DESIGN_DOC'] ??
-  'D:\\dsh_test\\2026-09-02_13-51-19-115\\memj-design.md'
+// ⚠️ **不写死本机路径**（2026-10-09 为公开发布清理，见 `shared/lab-paths.mjs`）。
+const DESIGN_DOC = requirePath(
+  process.argv[2] ?? process.env['MEMJ_DESIGN_DOC'] ?? designDocPath(),
+  '设计文档 memj-design.md（§4.2 工具 description 原文）',
+  'node scripts/check-descriptions.mjs "<设计文档路径>"',
+)
 
 // ══════════════════════════════════════════════════════════════════════
 // ① 抽取：与 gen-descriptions.mjs **逐行同源**

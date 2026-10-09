@@ -17,12 +17,23 @@ import { spawn } from 'node:child_process'
 import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { edgePath, labPath, skipIfUnavailable } from './shared/lab-paths.mjs'
 
-const EDGE = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
-const TEST = 'D:\\dsh_test\\2026-09-02_13-51-19-115'
+// ⚠️ **路径一律派生，不写死**（2026-10-09 为公开发布清理，见 `shared/lab-paths.mjs`）。
+//    原来写死 `C:\Program Files (x86)\…\msedge.exe` 与 `D:\dsh_test\…`：
+//    前者漏掉**用户级安装**的 Edge，后者对别人是死路径。
+const EDGE = edgePath()
+const TEST = labPath()
 const PORT = process.argv[2] ?? '3098'
 const CDP_PORT = 9411
-const OUT = join(TEST, 'verify', 'shot-hot-page.png')
+// ⭐ 截图落到实验根下；没设实验根就落到系统临时目录（总比写死一个别人没有的盘符好）。
+const OUT =
+  TEST === '' ? join(tmpdir(), 'memj-shot-hot-page.png') : join(TEST, 'verify', 'shot-hot-page.png')
+
+skipIfUnavailable('热知识页实景截图（子导航可见性与布局）', [
+  ...(EDGE === '' ? ['没找到 Edge —— 用 MEMJ_EDGE=<msedge.exe 路径> 指定'] : []),
+  ...(TEST === '' ? ['没设 MEMJ_LAB_ROOT —— 它指向放着 verify/ 的那份一次性素材'] : []),
+])
 
 let pass = 0
 let fail = 0

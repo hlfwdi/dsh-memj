@@ -9,7 +9,7 @@
  *
  * 🔴 **路径不写死**，按本项目自己的规则派生（见 `src/paths.ts`）：
  *    库根 = `MEMJ_DATA_DIR` → `~/.dsh-memj`（`homedir()`）。
- *    ⚠️ 写死 `C:\Users\jojoman\...` 会让它在**换机器 / 换用户**时静默走错地方
+ *    ⚠️ 写死 `C:\Users\<用户名>\.dsh-memj` 会让它在**换机器 / 换用户**时静默走错地方
  *    （报"没有那个项目"，而真原因是路径不对 ⇒ 与「搜不到不等于不存在」同族）。
  *
  * 用法：node scripts/probe-index-projectdrift.mjs

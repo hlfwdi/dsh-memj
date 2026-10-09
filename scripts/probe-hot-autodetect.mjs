@@ -16,10 +16,19 @@
  */
 import { readFileSync, readdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { labPath, skipIfUnavailable } from './shared/lab-paths.mjs'
 
+// ⚠️ **路径一律派生，不写死**（2026-10-09 为公开发布清理，见 `shared/lab-paths.mjs`）。
+//    原来写死 `D:\dsh_test\…\verify\memj-arc-lib` —— 那是**隔离库**，
+//    换机器必然没有；写死会报"库是空的"，而那看起来像功能坏了。
 const PORT = process.argv[2] ?? '3098'
-const LIB = 'D:\\dsh_test\\2026-09-02_13-51-19-115\\verify\\memj-arc-lib'
+const LIB = labPath('verify', 'memj-arc-lib')
 const BASE = `http://127.0.0.1:${PORT}/plugins/dsh-memj/api`
+
+skipIfUnavailable('打开会话时按 doc-reads 补算项目', [
+  ...(LIB === '' ? ['没设 MEMJ_LAB_ROOT —— 它指向放着隔离库 verify/memj-arc-lib 的那份素材'] : []),
+  ...(LIB !== '' && !existsSync(LIB) ? [`隔离库不存在：${LIB}`] : []),
+])
 
 let pass = 0
 let fail = 0
