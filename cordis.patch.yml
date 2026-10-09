@@ -1,7 +1,12 @@
-# dsh-memj —— host-only 插件。
+# dsh-memj —— 本文件只负责把插件**挂进 profile**。
 #
-# 本插件只挂 host 半边（工具 / 协议注入 / 斜杠命令 / API 路由），
-# 没有 client 半边，故不需要 `dsh.client` 声明。
+# 本插件**两半都有**：
+#   · host 半边（`lib/index.js`）—— 工具 / 协议注入 / 斜杠命令 / API + 网页路由；
+#   · client 半边（`lib/client.js`）—— 侧边栏入口按钮 + `/memj-review` 的弹窗，
+#     ⇒ 由 package.json 的 `dsh.client`（`platform` / `inject`）声明，**不在本文件里**。
+#
+# ⚠️ 所以下面**只有一行**：bundle patch 的职责是「insert 一个 loader 条目」，
+#    它**不描述**这个插件有多少半边、也不管 client 清单 —— 那是 package.json 的事。
 #
 # `dsh.bundle.patch` 是**必需**的：package.json 里声明了它，
 # 缺文件会在 profile 加载期**硬失败**（dsh-app-boot 读 overlay 时直接抛）。
