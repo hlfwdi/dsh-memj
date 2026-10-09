@@ -219,7 +219,7 @@
 ```bash
 pnpm run build      # tsdown（host + client 两个条目）→ copy-web → 产物自检 → 提示词账本对账
 pnpm run typecheck  # tsc（src） + tsc（src/client）
-pnpm run test       # 48 个套件
+pnpm run test       # 50 个套件
 pnpm run check      # 上面三合一
 ```
 
