@@ -2,8 +2,15 @@
 # `lib/` 是构建产物，可从 `src/` 完整重建；它还含带内容哈希的 chunk
 # （如 search-<hash>.js、store-<hash>.d.ts），每次构建都换名字 ⇒ 提交只制造噪声。
 # 要恢复运行产物：`node scripts/build.mjs`（构建后需重启实例才生效）。
-node_modules/
-lib/
+#
+# 🔴 **两条规则都必须【加前导斜杠锚定到仓库根】**（2026-10-09 实测）：
+#    无锚点的 `lib/` 会匹配**任意深度**的同名目录 ⇒
+#    `src/foo/lib/x.ts` 这种嵌套目录会被**整个静默吞掉**（文件在盘上、但进不了版本库）。
+#    实测证据：建 `src/probe-lib-test/lib/marker.ts` ⇒ `git check-ignore -v` 命中
+#    `.gitignore:6:lib/`。⇒ 判据：**目录型忽略规则一律写 `/名字/`**；
+#    建目录后先跑 `git check-ignore -v <新文件>` 核实（本地毫无异常，clone 后才发现丢文件）。
+/node_modules/
+/lib/
 
 # ── 本地杂项 ────────────────────────────────────────────────────
 *.log
