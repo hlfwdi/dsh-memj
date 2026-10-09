@@ -13,7 +13,8 @@
   ],
   "type": "module",
   "engines": {
-    "node": "^22.19.0 || >=24.0.0"
+    "node": "^22.19.0 || >=24.0.0",
+    "dsh": ">=0.1.5-rc.2 <0.1.6-0 || >=0.1.6-0 <0.1.7-0 || >=0.1.7-0 <0.2.0-0 || >=0.2.0-0 <0.2.1-0 || >=0.2.1-0 <0.3.0-0"
   },
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -23,7 +24,7 @@
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.client.json",
     "test": "node scripts/run-all-tests.mjs",
     "check": "pnpm run typecheck && pnpm run build && pnpm run test",
-    "prepublishOnly": "node scripts/build.mjs && node scripts/check-pack.mjs"
+    "prepublishOnly": "node scripts/build.mjs && node scripts/check-pack.mjs && node scripts/check-peer-range.mjs"
   },
   "exports": {
     ".": {
@@ -69,23 +70,23 @@
     "yaml": "^2.9.1"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "4.0.2",
-    "@deepseek-ai/dsh-agent": ">=0.1.5-rc.2 <0.3.0",
-    "@deepseek-ai/dsh-api-session-controller": ">=0.1.5-rc.2 <0.3.0",
-    "@deepseek-ai/dsh-atomic-write": ">=0.1.5-rc.2 <0.3.0",
-    "@deepseek-ai/dsh-client-ui-commands": ">=0.1.5-rc.2 <0.3.0",
-    "@deepseek-ai/dsh-client-ui-renderer": ">=0.1.5-rc.2 <0.3.0",
-    "@deepseek-ai/dsh-client-ui-session": ">=0.1.5-rc.2 <0.3.0",
-    "@deepseek-ai/dsh-client-ui-sidebar": ">=0.1.5-rc.2 <0.3.0",
-    "@deepseek-ai/dsh-client-ui-slots": ">=0.1.5-rc.2 <0.3.0",
-    "@deepseek-ai/dsh-commands": ">=0.1.5-rc.2 <0.3.0",
-    "@deepseek-ai/dsh-home-paths": ">=0.1.5-rc.2 <0.3.0",
-    "@deepseek-ai/dsh-host-webserver": ">=0.1.5-rc.2 <0.3.0",
-    "@deepseek-ai/dsh-llm": ">=0.1.5-rc.2 <0.3.0",
-    "@deepseek-ai/dsh-system-prompt": ">=0.1.5-rc.2 <0.3.0",
-    "@deepseek-ai/dsh-timeout": ">=0.1.5-rc.2 <0.3.0",
-    "@deepseek-ai/dsh-tools": ">=0.1.5-rc.2 <0.3.0",
-    "@deepseek-ai/schemastery": "3.18.2",
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/dsh-agent": ">=0.1.5-rc.2 <0.1.6-0 || >=0.1.6-0 <0.1.7-0 || >=0.1.7-0 <0.2.0-0 || >=0.2.0-0 <0.2.1-0 || >=0.2.1-0 <0.3.0-0",
+    "@deepseek-ai/dsh-api-session-controller": ">=0.1.5-rc.2 <0.1.6-0 || >=0.1.6-0 <0.1.7-0 || >=0.1.7-0 <0.2.0-0 || >=0.2.0-0 <0.2.1-0 || >=0.2.1-0 <0.3.0-0",
+    "@deepseek-ai/dsh-atomic-write": ">=0.1.5-rc.2 <0.1.6-0 || >=0.1.6-0 <0.1.7-0 || >=0.1.7-0 <0.2.0-0 || >=0.2.0-0 <0.2.1-0 || >=0.2.1-0 <0.3.0-0",
+    "@deepseek-ai/dsh-client-ui-commands": ">=0.1.5-rc.2 <0.1.6-0 || >=0.1.6-0 <0.1.7-0 || >=0.1.7-0 <0.2.0-0 || >=0.2.0-0 <0.2.1-0 || >=0.2.1-0 <0.3.0-0",
+    "@deepseek-ai/dsh-client-ui-renderer": ">=0.1.5-rc.2 <0.1.6-0 || >=0.1.6-0 <0.1.7-0 || >=0.1.7-0 <0.2.0-0 || >=0.2.0-0 <0.2.1-0 || >=0.2.1-0 <0.3.0-0",
+    "@deepseek-ai/dsh-client-ui-session": ">=0.1.5-rc.2 <0.1.6-0 || >=0.1.6-0 <0.1.7-0 || >=0.1.7-0 <0.2.0-0 || >=0.2.0-0 <0.2.1-0 || >=0.2.1-0 <0.3.0-0",
+    "@deepseek-ai/dsh-client-ui-sidebar": ">=0.1.5-rc.2 <0.1.6-0 || >=0.1.6-0 <0.1.7-0 || >=0.1.7-0 <0.2.0-0 || >=0.2.0-0 <0.2.1-0 || >=0.2.1-0 <0.3.0-0",
+    "@deepseek-ai/dsh-client-ui-slots": ">=0.1.5-rc.2 <0.1.6-0 || >=0.1.6-0 <0.1.7-0 || >=0.1.7-0 <0.2.0-0 || >=0.2.0-0 <0.2.1-0 || >=0.2.1-0 <0.3.0-0",
+    "@deepseek-ai/dsh-commands": ">=0.1.5-rc.2 <0.1.6-0 || >=0.1.6-0 <0.1.7-0 || >=0.1.7-0 <0.2.0-0 || >=0.2.0-0 <0.2.1-0 || >=0.2.1-0 <0.3.0-0",
+    "@deepseek-ai/dsh-home-paths": ">=0.1.5-rc.2 <0.1.6-0 || >=0.1.6-0 <0.1.7-0 || >=0.1.7-0 <0.2.0-0 || >=0.2.0-0 <0.2.1-0 || >=0.2.1-0 <0.3.0-0",
+    "@deepseek-ai/dsh-host-webserver": ">=0.1.5-rc.2 <0.1.6-0 || >=0.1.6-0 <0.1.7-0 || >=0.1.7-0 <0.2.0-0 || >=0.2.0-0 <0.2.1-0 || >=0.2.1-0 <0.3.0-0",
+    "@deepseek-ai/dsh-llm": ">=0.1.5-rc.2 <0.1.6-0 || >=0.1.6-0 <0.1.7-0 || >=0.1.7-0 <0.2.0-0 || >=0.2.0-0 <0.2.1-0 || >=0.2.1-0 <0.3.0-0",
+    "@deepseek-ai/dsh-system-prompt": ">=0.1.5-rc.2 <0.1.6-0 || >=0.1.6-0 <0.1.7-0 || >=0.1.7-0 <0.2.0-0 || >=0.2.0-0 <0.2.1-0 || >=0.2.1-0 <0.3.0-0",
+    "@deepseek-ai/dsh-timeout": ">=0.1.5-rc.2 <0.1.6-0 || >=0.1.6-0 <0.1.7-0 || >=0.1.7-0 <0.2.0-0 || >=0.2.0-0 <0.2.1-0 || >=0.2.1-0 <0.3.0-0",
+    "@deepseek-ai/dsh-tools": ">=0.1.5-rc.2 <0.1.6-0 || >=0.1.6-0 <0.1.7-0 || >=0.1.7-0 <0.2.0-0 || >=0.2.0-0 <0.2.1-0 || >=0.2.1-0 <0.3.0-0",
+    "@deepseek-ai/schemastery": "^3.18.2",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
   },

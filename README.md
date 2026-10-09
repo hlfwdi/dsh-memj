@@ -513,6 +513,30 @@ memj 默认**不推**——它假设模型会主动查。但 LLM 的**工具调�
 
 插件是一个 **DSH bundle**（`package.json` 里声明了 `dsh.bundle.patch`）。
 
+### ⚠️ 先确认 DSH 版本
+
+**本插件要求 DSH `>=0.1.5-rc.2 <0.3.0`**（`package.json` 的 `engines.dsh` 与 `peerDependencies` 都写着）。
+
+🔴 **别直接按 `latest` 装** —— DSH 各包在 npm 上：
+
+| dist-tag | 版本 | 能用吗 |
+|---|---|---|
+| `latest` | `0.1.0-rc.6` | ❌ **太老** |
+| **`next`** | **`0.2.0-rc.2`** | ✅ **用这个** |
+| `alpha` | `0.2.1-alpha.2` | ✅ 也可以 |
+
+⇒ 装 DSH 时**带上 `@next`**：
+
+```bash
+pnpm add @deepseek-ai/dsh-agent@next    # 而不是 @latest
+```
+
+⭐ 一条命令自检（会打印你当前装的版本）：
+
+```bash
+node -p "require('@deepseek-ai/dsh-tools/package.json').version"
+```
+
 ### 常规安装（从 npm）
 
 ```bash
@@ -651,7 +675,7 @@ JEV 不是 OpenAI 兼容协议（走 `/v1/systemone`），DSH 原生「模型」
 ```bash
 pnpm run build      # tsdown（host + client 两个条目）→ copy-web → 产物自检 → 提示词账本对账
 pnpm run typecheck  # tsc（src） + tsc（src/client）
-pnpm run test       # 51 个套件
+pnpm run test       # 52 个套件
 pnpm run check      # 上面三合一
 ```
 
