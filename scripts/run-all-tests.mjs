@@ -379,6 +379,32 @@ for (const [name, script, args] of CHECKS) {
 const failed = results.filter((r) => !r.ok)
 const total = results.length
 console.log(`\n═══ 共 ${total} 个套件：${total - failed.length} 通过 / ${failed.length} 失败 ═══`)
+
+// ── ⭐⭐⭐ 文档里的套件数必须与真值一致（2026-10-09 新增，我连犯两次）────────────
+//
+// 🔴🔴 **为什么需要它**：`README.md` 的「构建与验收」里写着 `pnpm run test # N 个套件`，
+//   而 N **只有人记得改** ⇒ 加/删套件时它必然漂。
+//   ⚠️ **实测代价**：`18227c6` 把套件 47 → 50，README 那句没跟上；
+//     我本次修成 50 之后，**同一批里又加了 check-pack（50 → 51）** ⇒ **再漂一次**。
+//   ⭐ 判据（本项目既有）：**"记在文档里"不构成防线** ——
+//     凡是"文档里引用了某个会变的数"，就得有一条能报红的断言守着它。
+//
+// ⚠️ 它是**警告不拒绝**（与"提示词账本一致性"同规）：数字漂了不该挡住整批测试，
+//   但必须在输出里**点名**，否则下一轮还是没人知道。
+{
+  const { readFileSync } = await import('node:fs')
+  const readme = readFileSync(join(here, '..', 'README.md'), 'utf8')
+  const m = /pnpm run test\s+#\s*(\d+)\s*个套件/.exec(readme)
+  if (m === null) {
+    console.log('\n⚠️ README.md 里找不到「pnpm run test # N 个套件」那句 —— 检查模板是不是被改了。')
+  } else if (Number(m[1]) !== total) {
+    console.log(
+      `\n⚠️⚠️ README.md 写的套件数是 ${m[1]}，而**实际是 ${total}** —— 请改成 ${total}。\n` +
+        '   ⇒ 凡"文档里引用了某个会变的数"，改那个数的那一批就要顺手搜一遍全仓引用。',
+    )
+  }
+}
+
 if (failed.length > 0) {
   console.log('失败项：')
   for (const f of failed) {
