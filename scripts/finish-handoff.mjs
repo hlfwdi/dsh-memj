@@ -2,13 +2,58 @@
  * 补写 handoff：第一次调用的**数据已成功落盘**，只是返回体被 schema 拒收。
  * 本脚本**走同一套 runHandoff 逻辑**（不绕过校验）补上缺失的知识并刷新叙事。
  *
- * 用法：node scripts/finish-handoff.mjs
+ * ══════════════════════════════════════════════════════════════════════════
+ * 🔴🔴 **它会写【生产库】—— 默认 dry-run，必须显式加 `--apply` 才真写**
+ * ══════════════════════════════════════════════════════════════════════════
+ *
+ * ⚠️ **2026-10-09 加这道闸门的原因**（为公开发布清理时发现的真隐患）：
+ *   本脚本调 `runHandoff`，而它**没有设 `MEMJ_DATA_DIR`** ⇒ 走默认库根
+ *   **`~/.dsh-memj/`（生产库）**。
+ *   在别的机器上"顺手跑一下看看"就会**直接往人家的生产库里写一个项目的叙事与知识**——
+ *   而它看起来只是在"补一个手误"，不像危险操作。
+ *   ⇒ ⭐ 判据（本项目既有）：**危险动作默认关闭**，要它发生必须**显式说出口**。
+ *
+ * ── 用法 ──────────────────────────────────────────────────────────────────
+ *   node scripts/finish-handoff.mjs                 # 只看会写什么（dry-run，不落盘）
+ *   node scripts/finish-handoff.mjs --apply         # 真写进生产库 ~/.dsh-memj/
+ *   MEMJ_DATA_DIR=<副本> node scripts/finish-handoff.mjs --apply   # 写进副本
+ *
+ * ⚠️ **路径不再写死**（2026-10-09）：以前这里指向
+ *   `D:\dsh_workplace\…\plugins-next\dsh-memj`，那是**已被本仓取代的母仓**
+ *   （两仓已分叉：src 50 → 57 个文件）⇒ 跑它改的是**别人**的库。
+ *   现在按**脚本自身位置**派生 ⇒ 永远用本仓刚构建的 `lib/index.js`。
  */
-import { pathToFileURL } from 'node:url'
+import { existsSync, mkdtempSync, cpSync } from 'node:fs'
+import { dirname, join, basename } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { homedir, tmpdir } from 'node:os'
 
-const modUrl = pathToFileURL('D:/dsh_workplace/2026-09-02_13-51-19-115/plugins-next/dsh-memj/lib/index.js').href
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
+const LIB_ENTRY = join(REPO_ROOT, 'lib', 'index.js')
+
+if (!existsSync(LIB_ENTRY)) {
+  console.error(
+    `\n❌ 找不到构建产物：${LIB_ENTRY}\n` +
+      '   ⇒ 先构建：`node scripts/build.mjs`\n' +
+      '     ⚠️ 本脚本跑的是**产物**，不是 `src/`（改 src 不重建 ⇒ 这里还是旧的）。\n',
+  )
+  process.exit(2)
+}
+
+const APPLY = process.argv.includes('--apply')
+// ⭐ 与 `src/paths.ts` 同一条规则：`MEMJ_DATA_DIR` → `~/.dsh-memj`。
+const LIB_ROOT = process.env['MEMJ_DATA_DIR'] ?? join(homedir(), '.dsh-memj')
+
+console.log('════════ finish-handoff ════════')
+console.log(`  产物   : ${LIB_ENTRY}`)
+console.log(`  目标库 : ${LIB_ROOT}${LIB_ROOT === join(homedir(), '.dsh-memj') ? '  ← ⚠️ 生产库' : ''}`)
+console.log(`  模式   : ${APPLY ? '🔴 APPLY（真写）' : '🟢 DRY-RUN（只看，不落盘）'}`)
+
+const modUrl = pathToFileURL(LIB_ENTRY).href
 const mod = await import(modUrl)
 
+// ⚠️ **路径不写死**（2026-10-09）：本脚本的产物在**本仓**，不写本机的工程目录。
+//    ⭐ 判据：**给读者的是仓库内的相对位置**（跟着仓库走），不是某台机器的检出位置。
 const doc = `## 目标
 
 实现全新的 DSH 记忆系统插件 \`dsh-memj\`——用户认为旧的 \`dsh-memory\` 太复杂、偏离初衷，决定**另行重写**。
@@ -26,7 +71,7 @@ const doc = `## 目标
 
 | 项 | 状态 |
 |---|---|
-| 插件工程 | \`D:\\dsh_workplace\\2026-09-02_13-51-19-115\\plugins-next\\dsh-memj\`（18 个 src + \`src/web/\`） |
+| 插件工程 | 本仓（\`src/\` + \`src/web/\` + \`src/client/\`） |
 | host 半边 | 七个工具、两个斜杠命令、协议注入、API + 网页路由 |
 | client 半边 | \`src/client/index.tsx\`——\`/memj-review\` 的 \`commandUi\` 弹窗 + 侧边栏入口 |
 | 人侧网页 | \`src/web/\`——提名审批 / 断链 / 非法封面 / 封面清单 |
@@ -71,14 +116,15 @@ const doc = `## 目标
 
 ## 关键上下文
 
-**产物位置**：
-- 插件源码：\`D:\\dsh_workplace\\2026-09-02_13-51-19-115\\plugins-next\\dsh-memj\`
-- 设计全文：\`D:\\dsh_test\\2026-09-02_13-51-19-115\\memj-design.md\`（git 跟踪，3 个提交）
-- 验证脚本：插件内 \`scripts/\`，以及工作区 \`verify/e2e-memj.mjs\`、\`cdp-*-memj.mjs\`
+**产物位置**（⚠️ 用**仓库内相对位置**，不写某台机器的绝对路径 —— 那些跟着仓库走）：
+- 插件源码：本仓根（\`src/\`，构建产物在 \`lib/\`）
+- 设计全文：\`memj-design.md\`（**已解耦**，不在本仓；要迁移/对账时用
+  \`MEMJ_DESIGN_DOC\` 指定，见 \`scripts/shared/lab-paths.mjs\`）
+- 验证脚本：本仓 \`scripts/\`
 
-**部署**：profile 在 \`D:\\dsh-standalone-0.1.5-rc.2\\home\\profiles\\web\`，
+**部署**（**因人而异，别照抄**）：profile 在 \`<部署根>/home/profiles/<profile名>\`，
 \`package.json\` 的 dependencies 用 link、\`dsh.profile.bundles\` 加包名，
-\`node_modules\\dsh-memj\` 是 Junction。**改 bundles 或改代码后都要重启才生效**。
+\`node_modules/dsh-memj\` 是 Junction。**改 bundles 或改代码后都要重启才生效**。
 
 **库根**：\`~/.dsh-memj/\`（可用 \`$MEMJ_DATA_DIR\` 覆盖）。
 探针跑完会留下空库与 \`.startup-diag.txt\`——**排查"插件加载了但工具没注册"就看它**。
@@ -151,6 +197,35 @@ const entries = [
 - 探针的 stub 必须**复刻真实校验**（例：commands 的空 \`input.hint\` 会 throw）。`,
   },
 ]
+
+// ── 🔴 落点：dry-run 时**拷一份库副本**，在那里真跑（校验才有意义）──
+//
+// ⭐ **为什么不"只打印不执行"**：本项目的既有判据是"**要断言的是产物，不是配置**"。
+//    dry-run 若只打印参数，它**不会发现** schema 拒收、合并冲突、闸门拦截
+//    —— 而"补写"这件事恰恰是因为**上一次调用被 schema 拒收**才存在的。
+//    ⇒ 必须**真跑一遍**，只是跑在**副本**上。
+if (!APPLY) {
+  if (!existsSync(LIB_ROOT)) {
+    console.error(`\n❌ 库根不存在，dry-run 无从复制：${LIB_ROOT}\n`)
+    process.exit(2)
+  }
+  const copy = mkdtempSync(join(tmpdir(), 'memj-finish-dry-'))
+  // ⚠️ **排除 `backup/` 与历史 `.bak-*` 目录**：它们跟本次要验的东西无关
+  //    （`backup/` 是 git 维护的正文镜像，占了库的**一多半体积**：实测 16.65 / 30.6 MB）。
+  //    全拷一遍会让 dry-run 慢且白写盘。
+  //    ⭐ 判据：**副本要够真，但不必逐字节等于生产** —— 这里要验的是
+  //    "runHandoff 收不收这份 doc/entries"，而它只读 `projects/` 与 `entries/`。
+  cpSync(LIB_ROOT, copy, {
+    recursive: true,
+    filter: (src) => {
+      const base = basename(src)
+      return base !== 'backup' && !base.startsWith('.bak-')
+    },
+  })
+  process.env['MEMJ_DATA_DIR'] = copy
+  console.log(`  dry-run 副本 : ${copy}`)
+  console.log('  ⭐ 下面这次是**真跑**（走同一套 runHandoff 与全部校验），只是落在副本上。')
+}
 
 const r = await mod.runHandoff(
   {
