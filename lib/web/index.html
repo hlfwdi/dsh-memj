@@ -1,0 +1,1332 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>memj 记忆库</title>
+<link rel="stylesheet" href="./style.css">
+<!-- ⭐ Markdown 渲染：CDN 引入（决策 86）。断网时 window.marked 不存在，
+     详情页**不渲染、直接显示原文**——不做降级解析。 -->
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <h1>memj 记忆库</h1>
+    <span class="stat" id="stat"></span>
+  </div>
+  <div class="tabbar">
+    <!-- 顶层标签导航（决策 83）。不是分页控件。 -->
+    <nav class="tabs" id="tabs">
+      <button type="button" class="tab" data-tab="kb">知识库</button>
+      <button type="button" class="tab" data-tab="projects">项目</button>
+      <button type="button" class="tab" data-tab="themes">主题</button>
+      <button type="button" class="tab" data-tab="hot">热知识</button>
+      <button type="button" class="tab" data-tab="review">审批</button>
+      <!-- ⭐ 归档（决策 133）——放**最后**：它是低频的治理动作，
+           不该挤占"知识库/项目/主题"这些日常入口的注意力。 -->
+      <button type="button" class="tab" data-tab="archive">归档</button>
+    </nav>
+    <!-- ⭐⭐ 设置入口（决策 169）：点击**切到设置视图**（不再是悬浮面板）。
+         ⚠️ 它仍不是顶层 tab（不占顶层标签的位置、也不参与 TABS 数组的遍历），
+            但行为与标签一致：只切视图 + 改 hash。 -->
+    <!-- ⭐⭐ 决策 171：图标改成 **DSH 左侧栏那个设置图标**（用户要求）。
+     🔴 它是从**运行中的 DSH 页面**读 DOM 抄下来的真实 path（不是自己画的近似图形）。
+     ⚠️ `clipPath` 的 id 已改成本插件专属（原名 `clip0_1450_63327` 是全局唯一的，
+        直接抄会有撞名风险 ⇒ 裁剪失效）。
+     ⭐ `fill="currentColor"` 保留 ⇒ 天然跟随按钮的 `color`（黑白体系）。 -->
+<button type="button" id="settings-btn" class="gear" title="设置" aria-label="设置">
+  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><g clip-path="url(#memj-settings-gear-clip)"><path d="M14.0861 5.51366C13.8717 5.0575 13.588 4.58542 13.2889 4.18108C13.208 4.07172 13.1596 4.04373 13.0243 4.03054C12.4277 3.97255 11.8245 4.05527 11.2269 3.9972C10.7224 3.94816 10.3133 3.71661 10.0115 3.30919C9.66986 2.84777 9.43973 2.31343 9.09824 1.85234C9.01771 1.74365 8.96805 1.71589 8.83354 1.70282C8.29432 1.65044 7.70402 1.65061 7.16656 1.70282C7.03205 1.71589 6.98239 1.74365 6.90186 1.85234C6.56067 2.31303 6.33025 2.84774 5.98855 3.30919C5.68681 3.71661 5.27774 3.94816 4.77317 3.9972C4.17564 4.05527 3.57239 3.97255 2.97585 4.03054C2.84046 4.04373 2.79208 4.07172 2.71115 4.18108C2.41212 4.58542 2.12835 5.0575 1.91403 5.51366C1.85299 5.64359 1.85286 5.7018 1.91403 5.8319C2.14865 6.33077 2.49748 6.76892 2.73237 7.26854C2.9594 7.7515 2.96041 8.24717 2.73338 8.73044C2.49837 9.23061 2.14891 9.66837 1.91403 10.1681C1.85291 10.2982 1.85299 10.3564 1.91403 10.4863C2.12856 10.9429 2.41185 11.4142 2.71115 11.8189C2.79208 11.9283 2.84046 11.9563 2.97585 11.9694C3.57239 12.0274 4.17564 11.9447 4.77317 12.0028C5.27774 12.0518 5.68681 12.2834 5.98855 12.6908C6.33024 13.1522 6.56037 13.6866 6.90186 14.1476C6.98239 14.2563 7.03205 14.2841 7.16656 14.2972C7.70402 14.3494 8.29432 14.3495 8.83354 14.2972C8.96805 14.2841 9.01771 14.2563 9.09824 14.1476C9.43944 13.687 9.66985 13.1522 10.0115 12.6908C10.3133 12.2834 10.7224 12.0518 11.2269 12.0028C11.8244 11.9447 12.4271 12.0275 13.0243 11.9694C13.1596 11.9563 13.208 11.9283 13.2889 11.8189C13.5891 11.4131 13.872 10.942 14.0861 10.4863C14.1471 10.3564 14.1472 10.2982 14.0861 10.1681C13.8513 9.66861 13.5017 9.23061 13.2667 8.73044C13.0397 8.24717 13.0407 7.7515 13.2677 7.26854C13.5026 6.7689 13.8513 6.33106 14.0861 5.8319C14.1472 5.7018 14.1471 5.64359 14.0861 5.51366ZM15.3035 6.40373C15.0685 6.90359 14.7188 7.34119 14.4841 7.84037C14.4231 7.97025 14.423 8.02855 14.4841 8.15861C14.7189 8.65833 15.0685 9.09611 15.3035 9.59626C15.5308 10.0801 15.5308 10.5744 15.3035 11.0582C15.052 11.5933 14.7225 12.1426 14.37 12.6191C14.0685 13.0265 13.6581 13.259 13.1536 13.3081C12.5566 13.366 11.9541 13.2835 11.3573 13.3414C11.2228 13.3545 11.1731 13.3823 11.0926 13.491C10.7511 13.9521 10.521 14.4864 10.1793 14.9478C9.87828 15.3542 9.46719 15.5869 8.96387 15.6358C8.34008 15.6964 7.66194 15.6966 7.03623 15.6358C6.53291 15.5869 6.12182 15.3542 5.82084 14.9478C5.47911 14.4863 5.24878 13.9517 4.90753 13.491C4.82701 13.3823 4.77734 13.3545 4.64284 13.3414C4.04647 13.2835 3.44373 13.366 2.84653 13.3081C2.34201 13.259 1.93164 13.0265 1.63013 12.6191C1.27867 12.144 0.948453 11.5941 0.696621 11.0582C0.469315 10.5744 0.469279 10.0801 0.696621 9.59626C0.931628 9.09613 1.2813 8.65807 1.51597 8.15861C1.57708 8.02855 1.57702 7.97025 1.51597 7.84037C1.28117 7.34095 0.931635 6.9036 0.696621 6.40373C0.469213 5.91992 0.469367 5.42562 0.696621 4.94183C0.948441 4.40587 1.27868 3.85598 1.63013 3.38092C1.93164 2.97349 2.34201 2.74095 2.84653 2.6919C3.44353 2.63397 4.04599 2.71649 4.64284 2.65856C4.77734 2.64549 4.82701 2.61774 4.90753 2.50904C5.24905 2.04792 5.47913 1.51362 5.82084 1.05219C6.12182 0.645806 6.53291 0.413119 7.03623 0.364178C7.66002 0.303556 8.33816 0.303369 8.96387 0.364178C9.46719 0.413119 9.87828 0.645806 10.1793 1.05219C10.521 1.51365 10.7513 2.04828 11.0926 2.50904C11.1731 2.61774 11.2228 2.64549 11.3573 2.65856C11.9541 2.71649 12.5566 2.63397 13.1536 2.6919C13.6581 2.74095 14.0685 2.97349 14.37 3.38092C14.7214 3.85598 15.0517 4.40587 15.3035 4.94183C15.5307 5.42562 15.5309 5.91992 15.3035 6.40373Z" fill="currentColor"></path><path d="M9.13764 7.99999C9.13764 7.3715 8.62855 6.8624 8.00005 6.8624C7.37155 6.8624 6.86246 7.3715 6.86246 7.99999C6.86246 8.62849 7.37155 9.13759 8.00005 9.13759C8.62855 9.13759 9.13764 8.62849 9.13764 7.99999ZM10.4834 7.99999C10.4834 9.37126 9.37132 10.4833 8.00005 10.4833C6.62878 10.4833 5.51674 9.37126 5.51674 7.99999C5.51674 6.62873 6.62878 5.51669 8.00005 5.51669C9.37132 5.51669 10.4834 6.62873 10.4834 7.99999Z" fill="currentColor"></path></g><defs><clipPath id="memj-settings-gear-clip"><rect width="16" height="16" fill="currentColor"></rect></clipPath></defs></svg>
+</button>
+  </div>
+</header>
+
+<main>
+
+  <!-- ══════════════ 知识库 ══════════════ -->
+  <section class="panel" id="panel-kb" hidden>
+    <aside class="side">
+      <div class="filters">
+        <!-- ⭐⭐ **窄屏：筛选区默认收起，留一个「筛选」按钮**（用户 2026-09-24 要求）。
+             🔴 **只有"纯筛选控件"进 `.filter-body`** —— 计数不是筛选控件，
+                它要在收起时**仍然可见**（用户据它判断"列表为什么这么短"）。
+             ⚠️ `.filter-body > .filter-body-inner` 这层包装是**给动画用的**：
+                折叠靠 `grid-template-rows: 0fr ↔ 1fr`（**不必知道内容多高**），
+                而它要求"只有一个子元素、且那个子元素 `overflow: hidden`"。
+             ⚠️ 宽屏下这层包装**不产生任何视觉差异**（`.filter-toggle` 隐藏、永远是展开态）。 -->
+        <div class="filter-head">
+          <button type="button" class="filter-toggle" id="kb-filter-toggle" aria-expanded="false">筛选</button>
+          <div class="count" id="kb-count"></div>
+        </div>
+        <div class="filter-body" id="kb-filter-body">
+          <div class="filter-body-inner">
+            <input id="kb-filter" type="search" placeholder="搜索 id / 项目 / 主题 / desc / tags…">
+            <div class="filter-row">
+              <!-- ⭐⭐⭐ 选项由 JS 从 `/kinds` 填入（2026-10-05 收敛）——
+                   这里以前**手写了一份**，而下面的 hot-kb-kind 又手写了**另一份**，
+                   两份还互不一致 —— 那正是"抄写多处"的必然结果。
+                   ⚠️ **别在这里加 <option>**：单一来源在服务端词表。 -->
+              <select id="kb-kind" title="按形态分类筛选">
+                <option value="">全部类型</option>
+                <option value="__none__">（未分类）</option>
+              </select>
+              <select id="kb-project" title="按项目筛选"><option value="">全部项目</option></select>
+              <select id="kb-theme" title="按主题筛选"><option value="">全部主题</option></select>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="kb-list" class="list"></div>
+    </aside>
+    <div class="detail" id="kb-detail">
+      <div class="empty">从左侧选择一条知识。</div>
+    </div>
+  </section>
+
+  <!-- ══════════════ 项目 ══════════════ -->
+  <section class="panel" id="panel-projects" hidden>
+    <aside class="side">
+      <div class="filters">
+        <div class="count" id="pj-count"></div>
+      </div>
+      <div id="pj-list" class="list"></div>
+    </aside>
+    <div class="detail" id="pj-detail">
+      <div class="empty">从左侧选择一个项目。</div>
+    </div>
+  </section>
+
+  <!-- ══════════════ 主题 ══════════════ -->
+  <!-- ⚠️ 与「项目」页**同布局、同功能**（决策 106）：左列表 + 右详情。 -->
+  <section class="panel" id="panel-themes" hidden>
+    <aside class="side">
+      <div class="filters">
+        <div class="count" id="th-count"></div>
+      </div>
+      <div id="th-list" class="list"></div>
+    </aside>
+    <div class="detail" id="th-detail">
+      <div class="empty">从左侧选择一个主题。</div>
+    </div>
+  </section>
+
+  <!-- ══════════════ ⭐⭐ 热知识（热知识方案 §8）══════════════ -->
+  <!-- 🔴 **形态直接复用归档页的 `subtabs` + `subpanel` 范式**（决策 133）——
+       本项目纪律：**引入新写法前，先看同一个载体里有没有人这么写**。
+       ⚠️ `data-hotsub` 必须与审批页的 `data-sub`、归档页的 `data-arcsub` **分开**，
+          否则三页的子标签会互相抢 `active`。 -->
+  <section class="panel" id="panel-hot" hidden>
+
+    <!-- ⭐ 总开关放**显著位置**（裁定 H-1："热知识页面应在显著位置做开关"）——
+         它管的是"整个功能开不开"，**不属于任何一个子页** ⇒ 放在子导航之上。
+         ⭐⭐ 用户 2026-09-24：*"窄屏时…启用热知识开关那块也不要描述，
+         也只留启用热知识的开关标题即可。"*
+         🔴 **这是窄屏专属的**（用户随后明确：*"就我刚刚说的所有修改都只是针对窄屏的哦！"*）
+         ⇒ **两份文案都留在 DOM 里、由 CSS 按宽度切**，而不是把同一份改掉：
+            · `.wide-only`   = 宽屏那份（"启用热知识注入" + 那句描述）；
+            · `.narrow-only` = 窄屏那份（只留「启用热知识」）。
+         ⚠️ **不用 JS 切**：这是"显示问题"，用 CSS 断点才与其它窄屏规则同源
+            （也免得窗口缩放时要手工同步两份文案）。
+         ⚠️ 保留 `#hot-master-msg` —— 它**不是描述**，是**动态状态**
+            （保存成功/失败、以及"未判定出项目"这类如实回执）⇒ 两份都不带它。 -->
+    <div class="hot-head">
+      <label class="hot-master">
+        <input type="checkbox" id="hot-master">
+        <strong class="wide-only">启用热知识注入</strong>
+        <span class="dim wide-only">——把与本会话相关的知识（标题 + 描述）在每轮注入给模型。</span>
+        <strong class="narrow-only">启用热知识</strong>
+      </label>
+      <span class="dim small" id="hot-master-msg"></span>
+    </div>
+
+    <!-- ⭐ 子导航：用户 2026-09-24 要求**简化为三字**
+         （*"热知识的子导航标签，简化为【实时】、【全局】、【项目】"*）。
+         ⚠️ `data-hotsub` 的值**不变**（还是 live/global/project）——
+            它们同时被 JS 与 hash 路由用，改文字不该动标识。 -->
+    <div class="subtabs" id="hot-subtabs">
+      <button type="button" class="subtab" data-hotsub="live"><span class="wide-only">会话实时状态</span><span class="narrow-only">实时</span></button>
+      <button type="button" class="subtab" data-hotsub="global"><span class="wide-only">全局热知识</span><span class="narrow-only">全局</span></button>
+      <button type="button" class="subtab" data-hotsub="project"><span class="wide-only">项目热知识</span><span class="narrow-only">项目</span></button>
+    </div>
+
+    <!-- ── 子页①：会话实时状态 ── -->
+    <div class="subpanel hot-live-panel" id="hotsub-live" hidden>
+      <div class="panel hot-scroll" style="flex-direction: column;">
+        <!-- ⭐ 会话状态**不再单占一块**（用户 2026-09-23 要求：
+             "最上面这块会话绑定状态，不需要给他单独的区块，直接把他作为动态描述状态，
+              放在判定与绑定区块。可以放在最下面。"）
+             ⇒ 容器挪进 `.hot-block` 内部，位置在该块**最下面**。
+             ⚠️ 这里保留一个 `filters` 容器**只为承载"未带 ?session="的空态**——
+             那种情况下「判定与绑定」块里没有"当前会话"可言，提示放这里更合适。 -->
+        <div class="filters" id="hot-live-empty">
+          <p class="hint" id="hot-live-session"></p>
+        </div>
+        <!-- 会话绑定区 -->
+        <!-- ⭐⭐ **窄屏默认收起，留「判定」按钮**（用户 2026-09-24：
+             *"会话实时状态页，判定与绑定板块默认收起，留判定按钮，点击向下展开（占位）"*）。
+             🔴 **复用知识库那套 `.filter-body` 折叠机制**（`0fr ↔ 1fr`）——
+                同一个需求就该是同一份实现（本项目铁律），**不另造一套折叠**。
+                连 `bindFilterToggle()` 都直接复用（它就是"点按钮切 `data-open`"）。
+             ⚠️ **宽屏下这层包装完全透明**（按钮隐藏、永远展开）⇒ 宽屏行为不变。 -->
+        <div class="hot-block">
+          <div class="filter-head">
+            <h4 style="margin:0;">判定与绑定</h4>
+            <button type="button" class="filter-toggle" id="hot-live-bind-toggle" aria-expanded="false">判定</button>
+          </div>
+          <div class="filter-body" id="hot-live-bind-body">
+            <div class="filter-body-inner">
+              <div class="hot-row">
+                <span>绑定项目：</span>
+                <select id="hot-bind-project"><option value="">（未知）</option></select>
+                <button type="button" class="btn" id="hot-bind-save">保存绑定</button>
+                <button type="button" class="btn" id="hot-bind-clear">清除手动绑定</button>
+              </div>
+              <div class="hot-row">
+                <!-- ⭐ 用户 2026-09-23 要求：去掉数字标识 ①②；第一个开关改名「程序化判断」
+                     （去掉"（零成本）"），并把成本说明作为**开关文字之后的描述**。 -->
+                <label><input type="checkbox" id="hot-detect-docreads"> 程序化判断</label>
+                <span class="dim small">通过上下文信息程序化判断，不需要消耗 token</span>
+              </div>
+              <div class="hot-row">
+                <label><input type="checkbox" id="hot-detect-llm"> 每轮额外用 LLM 判定</label>
+                <!-- ⭐ 用户 2026-09-23：这条描述**去掉前面的 icon**（原来的 ⚠️） -->
+                <span class="dim small">打开开关会额外消耗 token，可选择性价比高的 LLM 进行判断</span>
+              </div>
+              <!-- ⭐ 原来这里有一行 `#hot-detect-note`（说明"② 已开启/未开启…成本"），
+                   已按用户 2026-09-23 要求**删除**：
+                   "两个开关下面这行描述都不要了。不需要给用户再额外解释成本了，
+                    开关后面的描述已经解释过了。" -->
+              <!-- ⭐ 当前会话状态：作为本块的**动态描述**放最下面（用户 2026-09-23 要求） -->
+              <p class="hot-session-status" id="hot-live-status"></p>
+            </div>
+          </div>
+        </div>
+        <!-- ⭐ 预算**不在这里显示**（用户 2026-09-22 裁定：
+             "热知识注入预算应该有旋钮设置，应该把设置放到记忆库页的设置面板去。
+              不要再会话实时状态页去显示。"）⇒ 旋钮在「设置」面板，见那里。 -->
+        <!-- 条目清单（带注入状态标签） -->
+        <div class="hot-block">
+          <!-- ⭐ 标题与描述按用户 2026-09-23 要求改：
+               原标题「本会话实际注入的条目」→「热知识注入情况」；
+               🆕 并加一句说明本页与「项目热知识」页的**分工**（本页只读、编辑在那边）。 -->
+          <h4>热知识注入情况 <span class="count" id="hot-live-count"></span></h4>
+          <p class="dim small">本页面只展示状态，编辑条目在项目热知识页</p>
+          <div id="hot-live-list" class="list"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── 子页②：全局热知识（上：画像 / 下：全局知识）── -->
+    <div class="subpanel hot-block-panel" id="hotsub-global" hidden>
+      <div class="panel hot-scroll" style="flex-direction: column;">
+        <div class="hot-block">
+          <!-- ⭐ 标题里的序号 ①② 已按用户 2026-09-23 要求去掉（这里的分区不需要编号）。 -->
+          <h4>用户画像</h4>
+          <!-- ⭐⭐ 保存按钮挪进输入框右下角、"一体的感觉"（用户 2026-09-23 要求，
+               参照 DSH 主输入框的形态）。
+               🔴 **做法**：外层 `.composer` 画**唯一的一个框**（border + 圆角 + 背景），
+                  `textarea` 在里面**去边框、去背景、去聚焦轮廓**（是"无边框"的），
+                  按钮**绝对定位**到右下角。
+               ⚠️ 这样"看起来是一个框包着输入区 + 按钮"，而不是"两个各带边框的控件叠着"。
+               ⚠️ 按钮占的位置由 textarea 的 `padding-bottom` 留出来（见 CSS），
+                  否则长文本会**滚到按钮底下**。 -->
+          <div class="composer">
+            <textarea id="hot-persona-input" rows="4" placeholder="用户手编的内容（markdown，原样注入）。"></textarea>
+            <button type="button" class="primary" id="hot-persona-save">保存</button>
+          </div>
+          <span class="dim small" id="hot-persona-msg"></span>
+          <div id="hot-persona-list" class="list"></div>
+        </div>
+        <div class="hot-block">
+          <h4>全局知识</h4>
+          <p class="dim small">本页<strong>不做编辑</strong>（要改去知识库页）；可展开看正文，并决定是否以<strong>正文形态</strong>注入。</p>
+          <div id="hot-global-list" class="list"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── 子页③：项目热知识（**先选项目 → 再编辑**，§8.3.1 / §8.3.2）── -->
+    <div class="subpanel hot-block-panel" id="hotsub-project" hidden>
+      <!-- 第一层：项目列表 -->
+      <div class="panel hot-scroll" id="hot-project-picker" style="flex-direction: column;">
+        <div class="filters">
+          <button type="button" class="primary" id="hot-open-current">打开当前会话的项目</button>
+          <span class="dim small" id="hot-open-current-note"></span>
+        </div>
+        <div id="hot-project-list" class="list"></div>
+      </div>
+      <!-- 第二层：某项目的热知识编辑（左右两栏） -->
+      <!-- ⭐⭐ **窄屏形态完全不同**（用户 2026-09-24）：
+           *"【返回项目列表按钮】固定在上方，下方打开页面时默认全屏展示项目热知识列表。
+             右侧留【选择知识】按钮，点击从右侧滑出知识列表包括筛选和批量操作按钮（覆盖），
+             右侧出现【热知识】按钮，点击收起知识列表。窄屏就不给知识列表的详情页功能了。"*
+           ⇒ **宽屏照旧左右两栏**；窄屏下：
+             · 「返回项目列表」**固定在上方**（它原来在 `.side` 里 ⇒ 窄屏下由 CSS
+               把它从 `.side` 提出来的观感实现不了，所以**另放一个窄屏专用的**；
+               ⚠️ 两个按钮**共用同一个 id 不行**，所以窄屏专用那个用新 id，
+               由 JS 把点击接到同一处理函数 —— 见 `#narrow-back-projects`）。
+             · **`.detail`（项目热知识列表）常显全屏**；
+             · **`.side`（选择知识：筛选 + 批量 + 知识列表）从右侧滑出、覆盖**；
+             · 悬浮按钮：收起态显示【选择知识】，展开态显示【热知识】。 -->
+      <div class="panel arc-split" id="hot-project-editor" hidden>
+        <!-- ⭐ 窄屏专用：固定的「返回项目列表」 + 右侧的「选择知识 / 热知识」切换按钮。
+             ⚠️ 三者都**只在窄屏显示**（宽屏下 `display:none`，由媒体查询控制）。 -->
+        <button type="button" class="primary narrow-editor-back" id="narrow-back-projects">返回项目列表</button>
+        <button type="button" class="btn narrow-editor-toggle" id="narrow-picker-toggle">选择知识</button>
+        <aside class="side">
+          <div class="filters">
+            <!-- ⭐ 用户 2026-09-23：① 去掉文字前面的箭头「←」；
+                 ② 改成**黑底白字**——即既有的 `button.primary`（反白配色：
+                    `background: var(--fg); color: var(--bg)`），**不新创样式**。 -->
+            <button type="button" class="primary" id="hot-back-projects">返回项目列表</button>
+            <!-- ⭐⭐ **窄屏：筛选区默认收起，留一个「筛选」按钮**（用户 2026-09-24）。
+                 🔴 **哪些进 `.filter-body`、哪些留在外面**（判据：**它是不是筛选控件**）：
+                    · **进**：搜索框 + 三个下拉（它们是"筛选条件"）；
+                    · **不进**：`返回项目列表`（导航）、**两个批量按钮**（它们针对
+                      清单/筛选结果**做事**，不是条件本身；且用户明确要求过
+                      *"两个批量操作按钮应该始终显示"* ⇒ 收进折叠区会违背那条裁定）、
+                      `#hot-kb-count`（用户靠它判断"列表为什么这么短"）。
+                 ⚠️ 宽屏下这层包装**不产生任何视觉差异**（按钮隐藏、永远展开态）。 -->
+            <div class="filter-head">
+              <button type="button" class="filter-toggle" id="hot-kb-filter-toggle" aria-expanded="false">筛选</button>
+              <div class="count" id="hot-kb-count"></div>
+            </div>
+            <div class="filter-body" id="hot-kb-filter-body">
+              <div class="filter-body-inner">
+                <input id="hot-kb-filter" type="search" placeholder="搜索 id / 项目 / 主题 / desc / tags…">
+                <!-- ⭐⭐⭐ 同 kb-kind：选项由 JS 从 `/kinds` 填入，别在这里手写。 -->
+                <select id="hot-kb-kind" title="按形态分类筛选">
+                  <option value="">全部类型</option>
+                  <option value="__none__">（未分类）</option>
+                </select>
+                <select id="hot-kb-project" title="按项目筛选"><option value="">全部项目</option></select>
+                <select id="hot-kb-theme" title="按主题筛选"><option value="">全部主题</option></select>
+              </div>
+            </div>
+            <!-- ⭐⭐ **批量操作行**（用户 2026-09-24 要求 + 当日两次调整）。
+                 🔴 **位置：筛选区之下、`#hot-kb-count` 之外**（在 `.filter-body` 外面——
+                    见上面那条：它"始终显示"，不能被折叠区收走）。
+                 🔴🔴 **始终显示**（用户 2026-09-24：*"我改主意了，两个批量操作按钮
+                    应该始终显示（之前是只有进行过筛选才显示）"*）
+                    ⇒ `syncHotBulkRow` **只管按钮的可用状态**，不管显隐。
+                 ⚠️ 两个按钮的**语义不同，别混淆**：
+                    · **「全部加入」= 针对当前筛选结果**（没筛选时就是"全部"）；
+                    · **「全部移出」= 针对整个清单**（与筛选无关 —— 用户明确要求
+                      *"就把所有项目知识移出列表"*，且主题知识也一并移出）。
+                 ⚠️ 按钮文字不带条数、也没有下面的描述行（用户：*"不需要后面的条数标注"*、
+                    *"他下面那段描述不要"*）。
+                 ⚠️ `.filters` 是 `display:flex` 的 column 容器（`.hot-row` 自带 flex + wrap ⇒ 两按钮并排）。 -->
+            <div class="hot-row" id="hot-kb-bulk">
+              <button type="button" class="primary" id="hot-kb-bulk-add">全部加入</button>
+              <button type="button" class="btn" id="hot-kb-bulk-remove">全部移出</button>
+            </div>
+          </div>
+          <div id="hot-kb-list" class="list"></div>
+        </aside>
+        <div class="detail">
+          <h3 id="hot-editor-title"></h3>
+          <div class="hot-block">
+            <!-- ⭐ 标题（用户 2026-09-24 定稿）：**「全局热知识」**。
+                 它列的是**所有会全局注入的**（画像 + 全局知识）—— 用户 2026-09-22
+                 纠正过"不能只叫全局知识"，2026-09-24 又把啰嗦的
+                 「全局注入的内容（画像 + 全局知识）」收成这个短名。
+                 ⚠️ 箭头由 JS 随开合切换（`app.js` 的 `syncGlobalToggle`）：
+                    收起 `▸` / 展开 `▾`（用户 2026-09-24：*"展开的时候应该是箭头向下的"*）。 -->
+            <h4 id="hot-editor-global-toggle" style="cursor:pointer;">▸ 全局热知识</h4>
+            <div id="hot-editor-global" class="list" hidden></div>
+          </div>
+          <div class="hot-block">
+            <h4 id="hot-editor-selected-title">本项目热知识（含置顶）</h4>
+            <div id="hot-editor-selected" class="list"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════ 审批 ══════════════ -->
+  <section class="panel" id="panel-review" hidden>
+    <div class="subtabs" id="subtabs">
+      <button type="button" class="subtab" data-sub="pending">待批列表</button>
+      <button type="button" class="subtab" data-sub="invalid">非法封面</button>
+      <button type="button" class="subtab" data-sub="broken">断链外部引用</button>
+    </div>
+
+    <!-- ⭐⭐ 决策 130：待批子页改成**左列表 + 右详情**（与知识库/项目/主题同布局）。
+         🔴 原来只有一列列表，点条目会**跳到知识库页**去看详情（用户："感觉很不方便"）。
+         ⚠️ 右详情**不放**编辑面板——审批页的动作只有"通过/否决"，
+            放「编辑」会诱导在审批时改内容（该去知识库改）。 -->
+    <div class="subpanel review-split-panel" id="sub-pending" hidden>
+      <div class="panel review-split">
+        <aside class="side">
+          <div class="filters">
+            <p class="hint">「加入全局」只登记提名，<strong>必须由你在这里批准</strong>才真正生效。模型不能自己批准。</p>
+            <div class="count" id="pending-count"></div>
+          </div>
+          <div id="pending-list" class="list"></div>
+        </aside>
+        <div class="detail" id="pending-detail">
+          <div class="empty">从左侧选择一条待批提名。</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="subpanel" id="sub-invalid" hidden>
+      <p class="hint">格式不合法，重建时已被跳过。修好后点保存——服务端会<strong>复用同一套硬校验</strong>，通过才写回。</p>
+      <div id="invalid-list" class="list wide"></div>
+    </div>
+
+    <div class="subpanel" id="sub-broken" hidden>
+      <p class="hint">这些封面的 <code>ext: true</code>，但目标文件已不存在。外部文档不归 memj 管，<strong>不自动猜路径</strong>——请填上正确路径。</p>
+      <div id="broken-list" class="list wide"></div>
+    </div>
+  </section>
+
+  <!-- ══════════════ ⭐⭐ 归档（决策 133）══════════════ -->
+  <!-- ⭐ **两个子导航页：知识 / 项目**（用户要求）。两页的列表形态分别与
+       「知识库」页、「项目」页**一致**（左列表 + 右详情 + 编辑面板）。
+       🔴 归档物**只在这里显示**，不进知识库/项目的列表；工具侧也不会再搜到它们。
+       ⚠️ 归档页是**只读展示 + 一个「恢复」动作**：归档物不可编辑（用户裁定 ③）。 -->
+  <section class="panel" id="panel-archive" hidden>
+    <div class="subtabs" id="arc-subtabs">
+      <button type="button" class="subtab" data-arcsub="entry">知识</button>
+      <button type="button" class="subtab" data-arcsub="project">项目</button>
+    </div>
+
+    <!-- ── 子页①：归档的知识 ── -->
+    <div class="subpanel arc-split-panel" id="arcsub-entry" hidden>
+      <div class="panel arc-split">
+        <aside class="side">
+          <div class="filters">
+            <input id="arc-filter" type="search" placeholder="搜索 id / 项目 / 主题 / desc / tags…">
+            <div class="count" id="arc-count"></div>
+          </div>
+          <div id="arc-list" class="list"></div>
+        </aside>
+        <div class="detail" id="arc-detail">
+          <div class="empty">从左侧选择一条归档知识。</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── 子页②：归档的项目 ── -->
+    <div class="subpanel arc-split-panel" id="arcsub-project" hidden>
+      <div class="panel arc-split">
+        <aside class="side">
+          <div class="filters">
+            <p class="hint">
+              归档一个项目，只是<strong>它自己</strong>不再被工具搜索与展示；
+              它旗下的知识<strong>不跟着归档</strong>，挂靠关系也不变。
+            </p>
+            <div class="count" id="arcp-count"></div>
+          </div>
+          <div id="arcp-list" class="list"></div>
+        </aside>
+        <div class="detail" id="arcp-detail">
+          <div class="empty">从左侧选择一个归档项目。</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+<!-- ═══════════════ 设置（决策 169）═══════════════ -->
+<!-- ⭐⭐ 用户 2026-09-28 裁定：*"点击设置后，还是开导航页面吧，不要再按现在面板的形式了。
+     应该是把现在的面板内容，按照功能分类，分成不同的子导航页面，然后可以分表调设置
+     和每个页面分别保存设置。"*
+     ⇒ 从**悬浮卡片**改成**顶层视图**（与其它标签同构），内部 4 个子页。
+     🔴 **分页轴 = 知识在哪个环节被动用**（沉淀 → 热知识 → 主动注入 → 索引与规范化）。
+     ⚠️ 子导航**复用本项目既有的 `subtabs`/`subpanel` 范式**（决策 133）——
+        不另造一套（否则又多个"两份同类实现"的坑）。
+     ⚠️ `data-setsub` 必须与 `data-sub` / `data-arcsub` / `data-hotsub` **分开**，
+        否则各页子标签会互相抢 `active`。
+     ⭐ **样式约定**（用户 2026-09-28 要求）：**描述一律在控件下方**、灰色小字；
+        **描述文字里不出现图标**；配色只用黑白（走 `--fg` / `--fg-dim`）。
+     🔴 **每个子页各有一个「保存」按钮，只提交本页的键** ——
+        以前是 40 个键一起提交，任一页的读取 bug 都可能写坏别的页。
+     ⭐⭐⭐ 用户 2026-10-07 裁定（两次，第二次扩到全部）：
+        · 第一次：*"版本维护和标签规范化分别给两个单独的保存按钮吧，不要按页去保存了。"*
+        · 第二次：*"还是把所有设置页面的子页面，全都按设置板块去分别保存吧。不要按页去保存了。"*
+        ⇒ **全部设置页**都改成**按【版块】保存**：每个 `.set-section` 自带一个保存按钮。
+        🔴 **为什么（不只是习惯问题）**：一个版块里的几项是**一件事的几个面**，
+           而不同版块**彼此无关**；绑在一起意味着"改这一项"要连带提交十几项
+           ⇒ 任一处读值/校验出错就**整块存不了**，且报错会指向一个
+           **当前版块根本没有的字段**（本项目已两次踩到这个形态）。
+        ⚠️ `data-savepage` 现在填的是**保存单元 id**（如 `sink-tag` / `hot-score` /
+           `active-gate`），**不再等于子页名**；子页由 `SAVE_UNITS` 映射推出。
+        ⚠️ **一个版块一个按钮**；页脚那个"保存本页"**已全部删除**——
+           留着它就会出现"两个按钮管同一批键"且旧按钮会提交一个不存在的单元。 -->
+
+<section class="panel" id="panel-settings" hidden>
+
+<div class="set-head">
+  <h2>设置</h2>
+  <!-- ⚠️ 这里是**动态状态**（当前生效值 + 热重载策略 + 配置文件路径），不是描述文字。 -->
+  <span class="dim set-status" id="settings-status"></span>
+</div>
+
+<div class="subtabs" id="settings-subtabs">
+  <button type="button" class="subtab" data-setsub="sink"><span class="wide-only">沉淀</span><span class="narrow-only">沉淀</span></button>
+  <button type="button" class="subtab" data-setsub="hot"><span class="wide-only">热知识注入</span><span class="narrow-only">热知识</span></button>
+  <button type="button" class="subtab" data-setsub="active"><span class="wide-only">主动注入</span><span class="narrow-only">主动注入</span></button>
+  <!-- ⚠️ 2026-09-28：「标签规范化」已搬到**沉淀**页（用户要求）⇒ 本页只剩英文召回索引，
+       ⭐ 标签随之改成「英文索引」（原来的"索引与规范化"会让它看起来还管着规范化）。
+       ⚠️ `data-setsub` 的值**不变**（还是 `index`）—— 它同时被 JS 与 hash 用，改文字不该动标识。 -->
+  <button type="button" class="subtab" data-setsub="index"><span class="wide-only">英文索引</span><span class="narrow-only">索引</span></button>
+  <!-- ⭐⭐⭐ 2026-09-29：【提示词】子页（用户新增需求）。
+       🔴 **它是"提示词唯一源头"** —— 保存后走运行期覆盖层（`prompts.ts`），
+          **改完即生效**（getter / text 函数机制，实测 13/0）。
+       ⚠️ 分区轴 = **生效方式与影响面**（不是功能）：
+          A 常驻文本（破缓存）｜B 工具与命令（描述破缓存、参数/输出只读）｜C 内部提示词（与主会话无关）。 -->
+  <button type="button" class="subtab" data-setsub="prompts"><span class="wide-only">提示词</span><span class="narrow-only">提示词</span></button>
+  <!-- ⭐⭐⭐ 2026-10-07：【决策模型配置】子页（用户新增需求）。
+       🔴 **它存在的理由**：JEV（TypeSafe 决策模型）**不是 OpenAI 兼容协议**
+          （走 Knox 的 `/v1/systemone`，请求/响应形态都不同）⇒ **DSH 原生的
+          「模型」设置页装不下它**（那个页面只支持 openai-completions /
+          openai-responses / anthropic-messages）⇒ 只能由本插件自己给一个配置面。
+       ⭐ 用户原话：*"我还是需要能够在 dsh 前端去配置决策模型的。而不是这样，
+          直接在环境里直连。哪怕是在插件的前端里面去配置。"*
+       ⚠️ **本页不是"保存单元"**（不进 `SAVE_UNITS`）—— 它有自己的三个动作：
+          「保存配置」（写 patch）/「保存密钥」（写凭据 seam）/
+          「测试连接」（真发一次请求）。**三个动作语义不同，不能合成一个按钮。** -->
+  <button type="button" class="subtab" data-setsub="jev"><span class="wide-only">决策模型配置</span><span class="narrow-only">决策模型</span></button>
+  <!-- ⭐⭐⭐ 2026-09-30：【模板】子页（决策 204/205，用户新增需求）。
+       🔴 **模板 = 交接文档的结构**（节名 / 节数 / 每节用途），用户可完全自定义。
+       ⚠️ **它只影响【新建项目】**——已有文档记着自己的节名，与模板已解耦
+          ⇒ 改模板、删模板都**不影响任何已有文档**（这一点必须在页面上说明）。 -->
+  <button type="button" class="subtab" data-setsub="templates"><span class="wide-only">模板</span><span class="narrow-only">模板</span></button>
+  <!-- ⭐⭐⭐ 决策 215：**知识类型**（`kind`）的可配置词表。
+       🔴 内置的那几条**不可删、不可改名**（存量几百条知识都在用它们）；
+          用户可以自己加类型，并为每种配置"什么时候用 + 书写规范"。
+       ⚠️ 与「模板」是**两个不同的东西**：模板管"交接文档有哪几节"，
+          这里管"知识分哪几类"。 -->
+  <button type="button" class="subtab" data-setsub="kinds"><span class="wide-only">知识类型</span><span class="narrow-only">类型</span></button>
+</div>
+
+<!-- ──────────────── 子页①：沉淀 ────────────────
+     ⭐⭐⭐ 用户 2026-10-07：**本页不再有"保存本页"** —— 四个版块各存各的。
+     ⚠️ 4 个保存单元的 id 与 `SAVE_UNITS`（app.js）**必须一一对应**，
+        错了的表现是"点了没反应"（找不到按钮 / 消息区）。 -->
+<div class="subpanel set-panel" id="setsub-sink" hidden>
+  <div class="set-scroll">
+
+    <section class="set-section">
+      <h3 class="set-section-title">新建主题模式</h3>
+      <div class="set-item">
+        <!-- ⚠️ 用 `.set-choices` 而**不是** `.set-row`：后者是两端对齐，
+             宽屏下会把「严格」「宽松」拉到行的两端（实测截图踩到）。 -->
+        <div class="set-choices">
+          <label class="set-choice">
+            <input type="radio" name="themeCreation" value="strict">
+            <strong>严格</strong>
+          </label>
+          <label class="set-choice">
+            <input type="radio" name="themeCreation" value="loose">
+            <strong>宽松</strong>
+          </label>
+        </div>
+        <p class="set-desc"><b>默认宽松</b>（用户 2026-10-12 裁定）。严格：新建主题必须有跨项目证据（本会话读过别的项目的知识），否则工具拒收。宽松：不作该项校验，是否新建完全由模型判断。两种模式都保留 desc 必填与近义主题回确认。</p>
+      </div>
+      <div class="set-foot set-foot-inline">
+        <button type="button" class="primary set-save" data-savepage="sink-theme">保存</button>
+        <span class="dim set-msg" id="settings-msg-sink-theme"></span>
+      </div>
+    </section>
+
+    <section class="set-section">
+      <!-- 🔴🔴 **决策 223（2026-10-12）改了这一节的语义 —— 标题与说明都重写过。**
+           归档**不再由工具执行**：规则写在**各节的书写规范**里（自然语言），由**模型**照做。
+           ⇒ 这两个数字**不再是"工具自动截断的开关"**，而是：
+             ① 回执里给模型的**参考值**（存量文档的规范里没写数字时，它有个数可对照）；
+             ② 默认模板那段的来源（新建项目时按它写进规范）。
+           ⚠️ **改这里的数字不会自动改已有文档的规范** —— 那要改文档自己那一节。 -->
+      <h3 class="set-section-title">归档的参考阈值</h3>
+      <p class="set-desc">
+        ⚠️ <b>归档现在由模型按各节的书写规范执行</b>（工具读不懂自然语言，不再自动截断）。
+        这两个数字的用途是：<b>交接回执里报给模型当参考值</b>，以及<b>新建项目时写进默认规范</b>。
+        想让某一节按别的阈值瘦身，<b>改那一节的书写规范</b>（项目详情页可以就地编辑）。
+      </p>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="progress-warn">建议触发阈值</label>
+          <input type="number" id="progress-warn" min="1000" max="1000000" step="1000">
+        </div>
+        <p class="set-desc">字符数。规范里没写数字的文档，回执会建议模型"超过它就考虑归档"（默认 20000）。</p>
+      </div>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="progress-keep">建议归档目标</label>
+          <input type="number" id="progress-keep" min="1000" max="1000000" step="1000">
+        </div>
+        <p class="set-desc">归档到不超过这个字符数为止（默认 12000）。同样只是建议值。</p>
+      </div>
+      <div class="set-foot set-foot-inline">
+        <button type="button" class="primary set-save" data-savepage="sink-progress">保存</button>
+        <span class="dim set-msg" id="settings-msg-sink-progress"></span>
+      </div>
+    </section>
+
+    <section class="set-section">
+      <h3 class="set-section-title">版本维护</h3>
+      <div class="set-item">
+        <label class="set-row set-click">
+          <input type="checkbox" id="backup-git">
+          <strong>对正文做 git 版本维护</strong>
+        </label>
+        <p class="set-desc">每次 handoff 提交一次纯正文镜像（backup/HANDOFF-&lt;项目&gt;.md，不含封面），截断改坏了可以退回。</p>
+      </div>
+      <!-- 跟着 git 开关展开；每一步都来自服务端真实回报，没有本地假进度。 -->
+      <div class="backup-detail" id="backup-detail" hidden>
+        <div class="backup-steps" id="backup-steps"></div>
+        <p class="dim backup-info" id="backup-info"></p>
+      </div>
+      <!-- ⭐ 用户 2026-10-07：本版块**自己的**保存按钮（不再和标签规范化合并提交）。
+           ⚠️ 开启时会先跑 `/backup/setup` 探环境，成功了才写这个开关（开关不说谎）。 -->
+      <div class="set-foot set-foot-inline">
+        <button type="button" class="primary set-save" data-savepage="sink-git">保存</button>
+        <span class="dim set-msg" id="settings-msg-sink-git"></span>
+      </div>
+    </section>
+
+    <section class="set-section">
+      <h3 class="set-section-title">标签规范化</h3>
+      <p class="set-note">词表存在 tags/vocabulary.json，与水位线同一个文件。之后只处理上次运行之后更新过的知识（没有时间戳的老条目不在其中，除非用 full 全库重跑）。它是积累的判断，不是可以从别处重建的派生数据，删掉就永久丢了。</p>
+      <div class="set-item">
+        <label class="set-row set-click">
+          <input type="checkbox" id="tag-auto">
+          <strong>有知识沉淀时自动规范化标签</strong>
+        </label>
+        <p class="set-desc">某一轮里落了知识，轮次结束时由插件起一个子代理去跑 memj_normalize_tags；你能在会话列表里看到那个子会话、点进去看结果。关掉就什么都不做。</p>
+      </div>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="tag-model">裁决模型</label>
+          <select id="tag-model">
+            <option value="">（跟随主会话默认模型）</option>
+          </select>
+        </div>
+        <p class="set-desc">要一个会判断的模型（不是翻译模型）：它要判两个词是不是同义、某个词是不是太泛。上面的子代理也用这个模型。</p>
+      </div>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="tag-effort">思考等级</label>
+          <select id="tag-effort">
+            <option value="off">关闭（推荐）</option>
+            <option value="low">低</option>
+            <option value="medium">中</option>
+            <option value="high">高</option>
+            <option value="">不传，用模型默认</option>
+          </select>
+        </div>
+        <p class="set-desc">关到最低：这一步只判两个词是不是同义，不需要推理链，而思考会吃掉输出预算。即使上面选「跟随主会话模型」也照样生效，因为主会话可能带着高档位（实测就是 high）。实测 hy3 配关闭会毫秒级返回空正文（它关不掉思考），那种情况改用 deepseek-v4.1-flash，或这里设成不传。</p>
+      </div>
+      <!-- ⭐ 用户 2026-10-07：本版块**自己的**保存按钮。
+           🔴 为什么单拎出来：这几个键与 git 开关、主题模式毫无关系，
+              绑在一起时"改个裁决模型"要连带提交三个不相干的键
+              ⇒ 任一版块读值出错就整页存不了（本项目已出过同族事故）。 -->
+      <div class="set-foot set-foot-inline">
+        <button type="button" class="primary set-save" data-savepage="sink-tag">保存</button>
+        <span class="dim set-msg" id="settings-msg-sink-tag"></span>
+      </div>
+    </section>
+  </div>
+</div>
+
+<!-- ──────────────── 子页②：热知识注入 ──────────────── -->
+<div class="subpanel set-panel" id="setsub-hot" hidden>
+  <div class="set-scroll">
+
+    <section class="set-section">
+      <div class="set-item">
+        <label class="set-row set-click">
+          <input type="checkbox" id="hot-inject-enabled">
+          <strong>启用热知识注入</strong>
+        </label>
+        <p class="set-desc">把与本会话相关的知识（标题加描述）在每轮注入给模型。与热知识页顶部那个开关是同一个键，改哪边都一样。</p>
+        <!-- ⭐⭐ 用户 2026-10-07：*"热知识注入和主动注入的总开关不需要保存按钮，
+             应该是点击开关直接生效的。"*
+             ⇒ **勾选/取消立即写配置**（本版块因此没有「保存」按钮）；这行只放回执。 -->
+        <p class="dim set-msg" id="settings-msg-hot-inject-enabled"></p>
+      </div>
+    </section>
+
+    <section class="set-section">
+      <h3 class="set-section-title">预算</h3>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="hot-ratio">注入上限比例</label>
+          <input type="number" id="hot-ratio" min="0" max="100" step="0.001">
+        </div>
+        <p class="set-desc">占模型上下文窗口的比例（默认 0.333，即三分之一）。填 0 表示关闭预算检查。</p>
+      </div>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="hot-cpt">字符每 token 换算</label>
+          <input type="number" id="hot-cpt" min="0.1" max="10" step="0.1">
+        </div>
+        <p class="set-desc">默认 1.0，刻意保守：中文约 1 字符等于 1 token，宁可高估占用，别把预算算松。</p>
+      </div>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="hot-budget">窗口未知时的上限</label>
+          <input type="number" id="hot-budget" min="1000" max="10000000" step="1000">
+        </div>
+        <p class="set-desc">字符数。模型上下文窗口取不到时用它（默认 40000）。</p>
+      </div>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="hot-full-warn">单条正文提醒阈值</label>
+          <input type="number" id="hot-full-warn" min="1" max="1000000" step="100">
+        </div>
+        <p class="set-desc">字符数。正文形态的单条超过它就提醒（默认 1000）。只提醒、不阻止：正文可达上万字符，单条就能吃掉整个预算。</p>
+      </div>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="hot-keep">会话绑定保留数</label>
+          <input type="number" id="hot-keep" min="1" max="10000" step="10">
+        </div>
+        <p class="set-desc">按最新活跃时间倒序保留（默认 50）。淘汰只动热知识自己的绑定记录，绝不删 DSH 的会话数据。</p>
+      </div>
+      <p class="set-note">上限等于上下文窗口乘比例再除以字符每 token；窗口未知时用「窗口未知时的上限」。超限只提醒、不自动裁剪。</p>
+      <div class="set-foot set-foot-inline">
+        <button type="button" class="primary set-save" data-savepage="hot-budget">保存</button>
+        <span class="dim set-msg" id="settings-msg-hot-budget"></span>
+      </div>
+    </section>
+
+    <!-- ──────────────── ⭐⭐⭐ 知识评分（决策 177）──────────────── -->
+    <section class="set-section">
+      <h3 class="set-section-title">知识评分（轮末复盘）</h3>
+      <div class="set-item">
+        <label class="set-row set-click">
+          <input type="checkbox" id="hs-on">
+          <strong>启用轮末知识评分</strong>
+        </label>
+        <p class="set-desc">每轮结束后起一个子代理，让决策模型复盘这一轮：找出知识库里<b>本来能帮上忙</b>的知识（该给却没给、或它犯了错而这些知识本可避免），过阈值的<b>按档加分</b>。分数按<b>项目</b>累计；<b>打开后项目热知识会换成「有效分前 N 名」</b>（全局知识不受影响）。⚠️ 刚打开时分数还没积累，项目热知识会暂时变空——这是预期行为。</p>
+      </div>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="hs-threshold">加分阈值</label>
+          <input type="number" id="hs-threshold" min="0" max="1" step="0.05">
+        </div>
+        <p class="set-desc">决策模型给的分数 ≥ 此值才加分。范围 0–1，默认 0.7。<b>分档加</b>：≥0.9 加 3、≥0.8 加 2、过线加 1 —— 不直接加分数值，因为那个分数刻度弱（只适合过阈值）。调大 ⇒ 更少加分；调小 ⇒ 更容易加分。</p>
+      </div>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="hs-window">滚动窗口（小时）</label>
+          <input type="number" id="hs-window" min="0.1" max="10000" step="1">
+        </div>
+        <p class="set-desc">只有窗口内加过分的事件才算数（默认 30）。<b>逐次判定过期</b>：一条知识若长期没被加分，会自然掉出榜单。调大 ⇒ 记得更久、更稳；调小 ⇒ 只认最近的需求。</p>
+      </div>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="hs-maxpicks">每轮最多选几条</label>
+          <input type="number" id="hs-maxpicks" min="1" max="200" step="1">
+        </div>
+        <p class="set-desc">复盘时<b>一轮最多给几条知识加分</b>（默认 10）。⭐ 它<b>同时是提示词里的排序要求</b>：给了上限，模型才会按「能不能改变做法」排序取舍；<b>不给上限它会把沾边的都收</b>（实测选到 18~24 条）⇒ 分数被拉平、「前几名」失去区分度。⚠️ 它与下面「注入前几名」是两件事：<b>一个管进、一个管出</b>。</p>
+      </div>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="hs-topn">注入前几名</label>
+          <input type="number" id="hs-topn" min="1" max="200" step="1">
+        </div>
+        <p class="set-desc">开关打开时，项目热知识取有效分前几名（默认 20）。仅影响项目与主题层的知识。⚠️ 这是<b>读取侧</b>的条数（从分数表里取前几名去注入），与上面的「每轮最多选几条」（<b>写入侧</b>）不是一个东西。</p>
+      </div>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="hs-gate-min">入围门槛：至少几分</label>
+          <input type="number" id="hs-gate-min" min="1" max="1000" step="1">
+        </div>
+        <p class="set-desc"><b>累计够多少分才有资格被注入</b>（默认 2，即至少被两次复盘选中过）。⭐ 为什么需要它：实测「33 条有分、其中 25 条并列 1 分」而位子只有 20 个 ⇒ 没门槛时谁进谁出全看排序规则（等于<b>任意淘汰</b>）。门槛把「值不值得给」与「位子不够」分开：<b>先够格、再排序</b>。⚠️ 这里的「分」是<b>累计加分</b>（每被选中一次 +1），与上面那个 0–1 的「加分阈值」<b>无关</b>。</p>
+      </div>
+      <div class="set-item">
+        <label class="set-row set-click">
+          <input type="checkbox" id="hs-gate-last">
+          <strong>放行「上一轮刚加入的」</strong>
+        </label>
+        <p class="set-desc">⭐ 默认开。<b>一条知识刚被复盘选中时，它的分只有 1</b> —— 若只看分数门槛，<b>它会被自己的低分挡在外面</b>，要等被选中两次才注入 ⇒ 而「刚发现漏了、下一轮就该带上」恰恰是这个功能最该起作用的时刻。⚠️ 因此这两道门是<b>「或」</b>的关系（分数够 <b>或</b> 刚加入的），不是「且」。关掉它 ⇒ 退回纯分数门槛。</p>
+      </div>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="hs-minchars">低于多少字符不评分</label>
+          <input type="number" id="hs-minchars" min="0" max="1000000" step="10">
+        </div>
+        <p class="set-desc">该轮内容（用户输入 + 思考 + 输出，不含工具调用）少于这个长度就跳过（默认 100）—— 挡住「好的」「继续」这类寒暄轮，免得每轮都起子代理。</p>
+      </div>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="hs-channel">复盘通路</label>
+          <select id="hs-channel">
+            <option value="chat">chat（OpenAI 兼容，走 DSH 内部模型路由）</option>
+            <option value="jev">jev（TypeSafe 决策模型，直连 Knox）</option>
+          </select>
+        </div>
+        <p class="set-desc">⭐ <b>默认 chat</b>。两条通路的<b>产出契约不同</b>：chat 回「选中的条目 + 理由」、<b>不限条数</b>、选中即 +1 分（没有分数）；jev 回逐条分数、靠阈值切、按分数分档。通路必须显式选，不从模型名猜。</p>
+      </div>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="hs-model">复盘模型</label>
+          <select id="hs-model">
+            <option value="">（未配置，功能不生效）</option>
+          </select>
+        </div>
+        <p class="set-desc" id="hs-model-hint">下拉框内容跟随上面的通路（与「主动注入」的召回模型同一套数据源）。</p>
+      </div>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="hs-subagent-model">子代理模型</label>
+          <select id="hs-subagent-model">
+            <option value="">（跟随主会话默认模型）</option>
+          </select>
+        </div>
+        <p class="set-desc">起那个子代理用的模型。它只是个<b>壳</b>（负责「调工具 + 转达回执」），判断由上面的复盘模型做 ⇒ 这里可以选个便宜的。选「跟随主会话」即可。</p>
+      </div>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="hs-timeout">复盘超时（毫秒）</label>
+          <input type="number" id="hs-timeout" min="1000" max="300000" step="1000">
+        </div>
+        <p class="set-desc">单批复盘请求的超时（默认 60000）。它在后台跑，慢一点没关系，但超时就会白跑一次。</p>
+      </div>
+      <p class="set-note">加分只发生在<b>开关打开</b>时；关掉后已有的分数会保留（不删除），下次打开继续用。</p>
+      <div class="set-foot set-foot-inline">
+        <button type="button" class="primary set-save" data-savepage="hot-score">保存</button>
+        <span class="dim set-msg" id="settings-msg-hot-score"></span>
+      </div>
+    </section>
+  </div>
+</div>
+
+<!-- ──────────────── 子页③：主动注入 ──────────────── -->
+<div class="subpanel set-panel" id="setsub-active" hidden>
+  <div class="set-scroll">
+
+    <section class="set-section">
+      <div class="set-item">
+        <label class="set-row set-click">
+          <input type="checkbox" id="ai-on">
+          <strong>启用主动注入</strong>
+        </label>
+        <p class="set-desc">每次思考结束后判断这一步需不需要知识，需要就注入。每个 turn 最多注入 <span id="ai-calls-hint">3</span> 次；没注入的不计（判「不需要」、没选出条目、内容重复的都不算）。</p>
+        <!-- ⭐⭐ 用户 2026-10-07：总开关**点即生效**（本版块没有「保存」按钮），这行只放回执。
+             ⚠️ 它由两个单元共同决定（开关在 `active-on`、模型在 `active-recall`）⇒
+                服务端仍守着"开着却没选模型"那条（没有模型 = 一次判断都不做）。 -->
+        <p class="dim set-msg" id="settings-msg-ai-on"></p>
+      </div>
+    </section>
+
+    <section class="set-section">
+      <h3 class="set-section-title">召回模型</h3>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="ai-channel">召回通路</label>
+          <select id="ai-channel">
+            <option value="chat">chat（OpenAI 兼容，走 DSH 内部模型路由）</option>
+            <option value="jev">jev（TypeSafe 决策模型，直连 Knox）</option>
+          </select>
+        </div>
+        <p class="set-desc">通路必须显式选，不从模型名猜：猜错会静默走错端点。</p>
+      </div>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="ai-model">召回模型</label>
+          <select id="ai-model">
+            <option value="">（未配置，功能不生效）</option>
+          </select>
+        </div>
+        <p class="set-desc" id="ai-model-hint">下拉框内容跟随上面的通路。</p>
+      </div>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="ai-scope">清单范围</label>
+          <select id="ai-scope">
+            <option value="project">project（只本项目）</option>
+            <option value="project+themes">project+themes（本项目加项目主题下的知识）</option>
+            <option value="all">all（全库）</option>
+          </select>
+        </div>
+        <p class="set-desc">范围越大，候选越可能被预算拆成更多批（拆批会并发发出，不会丢候选）。</p>
+      </div>
+      <div class="set-item">
+        <label class="set-row set-click">
+          <input type="checkbox" id="ai-jev-narrow">
+          <strong>JEV 通路把默认档收窄成 project</strong>
+        </label>
+        <p class="set-desc">实测 project+themes 在本库约 245 条、project 是 208 条；收窄可减少拆批。只影响 JEV 通路。</p>
+      </div>
+      <div class="set-item">
+        <label class="set-row set-click">
+          <input type="checkbox" id="ai-strict">
+          <strong>严格触发口径</strong>
+        </label>
+        <p class="set-desc">只认 reasoning 块结束（实测触发面约 69%）。关掉则首个 text 也算思考结束，几乎每步都判断；严格档下不输出思考的模型永不触发。</p>
+      </div>
+      <div class="set-foot set-foot-inline">
+        <button type="button" class="primary set-save" data-savepage="active-recall">保存</button>
+        <span class="dim set-msg" id="settings-msg-active-recall"></span>
+      </div>
+    </section>
+
+    <section class="set-section">
+      <h3 class="set-section-title">判断参数</h3>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="ai-topk">最多注入条数</label>
+          <input type="number" id="ai-topk" min="1" max="50" step="1">
+        </div>
+        <p class="set-desc">入选的候选中最多注入几条（按分数从高到低取）。入选的不足这个数就全部给。范围 1–50。</p>
+      </div>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="ai-need-min">需求阈值（要不要注入）</label>
+          <input type="number" id="ai-need-min" min="0" max="1" step="0.05">
+        </div>
+        <p class="set-desc">决定<strong>这一轮要不要</strong>注入：模型给出的「需求分」低于此值就<strong>整轮不召回</strong>。范围 0–1。调大 ⇒ 更少触发（省 token、也更容易漏掉该给的知识）；调小 ⇒ 更容易触发。</p>
+      </div>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="ai-item-min">入选阈值（哪几条够格）</label>
+          <input type="number" id="ai-item-min" min="0" max="1" step="0.05">
+        </div>
+        <p class="set-desc">决定<strong>哪几条知识够格</strong>：每条候选的相关分 ≥ 此值才入选，最后按分数取上面的「最多注入条数」。范围 0–1。调大 ⇒ 入选更少更精；调小 ⇒ 更容易把弱相关的也塞进来。一条都没过此值 ⇒ 本轮不注入。</p>
+      </div>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="ai-timeout">召回超时（毫秒）</label>
+          <input type="number" id="ai-timeout" min="500" max="120000" step="500">
+        </div>
+        <p class="set-desc">单次召回请求的超时（毫秒）。实测真实召回需要 2.3–9.3 秒，设得太小会经常白跑一次；超时按「这次没选出条目」处理，不影响主流程。</p>
+      </div>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="ai-calls">每 turn 最多注入几次</label>
+          <input type="number" id="ai-calls" min="0" max="50" step="1">
+        </div>
+        <p class="set-desc">一个 turn 里最多<strong>注入</strong>几次。判「不需要」、没选出条目、内容重复的<strong>都不计</strong>。填 0 = 本 turn 不再注入。</p>
+      </div>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="ai-reasoncap">思考段字符上限</label>
+          <input type="number" id="ai-reasoncap" min="100" max="100000" step="100">
+        </div>
+        <p class="set-desc">喂给召回模型的「本步思考」最多截取多少字符。调小省 token 但可能丢掉判据；调大更准但更贵。</p>
+      </div>
+      <div class="set-foot set-foot-inline">
+        <button type="button" class="primary set-save" data-savepage="active-judge">保存</button>
+        <span class="dim set-msg" id="settings-msg-active-judge"></span>
+      </div>
+    </section>
+
+    <section class="set-section">
+      <h3 class="set-section-title">预算与拆批并发</h3>
+      <div class="set-item">
+        <label class="set-row set-click">
+          <input type="checkbox" id="ai-budget">
+          <strong>启用 JEV 预算检查</strong>
+        </label>
+        <p class="set-desc">单次请求的输入加输出不超过下面的值。关掉即不检查，超了由上游决定，实测会报 max_tokens_exceeded。</p>
+      </div>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="ai-budgettok">单次请求预算（token）</label>
+          <input type="number" id="ai-budgettok" min="1000" max="200000" step="1000">
+        </div>
+        <p class="set-desc">JEV <strong>单次请求</strong>的输入 + 输出上限（token）。它是「每批」的口径，不是所有批次之和。装不下会拆成多批并发发出。</p>
+      </div>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="ai-ctxtok">上下文名义预算（token）</label>
+          <input type="number" id="ai-ctxtok" min="1000" max="200000" step="1000">
+        </div>
+        <p class="set-desc">先分给「会话上下文」多少 token，剩下的才给候选条目。批次不够时会自动往下压这个值腾容量，地板是「只剩本轮」。</p>
+      </div>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="ai-conc">并发批数上限</label>
+          <input type="number" id="ai-conc" min="1" max="16" step="1">
+        </div>
+        <p class="set-desc">最多同时发几批。实测拆 2 批的耗时约等于单批（瓶颈在网关排队而非模型计算），所以调大收益有限、调太大可能被限流。</p>
+      </div>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="ai-chatratio">chat 占窗口比例</label>
+          <input type="number" id="ai-chatratio" min="0.1" max="1" step="0.05">
+        </div>
+        <p class="set-desc">只对 <strong>chat 通路</strong>生效：用模型上下文窗口的这个比例作为单请求预算（JEV 通路走上面的固定值）。取不到窗口时该项不起作用。chat 通路不拆批。</p>
+      </div>
+      <p class="set-note">候选装不进一批就拆成多批并发发出（实测拆 2 批的耗时约等于单批，瓶颈在网关排队）。批数不够则自动压缩上下文腾容量，压到只剩本轮为地板，不会丢弃任何候选。</p>
+      <div class="set-foot set-foot-inline">
+        <button type="button" class="primary set-save" data-savepage="active-budget">保存</button>
+        <span class="dim set-msg" id="settings-msg-active-budget"></span>
+      </div>
+    </section>
+
+    <section class="set-section">
+      <h3 class="set-section-title">抑制门</h3>
+      <div class="set-item">
+        <label class="set-row set-click">
+          <input type="checkbox" id="ai-suff-gate">
+          <strong>已有知识充足时不注入</strong>
+        </label>
+        <p class="set-desc">上下文里的知识已经够了就不注入（它把之前注入的、以及模型对它们的反应都算作已有）。JEV 通路阈值 <input type="number" id="ai-suff-min" min="0" max="1" step="0.05" class="inline-num">：充足分 ≥ 此值就抑制。<strong>调大 ⇒ 更少抑制</strong>（更容易注入）；调小 ⇒ 更容易整轮不注入。范围 0–1。</p>
+      </div>
+      <div class="set-item">
+        <label class="set-row set-click">
+          <input type="checkbox" id="ai-intent-gate">
+          <strong>主模型已表达检索意图时不注入</strong>
+        </label>
+        <p class="set-desc">它明确说要用 memj_search 或 memj_info 去查时就不重复给。泛泛的「我该查一下」不算，因为打算搜不等于搜得到（memj_search 是整词匹配，实测 top1 只中 5/10）。JEV 通路阈值 <input type="number" id="ai-intent-min" min="0" max="1" step="0.05" class="inline-num">：意图分 ≥ 此值就抑制。<strong>调大 ⇒ 只对非常明确的检索意图才让路</strong>；调小 ⇒ 更容易被抑制掉。范围 0–1。</p>
+      </div>
+      <div class="set-foot set-foot-inline">
+        <button type="button" class="primary set-save" data-savepage="active-gate">保存</button>
+        <span class="dim set-msg" id="settings-msg-active-gate"></span>
+      </div>
+    </section>
+
+    <section class="set-section">
+      <h3 class="set-section-title">调试</h3>
+      <div class="set-item">
+        <label class="set-row set-click">
+          <input type="checkbox" id="ai-recall-log-req">
+          <strong>召回日志记请求快照</strong>
+        </label>
+        <p class="set-desc">把每次真正发给召回模型的上下文与候选也写进日志，可重放某一次召回。默认关：一个 turn 有 5 到 8 步、每步数十 KB，开着会很快占满磁盘。只在要复现问题时临时打开。</p>
+      </div>
+      <div class="set-item">
+        <label class="set-row set-click">
+          <input type="checkbox" id="ai-explain">
+          <strong>让召回模型给出理由</strong>
+        </label>
+        <p class="set-desc">仅调试用。开了就违背「输出越少越好」，每次多花输出 token。</p>
+      </div>
+      <div class="set-foot set-foot-inline">
+        <button type="button" class="primary set-save" data-savepage="active-debug">保存</button>
+        <span class="dim set-msg" id="settings-msg-active-debug"></span>
+      </div>
+    </section>
+
+    <p class="set-note">召回的判断与工具执行并行跑（藏在工具时间里），命中的知识在下一步开始前注入。注入的消息是背景知识、不是任务，不会让你多做一件事。注入会让该轮多一次模型调用（你会看到多了一步），这是设计如此。</p>
+  </div>
+</div>
+
+<!-- ──────────────── 子页④：索引与规范化 ──────────────── -->
+<div class="subpanel set-panel" id="setsub-index" hidden>
+  <div class="set-scroll">
+
+    <section class="set-section">
+      <h3 class="set-section-title">英文召回索引</h3>
+      <p class="set-note">索引是派生数据：重建时与库全量对比（新增、改动、删除都覆盖），所以不会留下已删知识的幽灵条目。翻译失败不影响 handoff 成败，缺的那几条只是暂时回落中文。</p>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="tr-model">翻译模型</label>
+          <select id="tr-model">
+            <option value="">（跟随主会话默认模型）</option>
+          </select>
+        </div>
+        <p class="set-desc">建议选一个便宜、快速的模型。</p>
+      </div>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="tr-template">翻译模板</label>
+          <select id="tr-template">
+            <option value="instruct">instruct（普通对话模型：要 JSON）</option>
+            <option value="mt">mt（翻译专用模型：编号加两行、无标签）</option>
+          </select>
+        </div>
+        <p class="set-desc">用 Hunyuan-MT 这类翻译专用模型必须选 mt。它同时决定提示词与解析器，选错会静默解析失败。</p>
+      </div>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="tr-conc">翻译并发</label>
+          <input type="number" id="tr-conc" min="1" max="20" step="1">
+        </div>
+        <p class="set-desc">默认 3。走 DSH 内部模型路由，太高会触发上游限流。</p>
+      </div>
+      <div class="idx-check">
+        <button type="button" id="idx-check-btn">检查并补全</button>
+        <button type="button" id="idx-rebuild-btn" class="dim-btn" title="无论有没有问题都强制重建一次">强制重建</button>
+        <span id="idx-check-msg" class="dim">未检查</span>
+      </div>
+      <div id="idx-check-detail" class="idx-detail" hidden></div>
+      <!-- ⭐ 本页只有这一个版块 ⇒ 它就是"按版块保存"（id 改成单元名，与 `SAVE_UNITS` 对齐）。 -->
+      <div class="set-foot set-foot-inline">
+        <button type="button" class="primary set-save" data-savepage="index-en">保存</button>
+        <span class="dim set-msg" id="settings-msg-index-en"></span>
+      </div>
+    </section>
+  </div>
+</div>
+
+<!-- ══════════════════════ 子页⑥：决策模型配置（2026-10-07 新增）══════════════════════
+     ⭐⭐⭐ **这一页专配 TypeSafe JEV 决策模型**（用户要求"能在前端配，别在环境里直连"）。
+
+     🔴 **为什么本插件必须自己给这一页**：JEV **不是 OpenAI 兼容协议** ——
+        它走 Knox 的 `/v1/systemone`，请求体是 `{model, state, questions}`、
+        响应是 `{answers:{q0:{noul:0.89}}}`。⇒ **DSH 原生的「模型」设置页装不下它**
+        （那页只支持 openai-completions / openai-responses / anthropic-messages）。
+        ⚠️ 硬把它注册成 chat 模型 ⇒ 选它必 400（库内 `4a7b1931` 记过）。
+
+     🔴🔴 **三个动作分开，不合并成一个「保存」**（它们的语义与目标**都不同**）：
+        · **保存配置** ⇒ 写 `cordis.patch.yml`（端点 / 凭据名 / 模型名，普通配置值）；
+        · **保存密钥** ⇒ 写**凭据 seam**（只写、永不回显、**不进 patch 文件**）；
+        · **测试连接** ⇒ **真发一次请求**（配好了 ≠ 能调通，要给一个"真通没通"的判据）。
+        ⚠️ 合成一个按钮的后果：分不清"存进去了"与"调通了"，而这两件事的失败原因完全不同。
+
+     ⚠️ **密钥输入框永远为空**（即使已经存过）—— 这是**刻意的**：
+        空 = "保留原来那个"。服务端也**只收不发**，任何回执都不含密钥。
+     ⚠️ 本页**不进 `SAVE_UNITS`**（它不是"按版块保存"那一套）⇒ 见 `app.js` 的
+        `openJevPage()` / `saveJevConfig()`。 -->
+<div class="subpanel set-panel" id="setsub-jev" hidden>
+  <div class="set-scroll">
+
+    <!-- ── 状态行：配置面要一眼看出"现在到底通不通" ── -->
+    <section class="set-section">
+      <h3 class="set-section-title">当前状态</h3>
+      <p class="set-note" id="jev-status-line">读取中…</p>
+      <p class="set-note" id="jev-empty-hint" hidden></p>
+    </section>
+
+    <!-- ── ① provider 列表（写 patch 文件）──
+         ⭐⭐ 照 DSH 官方「模型」设置页的形态：**一行一个 provider**，
+             点行/「编辑」展开那张卡片。🔴 **一次只展开一张**
+             （与官方同一交互：展开的状态是"我正在改哪一条"，不该同时开好几张）。 -->
+    <section class="set-section">
+      <h3 class="set-section-title">决策模型提供商</h3>
+      <p class="set-note">每个 provider = <b>一个端点</b> + <b>它自己的模型列表</b>。密钥按 provider 的 id <b>自动派生</b>凭据名（如 <code>knox</code> → <code>KNOX_API_KEY</code>），<b>不需要你填</b>（与 DSH 官方「模型」页同一条规则）。</p>
+      <div id="jev-provider-list"></div>
+      <!-- ⭐ 新增：官方那页也是这么做的（「添加模型提供商」是新增卡片的唯一入口）。 -->
+      <div class="set-foot set-foot-inline">
+        <button type="button" class="primary" id="jev-add-provider">添加提供商</button>
+        <span class="dim set-msg" id="jev-config-msg"></span>
+      </div>
+    </section>
+
+    <!-- ── ② 两条通路各自选谁（写 patch 文件）──
+         ⭐⭐⭐ 用户原话：*"和现在的 dsh 模型一样放在一起去选。就不要通路筛选了，
+             就选决策型通路的时候，也给全列表。让用户判断是否是决策性模型，是否匹配通路。"*
+             ⇒ 两个下拉框，**内容都是"全部 provider × 全部模型"平铺**
+                （不按 provider 分组过滤、也不做通路筛选）。 -->
+    <section class="set-section">
+      <h3 class="set-section-title">两条通路各用哪个</h3>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="jev-pick-active">主动注入（召回）</label>
+          <select id="jev-pick-active"><option value="">（未选 ⇒ 该功能不生效）</option></select>
+        </div>
+        <p class="set-desc">每次思考结束后判断"这一步要不要知识"用的决策模型。⚠️ 与<b>下方那条独立</b> —— 两条可以选不同的模型。</p>
+      </div>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="jev-pick-score">热知识轮末评分</label>
+          <select id="jev-pick-score"><option value="">（未选 ⇒ 该功能不生效）</option></select>
+        </div>
+        <p class="set-desc">每轮结束后给知识"本来能不能帮上忙"打分的决策模型。</p>
+      </div>
+      <p class="set-note">列表里是<b>全部</b>已配的 provider × 模型 —— <b>由你判断</b>哪一个适合决策任务（本页不替你筛）。</p>
+      <div class="set-foot set-foot-inline">
+        <button type="button" class="primary" id="jev-save-picks">保存选择</button>
+        <span class="dim set-msg" id="jev-pick-msg"></span>
+      </div>
+    </section>
+
+    <!-- ── 说明：为什么需要这一页（避免后人以为是重复建设）── -->
+    <section class="set-section">
+      <h3 class="set-section-title">说明</h3>
+      <p class="set-note">JEV 是 TypeSafe 的<b>决策模型</b>，协议与 OpenAI 兼容接口不同（请求 <code>{model,state,questions}</code>、响应 <code>{answers:{…:noul}}</code>），所以<b>不能</b>在 DSH 原生的「模型」设置页里声明（那页只支持 OpenAI/Anthropic 协议）。本页就是它的配置入口。跨 provider 的密钥互不干扰：每个 provider 一个派生名，改一条不影响别的。</p>
+    </section>
+  </div>
+</div>
+
+<!-- ════════════════ 子页：知识类型（决策 215）════════════════
+     ⭐⭐⭐ `kind` 是知识的**形态分类**（fact/trap/howto/…）。它以前是**编译期写死的词表**，
+     现在用户可在这里增删改 —— 但**内置的那几条不可删、不可改名**（存量几百条知识在用它们）。
+     🔴 与「模板」的区别：模板管"交接文档有**哪几节**"，这里管"知识分**哪几类**"。 -->
+<div class="subpanel set-panel" id="setsub-kinds" hidden>
+  <div class="set-scroll">
+
+    <section class="set-section">
+      <h3 class="set-section-title">知识类型（`kind`）</h3>
+      <div class="set-item">
+        <p class="set-desc">
+          一条知识属于<b>哪一类形态</b>（事实 / 陷阱 / 流程 / 决策…）。
+          <b>什么时候用</b>告诉模型<b>该选哪一种</b>；<b>怎么写</b>告诉它<b>这类知识该写成什么形状</b>。
+          两者都会进提示词，改完<b>下一轮即生效</b>（不用重启）。
+        </p>
+        <p class="set-desc">
+          <b>内置类型</b>的 <b>id 与显示名锁死、不可删除</b>（库里已有几百条知识在用它们，
+          改 id 会让那些知识<b>当场变成非法值</b>），但<b>「什么时候用 / 怎么写」可以改</b> ——
+          那是内容，改错了随时能改回。带 <b>「保留」</b>标的<b>不给模型选</b>
+          （由工具自动生成，手工填会让那条知识<b>搜不到</b>）。
+          <b>有知识在用的类型也删不掉</b> —— 请先把那些知识改成别的类型。
+        </p>
+        <!-- ⭐⭐⭐ 2026-10-05 用户裁定改版：
+             · **默认收起**（列表态只给摘要，不再把所有字段摊开）；
+             · **每条各自「编辑 / 保存」**（不再有一个"保存整张表"的总按钮）；
+             · **「+ 添加」放到列表【最上面】** —— 用户原话：
+               *"不可能让用户非要划到最下面的时候才能新建"*。 -->
+        <div class="kinds-toolbar">
+          <button type="button" id="kinds-add">＋ 添加一种类型</button>
+          <span class="dim set-msg" id="settings-msg-kinds"></span>
+        </div>
+        <div id="kinds-list" class="kinds-list"></div>
+        <p class="set-note">
+          每一条<b>各自保存</b>（改完点那一条自己的「保存」）—— <b>不用重启</b>，下一轮即生效。
+          加/删/改都会同时影响模型能填哪些值、以及编辑知识时的下拉。
+          <br>⚠️ 列表顺序 = <b>类型下拉里的顺序</b>。
+        </p>
+      </div>
+      <div id="kinds-errors" class="tpl-errors" hidden></div>
+    </section>
+
+  </div>
+</div>
+
+<!-- ════════════════ 子页⑦：提示词（2026-09-29 新增）════════════════
+     ⭐⭐⭐ **这一页是"提示词唯一源头"** —— 保存后走运行期覆盖层，**改完即生效**。
+
+     🔴 **分区轴 = 生效方式与影响面**（不是功能）：
+        · **常驻文本**：每轮进上下文，改协议会**全废前缀缓存**；
+        · **工具与命令**：描述同样破缓存；**参数/输出 schema 只展示不可改**（它们是契约）；
+        · **内部提示词**：插件自己调 LLM 用，**与主会话缓存无关**，且**不进主会话**。
+
+     ⭐ **每条展示六件事**（用户要求）：干什么 / 属于谁 / 以什么方式注入 /
+        是否破缓存 / 写在哪个文件 / 改完是否热生效。
+     ⚠️ 数据**全部由服务端回结构化条目**（`GET /prompts`）——
+        不让前端拿 id 去拼（本项目判据：能给人看的列表必须由服务端回结构化条目）。 -->
+<div class="subpanel set-panel" id="setsub-prompts" hidden>
+  <!-- ⭐⭐⭐ **宽屏两栏 / 窄屏单列**（用户 2026-09-29 要求）：
+       · **宽屏（>900px）**：左栏 = 条目列表（**每块含完整六字段**，不学知识库那样紧凑）、
+         右栏 = 详情/编辑区（**有足够高度**）。分区轴仍是 ①②③。
+       · **窄屏（≤900px）**：**保持原设计**（三区顺序堆叠、卡片就地展开编辑）；
+         右栏在窄屏**整个隐藏**（`.prompt-detail`）。
+       🔴 **不用 JS 造两套 DOM** —— 同一份结构，靠 CSS 媒体查询切 `flex-direction`；
+          卡片"就地展开"只在窄屏渲染（判据 `isNarrow()`，与 CSS 共用断点 900）。 -->
+  <div class="prompt-split">
+
+    <!-- ──────────── 左栏：列表 ──────────── -->
+    <div class="prompt-side" id="prompts-side">
+      <div class="prompt-side-head">
+        <div class="set-item">
+          <!-- ⭐ **下拉直达**（用户要求）：把全部条目按标题列出来，选一条就跳过去，
+               不必在长列表里划。 -->
+          <div class="set-row">
+            <label class="set-label" for="prompts-jump"><strong>选择要修改的提示词</strong></label>
+            <select id="prompts-jump"></select>
+          </div>
+          <p class="set-desc">共 <span id="prompts-count">0</span> 条。按「<strong>谁在什么时候看到它</strong>」分成若干组，选中即切换到那一条。</p>
+        </div>
+        <div class="set-item">
+          <div class="set-choices">
+            <label class="set-choice"><input type="radio" name="prompts-filter" value="all" checked><strong>全部</strong></label>
+            <label class="set-choice"><input type="radio" name="prompts-filter" value="overridden"><strong>只看已改过的</strong></label>
+          </div>
+          <p class="set-desc">「已改过」= 与源码默认值不同（恢复默认后它会消失）。</p>
+        </div>
+        <p class="set-desc" id="prompts-overrides-path"></p>
+      </div>
+
+      <div class="prompt-side-scroll" id="prompts-groups">
+        <!-- ⭐⭐⭐ **分组由服务端回、前端动态渲染**（2026-10-12 改版）。
+             🔴 **为什么不再手写死三个分区**：分组轴改成了"**谁在什么时候看到这段文本**"
+               （用户提出的判据）⇒ 从 3 组变成 10 组；且每组都带一句"这组是给谁看的"。
+             ⭐ 服务端回结构化分组（本项目判据：能给人看的列表必须由服务端回结构化条目），
+               前端只负责画 —— 这样加/改组**不用改前端**。 -->
+      </div>
+    </div>
+
+    <!-- ──────────── 右栏：详情 / 编辑（仅宽屏）──────────── -->
+    <div class="prompt-detail" id="prompts-detail"></div>
+  </div>
+
+  <div class="set-foot">
+    <span class="dim set-msg" id="settings-msg-prompts"></span>
+  </div>
+</div>
+
+<!-- ──────────────── 子页⑧：模板（决策 204/205）──────────────── -->
+<div class="subpanel set-panel" id="setsub-templates" hidden>
+  <div class="set-scroll">
+
+    <section class="set-section">
+      <h3 class="set-section-title">交接文档模板</h3>
+      <div class="set-item">
+        <p class="set-desc">
+          模板决定<b>交接文档的结构</b>：有哪些节、每节叫什么、每节要干嘛。
+          ⭐ <b>它只在「新建项目」的那一刻生效</b> —— 已有文档记着自己建时的结构，
+          <b>改模板、删模板都不会影响它们</b>。
+        </p>
+      </div>
+      <div class="set-item">
+        <div class="set-row">
+          <span>模板列表</span>
+          <span class="dim" id="tpl-status"></span>
+        </div>
+        <div id="tpl-list" class="tpl-list"></div>
+      </div>
+    </section>
+
+    <section class="set-section">
+      <h3 class="set-section-title">新建 / 编辑模板</h3>
+      <div class="set-item">
+        <div class="set-grid">
+          <label>模板 id</label>
+          <input type="text" id="tpl-id" placeholder="my-template（全小写英文/数字/连字符）">
+          <label>名字</label>
+          <input type="text" id="tpl-title" placeholder="给这个模板起个名字">
+        </div>
+        <p class="set-desc">
+          id 同时是文件名（<code>templates/&lt;id&gt;.md</code>），只能用<b>全小写英文 / 数字 / 连字符</b>。
+          ⭐ <code>default</code> <b>也可以编辑</b>（它就是"没指定模板时用的那套"）——改它只影响<b>之后新建</b>的项目；
+          ⚠️ 它<b>不能删除</b>（删了就没有回落目标了）。
+        </p>
+      </div>
+      <div class="set-item">
+        <div class="set-row">
+          <span>节定义（顺序即文档顺序）</span>
+          <button type="button"  id="tpl-add-section">+ 添加一节</button>
+        </div>
+        <div id="tpl-sections" class="tpl-sections"></div>
+        <p class="set-desc">
+          每节要填<b>节名</b>与<b>这一节要干嘛</b>（后者会写进项目文档里<b>该节标题下的规范块</b>
+          —— 建项目时从模板复制过去，此后那份文档<b>自己存一份</b>，改模板<b>不影响</b>已有文档）。
+          ⭐ 规范那格是<b>多行输入框</b>，可以把「要写什么 + 怎么写 + 什么时候截断归档」都写进去；
+          <b>没有字数上限</b>（写长也<b>不占</b>截断配额，超过 2000 字只会给一条提醒）。
+          哪几节的较早内容要自动截断归档，就<b>勾上它们的「可截断」</b>（<b>可多选</b>；
+          每节<b>各自</b>与阈值比、<b>各自</b>截、<b>各自</b>归档；一节都不勾 = 这份文档<b>不会自动瘦身</b>）。
+          ⚠️ 节名不能是「沉淀知识」或「本档写作规范」（都归工具用），
+          也<b>不能互为子串</b>、<b>不能含反引号或竖线</b>。
+        </p>
+      </div>
+      <div class="set-item">
+        <div class="set-row">
+          <span></span>
+          <span>
+            <button type="button"  id="tpl-clear">清空表单</button>
+            <button type="button" class="primary" id="tpl-save">保存模板</button>
+          </span>
+        </div>
+        <div id="tpl-errors" class="tpl-errors" hidden></div>
+        <!-- ⭐ 2026-10-05：**提醒**（不阻断保存）单独一个容器 ——
+             与错误同框会让人以为"没保存成功"，而它只是想说"这一节写得有点长"。 -->
+        <div id="tpl-warnings" class="tpl-warnings" hidden></div>
+      </div>
+    </section>
+
+  </div>
+
+  <div class="set-foot">
+    <span class="dim set-msg" id="settings-msg-templates"></span>
+  </div>
+</div>
+
+</section>
+
+</main>
+
+<footer>
+  <span id="footer-info"></span>
+</footer>
+
+<script src="./app.js"></script>
+</body>
+</html>

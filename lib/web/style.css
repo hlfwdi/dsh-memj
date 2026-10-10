@@ -1,0 +1,2709 @@
+/* memj 人侧面板样式（§8.2：四标签导航 + 左 1/4 列表 + 右 3/4 详情）。
+   用 DSH 的设计令牌（缺失时回退到中性色），使插件页面与宿主观感一致。
+
+   🔴 注意坑 #36：**CSS 类选择器会压过 `hidden` 属性**（`.panel{display:flex}` 的优先级
+   高于浏览器 UA 规则 `[hidden]{display:none}`）⇒ 末尾必须加全局 `[hidden]` 兜底，
+   否则 `el.hidden = true` 视觉上无效（表现为"切标签切不掉"）。 */
+
+/* 🔴🔴 **必须自带一整套 `--dsw-alias-*` 令牌**（决策 117 查明的根因）。
+ *
+ * 为什么：本页是**独立静态页**（`/plugins/dsh-memj/`），**不在 DSH 主应用里**，
+ * 宿主**不会**注入这些令牌。而 skill-explorer 之所以好看，是因为它
+ * **自己在 `:root` 里定义了一份**（与其 `lib/page.html` 逐值一致）。
+ * ⚠️ 此前 memj 只写了 `var(--dsw-alias-x, 回退色)` ⇒ 全部走了**回退色**，
+ *    于是与 skill-explorer 观感不一致（用户报的"样式不统一"）。
+ * ⭐ dark 由 `body[data-ds-dark-theme]` 覆盖（与 skill-explorer 同机制）。 */
+:root {
+  --dsw-alias-bg-base: #ffffff;
+  --dsw-alias-bg-layer-1: #ffffff;
+  --dsw-alias-bg-layer-2: #f5f6f8;
+  --dsw-alias-bg-layer-3: #ffffff;
+  --dsw-alias-label-primary: #0f1115;
+  --dsw-alias-label-secondary: #61666b;
+  --dsw-alias-label-tertiary: #81858c;
+  --dsw-alias-border-l1: rgba(0, 0, 0, 0.04);
+  --dsw-alias-border-l2: rgba(0, 0, 0, 0.10);
+  --dsw-alias-border-l3: rgba(0, 0, 0, 0.12);
+  --dsw-alias-interactive-bg-hover: rgba(38, 49, 72, 0.06);
+  --dsw-alias-brand-primary: #0f1115;
+  --dsw-alias-state-business-primary: #4176e6;
+  --dsw-alias-state-error-primary: #ec1313;
+  --dsw-alias-state-success-primary: #22c55e;
+  --dsw-alias-mask-2: rgba(8, 10, 16, 0.45);
+}
+body[data-ds-dark-theme] {
+  --dsw-alias-bg-base: #151517;
+  --dsw-alias-bg-layer-1: #232324;
+  --dsw-alias-bg-layer-2: #2c2c2e;
+  --dsw-alias-bg-layer-3: #2c2c2e;
+  --dsw-alias-label-primary: #f9fafb;
+  --dsw-alias-label-secondary: #cfd3d6;
+  --dsw-alias-label-tertiary: #adb2b8;
+  --dsw-alias-border-l1: rgba(255, 255, 255, 0.06);
+  --dsw-alias-border-l2: rgba(255, 255, 255, 0.12);
+  --dsw-alias-border-l3: rgba(255, 255, 255, 0.16);
+  --dsw-alias-interactive-bg-hover: rgba(255, 255, 255, 0.08);
+  --dsw-alias-brand-primary: #f9fafb;
+  --dsw-alias-state-business-primary: #4176e6;
+  --dsw-alias-state-error-primary: #f25a5a;
+  --dsw-alias-state-success-primary: #22c55e;
+  --dsw-alias-mask-2: rgba(0, 0, 0, 0.55);
+}
+
+/* 语义别名（沿用原有名字，指向令牌）。 */
+:root {
+  --bg: var(--dsw-alias-bg-layer-1);
+  --bg-2: var(--dsw-alias-bg-layer-3);
+  --fg: var(--dsw-alias-label-primary);
+  --fg-dim: var(--dsw-alias-label-secondary);
+  --border: var(--dsw-alias-border-l2);
+  --hover: var(--dsw-alias-interactive-bg-hover);
+  --accent: var(--dsw-alias-label-primary);
+  --warn: var(--dsw-alias-state-error-primary);
+  --danger: var(--dsw-alias-state-error-primary);
+}
+
+* { box-sizing: border-box; }
+
+/* ⭐ 兜底（见文件头说明）：必须放在最后，见文件末尾。 */
+
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── 顶栏 ───────────────────────────────────────────────────────────── */
+
+header {
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  padding: 12px 20px 6px;
+}
+
+h1 { margin: 0; font-size: 17px; font-weight: 650; }
+
+.stat { color: var(--fg-dim); font-size: 12px; font-variant-numeric: tabular-nums; }
+
+.tabs { display: flex; gap: 2px; padding: 0 14px; }
+
+/* 标签栏 + 右侧设置齿轮同处一行（决策 97）。 */
+.tabbar { display: flex; align-items: flex-end; gap: 8px; }
+.tabbar .tabs { flex: 1 1 auto; }
+
+.gear {
+  flex: 0 0 auto;
+  /* ⭐ 决策 171：图标改成 **svg** ⇒ 不再按"字符"排版（原来那套 font-size/line-height
+     是给字符图标用的，留着会让按钮算上字符行高而偏大）。
+     ⭐ 改成 flex 居中 + 固定内边距 ⇒ 16×16 的图标在按钮里正好居中。 */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 12px 4px 0;
+  padding: 5px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--fg-dim);
+  cursor: pointer;
+}
+/* 图标尺寸与 DSH 左侧栏一致（16×16）；fill=currentColor 让它跟随上面的 color。 */
+.gear > svg { display: block; width: 16px; height: 16px; }
+.gear:hover { color: var(--fg); background: var(--bg-hover, rgba(127,127,127,.14)); border-color: var(--border); }
+
+.tab {
+  font: inherit;
+  font-size: 13.5px;
+  padding: 7px 16px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  color: var(--fg-dim);
+  cursor: pointer;
+}
+
+.tab:hover { background: var(--hover); color: var(--fg); }
+
+.tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+
+/* ── 主区 ───────────────────────────────────────────────────────────── */
+
+main { flex: 1 1 auto; min-height: 0; display: flex; }
+
+.panel { flex: 1 1 auto; display: flex; min-height: 0; }
+
+/* 左 1/4：列表 */
+.side {
+  flex: 0 0 25%;
+  max-width: 25%;
+  min-width: 200px;
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  /* ⭐ 决策 132：目录面板与「展开目录」按钮都以本栏为定位基准
+     ⇒ 它们的盒子**天然等于列表栏**，不必用 JS 量宽度、窗口缩放也自动跟随。 */
+  position: relative;
+}
+
+/* 右 3/4：详情 */
+.detail {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: auto;
+  padding: 18px 26px 40px;
+  /* ⚠️ **这里曾为了「浮层式正文详情」加过 `position: relative`**（当定位祖先）。
+      🔴 **已撤掉** —— 那个方案被用户否掉了（"漏出了项目热知识的列表"），
+         改成了**替换右栏内容**（JS 把其它子元素 `hidden`）⇒ **没有绝对定位子元素了**。
+      ⭐ 判据：**能用结构解决的，不要用层叠解决** —— 浮层必须严丝合缝盖住下面，
+         而"替换"根本没有"盖不住"这回事。 */
+}
+
+/* ── 筛选器（§8.3）────────────────────────────────────────────────── */
+
+.filters {
+  flex: 0 0 auto;
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.filter-row { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ⭐⭐ 窄屏的「筛选」折叠（用户 2026-09-24 要求）
+
+   用户原话：*"有左栏筛选的页面（知识库页面和热知识的项目热知识的编辑页），
+   在窄屏时，默认把筛选区域收起，留【筛选】按钮，点击从上方滑出（占位）。"*
+
+   🔴 **"占位"的含义**：展开时筛选区**把列表往下推**（占据自己的高度），
+      而不是浮在列表上面盖住它 —— 所以用**折叠**（`grid-template-rows`），
+      不用浮层/绝对定位。
+
+   🔴🔴 **为什么用 `grid-template-rows: 0fr ↔ 1fr` 而不是 `max-height`**：
+      `max-height` 要**猜一个够大的值**（猜小了内容被裁、猜大了动画会"卡一下"
+      再跳完）—— 而筛选区的高度**随下拉框换行变化**（窄屏下三个下拉会换行）。
+      `0fr ↔ 1fr` 由浏览器按**内容实际高度**算 ⇒ **不必知道它多高**，
+      任意内容、任意宽度都对。
+      ⚠️ 它要求：父 `display:grid` + 只有一个子元素、且那个子元素 `overflow: hidden`
+        ⇒ 这就是 `.filter-body > .filter-body-inner` 这层包装存在的原因。
+
+   ⚠️ **宽屏完全不受影响**：`.filter-toggle` 隐藏、`.filter-body` 永远是展开态
+      （下面的规则只在 `@media (max-width: 900px)` 里改它）。
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ⭐ 头部那一行：**宽屏下只是一行计数**（按钮不占位 ⇒ 视觉与改动前一致）。
+   ⚠️ 用 `display: contents` 会更省事，但那样**窄屏就没法把按钮和计数排一行**了。 */
+.filter-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+
+/* ⚠️ **「筛选」按钮宽屏下必须不存在**（它是窄屏专用）。
+   与「返回列表」同款判据：**默认隐藏写在全局**，否则媒体查询外没有兜底
+   ⇒ 会用 `display` 默认值冒出来（本项目踩过两次）。 */
+.filter-toggle {
+  display: none;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+}
+/* ⭐ 展开态给个视觉区分（**靠 `aria-expanded`**，那本来就是它的语义，
+   不新造状态类 —— 单一事实来源）。 */
+.filter-toggle[aria-expanded='true'] { background: var(--bg-2); }
+
+/* ⚠️ 宽屏下这层包装**必须是透明的**（不产生任何盒子/间距/裁剪）——
+   它只是为了窄屏的折叠动画而存在。 */
+.filter-body { display: block; }
+.filter-body-inner { display: flex; flex-direction: column; gap: 8px; }
+
+/* ⚠️⚠️ **窄屏专用按钮在【宽屏】下必须不存在** ——
+   `#hot-project-editor` 的两个悬浮按钮的样式在媒体查询里
+   ⇒ 宽屏下它们**没有 `display` 声明**，会退回默认值**冒出来**
+   （本项目这个坑踩过两次，这里第三次提前防住）。
+   ⭐ 所以这条兜底**必须留在媒体查询外面**。 */
+.narrow-editor-back,
+.narrow-editor-toggle { display: none; }
+
+/* ⭐⭐ **宽屏/窄屏两份文案**（用户 2026-09-24 明确：那几条热知识改动**只针对窄屏**）。
+   ⭐ 做法：两份**都写在 DOM 里**，由 CSS 按宽度切 —— 不用 JS
+     （这是"显示问题"，用断点才与其它窄屏规则同源；也免得缩放时要同步两份文案）。
+   ⚠️ **默认**（宽屏）：显示 `.wide-only`、隐藏 `.narrow-only`；
+      **窄屏反过来** —— 那两条规则写在**下面那个已有的 900 块里**
+      （⚠️ **不要在这里另起一个 `@media`** —— 那会与紧接着的那个块**嵌套**，
+        实测过一次，会让整个文件的括号结构错位）。 */
+.wide-only { display: inline; }
+.narrow-only { display: none; }
+
+@media (max-width: 900px) {
+  /* ⭐ 两份文案反转（见上一条的说明）。 */
+  .wide-only { display: none; }
+  .narrow-only { display: inline; }
+  /* ⭐⭐ **窄屏页头**（用户 2026-09-24）：
+     *"窄屏的时候，不要页面标题 memj记忆库右边那对库的概况，只留一行标题。
+     另外，窄屏时，一级导航标签应该可以横向滑动（设置按钮固定位置，不参与滑动）。"* */
+  /* ① **只留一行标题**：藏掉 `.stat`（`版本… / 项目… / 封面…`）——
+     它在窄屏会折成两三行、把页头撑高。
+     🔴 **是"隐藏"不是"删除"**：那是桌面端信息，宽屏照旧显示。 */
+  .brand .stat { display: none; }
+  .brand { gap: 0; padding: 10px 14px 6px; }
+  /* ② **一级标签横向可滑**；🔴 **齿轮不参与滑动** ⇒ 滑动只加在 `.tabs` 上，
+        不能加在共同父 `.tabbar` 上（那样齿轮会被一起滚走）。 */
+  .tabbar .tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding: 0 6px;
+  }
+  .tabbar .tabs::-webkit-scrollbar { display: none; }
+  .tabbar .tabs .tab { flex: 0 0 auto; padding: 7px 12px; }
+  .gear { flex: 0 0 auto; margin: 0 8px 4px 0; }
+
+  /* ⭐ 头部那一行：**筛选按钮 + 计数并排**（计数留在外面 ⇒ 收起时也看得见）。 */
+  .filter-head { justify-content: flex-start; }
+  .filter-toggle { display: inline-block; }
+  /* ⭐ 折叠容器：**宽度铺满、高度由 `0fr ↔ 1fr` 控制**。 */
+  .filter-body {
+    display: grid;
+    grid-template-rows: 0fr;       /* 🔴 **默认收起**（用户要求"默认把筛选区域收起"） */
+    transition: grid-template-rows .22s ease;
+  }
+  .filter-body > .filter-body-inner {
+    /* ⚠️ `min-height: 0` 是 `0fr` 能真正压到 0 的前提（否则 grid 项有最小内容高度）。 */
+    overflow: hidden;
+    min-height: 0;
+  }
+  /* ⭐ 展开态：`1fr` = 按内容实际高度撑开 ⇒ **占位**（把列表往下推）。 */
+  .filter-body[data-open='1'] { grid-template-rows: 1fr; }
+}
+
+/* ⚠️ 尊重"减少动态效果"偏好（与文件末尾那条同源，这里就近放，
+   因为它只影响本组件；不合并是为了让改这块的人一眼看到）。 */
+@media (prefers-reduced-motion: reduce) {
+  .filter-body { transition: none; }
+}
+
+.filters input[type="search"] {
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 9px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  width: 100%;
+}
+
+.filters select {
+  font: inherit;
+  font-size: 12.5px;
+  padding: 5px 6px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--fg);
+  cursor: pointer;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.count { font-size: 12px; color: var(--fg-dim); font-variant-numeric: tabular-nums; }
+
+/* ── 列表项 ─────────────────────────────────────────────────────────── */
+
+.list { flex: 1 1 auto; overflow: auto; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.list.wide { flex: none; overflow: visible; padding: 0; gap: 10px; }
+
+.item {
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+.item:hover { background: var(--hover); }
+
+/* ⭐ 选中项：**背景与右侧正文、按钮完全一致（白）**，选中状态只靠**边框**表达
+ *   （用户要求："左边列表部分的背景颜色也应该和右边和按钮全都统一，
+ *     包括左边所有组件的背景颜色也都应该统一"）。
+ * 🔴 原先这里是 `background: var(--hover)`——`--hover` 是
+ *   `rgba(38,49,72,.06)` 的**半透明灰**，而列表其余部分都是白底
+ *   ⇒ **左侧列表里唯一一块灰就是它**，看上去像"底色不统一"。
+ * ⚠️ 本规则在样式表里**排在 `.item:hover` 之后** ⇒ 悬停选中项时
+ *   仍是白底（不会被 hover 的灰盖回去），保持"选中项恒为白"。
+ * ⚠️ 悬停**未选中**项仍是灰——那是**瞬时交互反馈**，不是常驻底色。 */
+.item.active {
+  background: var(--bg);
+  border-color: var(--accent);
+}
+
+.item-title { font-weight: 600; font-size: 13.5px; line-height: 1.4; }
+
+/*
+ * ⭐ 列表里的小字更新时间（决策 123）。
+ * 用户要求：**小小的字号**，格式 `YYYYMMDD-HH-MM`（无分隔符的紧凑式）。
+ * ⚠️ 比 `.item-desc`（12px）再小一档，且用最弱的文字色——它是**辅助信息**，
+ *    不能和标题/描述抢注意力。
+ */
+.item-time {
+  /* ⚠️ `--fg-faint` 本文件**没有定义** ⇒ 直接用令牌的第三档灰（与 skill-explorer 一致），
+     别写一个不存在的变量名（那样虽能回落，但会让人以为有这一档色）。 */
+  color: var(--dsw-alias-label-tertiary, var(--fg-dim));
+  /* ⭐ 字号再收一档（11px → 10px，用户 2026-09-18 要求"再小一号"）：
+     它是**辅助信息**，要比 `.item-desc`（12px）明显弱一档。 */
+  font-size: 10px;
+  line-height: 1.4;
+  /* ⭐ 位置在**列表块最下面**（标签之下）⇒ 靠 `margin-top` 与标签行拉开一点。
+     ⚠️ 用户明确要求"放中间不好看" ⇒ 别再挪回标题与标签之间。 */
+  margin-top: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.item-desc {
+  color: var(--fg-dim);
+  font-size: 12px;
+  margin-top: 2px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ── 卡片（审批页）─────────────────────────────────────────────────── */
+
+.card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: var(--bg);
+}
+
+.card .title { font-weight: 600; }
+.card .desc { color: var(--fg-dim); margin-top: 4px; font-size: 13px; }
+
+/*
+ * 按钮排布（`.row1` = 一行里的排布；`.actions` = 按钮区）。
+ *
+ * 🔴🔴 **选择器不能挂在父卡片 class 上**（2026-09-18 踩到）：
+ *    原先写的是 `.card .row1 { display:flex; gap:8px }`，而审批卡片后来改用了
+ *    `.item`（为了统一的 hover 态）⇒ **这条规则不再匹配** ⇒ 两个按钮
+ *    退化成 inline **紧贴在一起**（`gap` 与 `align-items` 全丢）。
+ *    ⇒ 现在提到顶层：**谁用 `.row1` 谁生效**，与外层是 `.card` 还是 `.item` 无关。
+ *    ⭐ 教训：写样式别 `祖先 class + 后代` 两段耦合——**外层改个名就静默失效**。
+ */
+.row1 { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* ⭐ 按钮区：与上方内容拉开距离 + **按钮之间留间距**（决策 123 修正）。 */
+.actions { margin-top: 10px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+.meta { margin-top: 6px; display: flex; gap: 6px; flex-wrap: wrap; }
+
+.tag {
+  font-size: 11.5px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+}
+
+.tag.id { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; }
+.tag.global { color: var(--accent); border-color: var(--accent); }
+.tag.ext { color: var(--warn); border-color: var(--warn); }
+.tag.missing { color: var(--danger); border-color: var(--danger); }
+/* 形态分类（fact/trap/howto/decision）——用青色与归属类标签区分开 */
+.tag.kind { color: #0e7490; border-color: #0e7490; font-weight: 600; }
+.tag.theme { color: #7c3aed; border-color: #7c3aed; }
+
+.empty { color: var(--fg-dim); font-style: italic; padding: 10px 0; }
+
+/* ⭐⭐ **分页的"加载中"哨兵**（用户 2026-09-25：列表分页，滑到边界加载）。
+   ⚠️ 它**只是提示**（真正的加载由滚动监听触发），所以样式要**低调**——
+      它是"还有更多"的信号，不该抢列表的注意力。
+   ⚠️ 用 `flex: 0 0 auto`：`.list` 是 flex column，不加会被拉伸/压缩。
+   ⭐ 加载完时**整个元素被移除**（不留"已全部加载"的噪音）—— 见 `renderPagedList`。 */
+.list-more {
+  flex: 0 0 auto;
+  color: var(--fg-dim);
+  font-size: 12px;
+  text-align: center;
+  padding: 10px 0 6px;
+}
+
+/* ── 详情页 ─────────────────────────────────────────────────────────── */
+
+.detail-title {
+  margin: 0 0 12px;
+  font-size: 19px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+/* ⭐ 详情页的分节小标题（主题页的「覆盖的项目」「知识」用它）。 */
+.section-title {
+  margin: 20px 0 8px;
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--fg);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 6px;
+}
+.section-title:first-of-type { margin-top: 8px; }
+
+.fm-wrap {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-2);
+  padding: 10px 12px;
+  margin-bottom: 18px;
+}
+
+.fm-title {
+  font-size: 11px;
+  color: var(--fg-dim);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  margin-bottom: 6px;
+}
+
+table.fm { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+
+table.fm th {
+  text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+  padding: 3px 10px 3px 0;
+  color: var(--fg-dim);
+  font-weight: 500;
+  width: 1%;
+}
+
+table.fm td {
+  padding: 3px 0;
+  word-break: break-word;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+
+/* ── Markdown 正文 ──────────────────────────────────────────────────── */
+
+/* 🔴🔴 **`min-width: 0` 是这里的命门**（2026-09-20 实测修复）：详情页是 flex 子项
+ *   （`.detail { flex: 1 1 auto }`），而 **flex 子项的默认 `min-width` 是 `auto`**
+ *   ⇒ 它的**内容宽度**会反向决定它自己的最小宽度 ⇒ 内容里只要有一个**不可折行的长串**
+ *   （如 `pre > code` 里的 500 字符 JSON），整个 `.detail` 就会被撑爆
+ *   ⇒ 连带 `.panel` 溢出、**视觉上"左列表被压、右侧详情撑满"**（实测 5192px 溢出）。
+ *   ⭐ 修法见下方 `.md pre` / `.md code` 的 `word-break`（治本），
+ *      而 `min-width: 0` 是**兜底**：即使将来又有别的超宽元素，也不会撑破布局。
+ *   （内链正文短、没有代码块 ⇒ 所以此前没暴露；**外链渲染后立刻暴露**。） */
+.md { line-height: 1.7; font-size: 14.5px; min-width: 0; }
+.md h1, .md h2, .md h3, .md h4 { border-bottom: 1px solid var(--border); padding-bottom: .25em; margin-top: 1.3em; }
+.md h1 { font-size: 1.6em; } .md h2 { font-size: 1.35em; } .md h3 { font-size: 1.15em; }
+/* ⚠️ 行内 `code` 也要能断：长路径 / 长 id 会把行撑宽（不能只治 `pre`）。 */
+.md code { background: var(--bg-2); padding: .15em .4em; border-radius: 4px; font-family: ui-monospace, Consolas, monospace; font-size: .88em; word-break: break-word; overflow-wrap: anywhere; }
+/* 🔴 `pre` 里是 `white-space: pre`（**默认不折行**）⇒ 必须显式允许断词，
+ *   否则长 JSON/长路径会把容器撑爆（实测：一条 502 字符的行把 `.detail` 撑到 3894px）。
+ *   ⭐ 用 `pre-wrap` + `break-word`：既保留缩进与换行，又能把超长串折断。
+ *   ⚠️ 不用 `overflow-x: auto` 单独兜底——那只会让**每行代码块内部滚动**，
+ *      而外层容器仍被撑宽（本项目实测过）。 */
+.md pre { background: var(--bg-2); padding: 12px 14px; border-radius: 8px; overflow: auto; border: 1px solid var(--border); white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }
+.md pre code { background: none; padding: 0; white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }
+.md table { border-collapse: collapse; margin: 1em 0; display: block; overflow: auto; max-width: 100%; }
+.md th, .md td { border: 1px solid var(--border); padding: 6px 12px; word-break: break-word; }
+.md th { background: var(--bg-2); font-weight: 600; }
+.md blockquote { border-left: 4px solid var(--border); margin: 1em 0; padding: .2em 1em; color: var(--fg-dim); background: var(--bg-2); }
+.md a { color: var(--accent); text-decoration: none; word-break: break-word; }
+.md a:hover { text-decoration: underline; }
+.md img { max-width: 100%; }
+.md hr { border: none; border-top: 1px solid var(--border); margin: 2em 0; }
+
+/* ── ⭐⭐ 详情页目录（决策 132）────────────────────────────────────────
+ * 用户要求：在**会渲染 md 的详情页**左侧边放一个悬浮按钮「展开目录」，
+ * 点开后目录**从右侧栏往左滑出、正好覆盖左侧列表栏**，按钮变「收起目录」；
+ * 再点即收起、露出原本的列表。目录交互**照搬参考实现 `mdview.html`**。
+ *
+ * ⭐ 三个要点（为什么这么写）：
+ *  ① **面板挂在 `.side` 内部**（`position:absolute; inset:0`）
+ *     ⇒ 盒子天然等于列表栏，不必 JS 量宽、resize 自动跟随；
+ *     ⚠️ 若做成 `.panel` 的浮层，就得在 resize 时重算 `left`/`width`（易漏）。
+ *  ② **收起态 = `translateX(100%)`**：面板盒宽 = 列表栏宽
+ *     ⇒ 其左边缘起点正好是**右栏的左边缘**，向左滑到 `0` 就是
+ *        "从右侧栏滑出、覆盖左侧列表"。
+ *     🔴 必须靠 `.toc-layer` 的 `overflow:hidden` **裁掉**它，
+ *        否则收起时它会**原样盖在右侧正文上**。
+ *  ③ **按钮也挂在 `.side` 上**，用 `left:100%` 顶到分界线右侧
+ *     ⇒ 随列表栏宽度自动就位；且 `.side` **不参与滚动**，按钮不会随正文滚走。
+ *     🔴 不要把按钮放进 `.detail`：它是滚动容器，
+ *        绝对定位的子元素**会跟着内容一起滚**。
+ */
+.toc-layer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  /* ⚠️ 收起时**不得拦截列表的点击**（面板已被裁掉，但保险起见显式关掉）。 */
+  pointer-events: none;
+  z-index: 20;
+}
+
+.toc-panel {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-2);
+  border-right: 1px solid var(--border);
+  /* 悬浮感：让它读起来是"滑过来的一层"，而不是列表本身换了个内容。 */
+  box-shadow: 2px 0 10px rgba(0, 0, 0, .07);
+  transform: translateX(100%);
+  transition: transform .22s cubic-bezier(.4, 0, .2, 1);
+  pointer-events: none;
+}
+
+.side.toc-open .toc-panel { transform: translateX(0); pointer-events: auto; }
+
+.toc-head {
+  flex: 0 0 auto;
+  padding: 9px 12px 7px;
+  font-size: 11px;
+  letter-spacing: .06em;
+  color: var(--fg-dim);
+  border-bottom: 1px solid var(--border);
+}
+
+.toc-list { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 6px; }
+
+.toc-list a {
+  display: block;
+  padding: 3px 8px;
+  border-radius: 5px;
+  font-size: 13px;
+  color: var(--fg);
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.toc-list a:hover { background: var(--hover); }
+/* ⚠️ 缩进规则**照搬参考实现**：只有 h3/h4 缩进一档（用户："原样搬即可"）。 */
+.toc-list a.lvl3 { padding-left: 20px; font-size: 12px; color: var(--fg-dim); }
+.toc-list a.active { background: var(--hover); color: var(--accent); font-weight: 600; }
+
+.toc-empty { padding: 8px 10px; font-size: 12px; color: var(--fg-dim); font-style: italic; }
+
+/* ⭐⭐ 目录按钮（决策 132；2026-09-20 按用户要求改为**竖排贴边**样式）。
+ *
+ * 用户要求（逐条，含同日四轮修订后的**定稿**）：
+ *  ① 位置：**贴在左右栏交界处**（原先是浮在正文区里、与分界线留一道缝）；
+ *  ② 文字**竖排**；
+ *  ③ **左侧无圆角、无边框**；**其余三边有边框**，粗细与颜色取左右栏分界线那一套；
+ *  ④ **右侧两角有圆角**；
+ *  ⑤ 阴影**只往右打**；
+ *  ⑥ 纵向位置：**导航栏底部到浏览器底部这一段的三分之一高度处**（定稿，
+ *     原先是垂直居中）；
+ *  ⑦ 背景 = **与右侧正文背景一致**（见下）。
+ *
+ * ⭐ 顺带解决了上一版的缺陷：竖排后按钮宽约 21px，而 `.detail` 本来就有
+ *   `padding-left: 26px` ⇒ 按钮**整个落在正文的左内边距里**，不再压住正文
+ *   （上一版是横向按钮 + 48px 顶部占位，滚动时仍会遮住正文一小块）。
+ *   ⇒ 因此 `.detail.has-toc` 的顶部占位**已删除**，标题恢复原本的上边距。
+ */
+.toc-btn {
+  position: absolute;
+  /* ⭐ 纵向位置：**"导航栏底部 → 浏览器底部"这一段的三分之一处**（用户定稿）。
+   *    ⚠️ 不能简单写成 `top: 33.3333%`——百分比是相对**本栏（`.side`）**高度算的，
+   *       而 `.side` 的盒子是"导航栏底部 → **页脚顶部**"，比用户说的区间短
+   *       ⇒ 实测按本栏算只到 28.8%，**偏上不足**。
+   *    ⭐ 推导（`top` 是相对 `.side` 的 padding box 定位的，而 `.side` 顶部
+   *       正好就是顶栏底部 84px 处，两者相消）：
+   *         目标绝对位置 = 84 + (100vh − 84) / 3      ← 用户那句话
+   *         相对 `.side` 顶部 = 上式 − 84 = (100vh − 84) / 3
+   *                          = 33.3333vh − 28px
+   *       ⇒ 写成 `calc(33.333vh - 28px)`，`translateY(-50%)` 让**按钮中心**落在该处。
+   *    🔴 曾错写成 `calc(33.333vh + 46px)`：误把**绝对位置**当成了**相对值**
+   *       ⇒ 实测偏低 74px（占该段 9%）。⭐ 教训：绝对定位的百分比/视口单位是
+   *       **相对定位祖先**算的，换算时**必须先减掉祖先自身的偏移**。
+   *    ⚠️ 若顶栏高度变了，常数 28px 要跟着改（= 顶栏高 / 3；顶栏是固定高度）。 */
+  top: calc(33.333vh - 28px);
+  left: 100%;                    /* 左边缘 = 左右分界线，完全贴住、不留缝 */
+  transform: translateY(-50%);   /* 让按钮**中心**对齐该位置 */
+  z-index: 30;                   /* 🔴 必须在 `.toc-layer`(20) 之上，否则展开后点不到 */
+  font: inherit;
+  font-size: 11.5px;
+  line-height: 1;
+  writing-mode: vertical-rl;     /* ⭐ 文字竖排（中文传统：从上往下读） */
+  /* ⚠️ `padding` 是**物理属性**（不随 writing-mode 变），所以：
+   *    上下的值影响**高度**、左右的值影响**宽度**。
+   *    🔴 左右**不能随便加大**：竖排按钮的宽度 = 左padding + 字宽 + 右padding + 右边框，
+   *       而待批页的 `.detail` 左内边距**只有 22px**（通用页是 26px）
+   *       ⇒ 左右给 5px + 1px 边框 = 23px **会越过正文左缘**（实测算过）。
+   *    ⇒ 取 **4px**（4+12+4+1 = 21px，留 1px 余量）。
+   *       上下给 12px——那是文字**首尾**的留白，不影响宽度，可以给足。 */
+  padding: 12px 4px;
+  /* ⭐ **除左边外三边都要边框**（用户要求），用**与左右栏分界线完全相同的**
+   *    粗细与颜色（分界线 = `.side` 的 `border-right: 1px solid var(--border)`）
+   *    ⇒ 按钮读起来是"从分界线上长出来的一块"，左边天然无缝。
+   *    ⚠️ 左边**必须显式清掉**：否则会是一条压在分界线上的双线。 */
+  border: 1px solid var(--border);
+  border-left: none;
+  border-radius: 0 8px 8px 0;    /* ⭐ 只给**右侧**两角圆角 */
+  /* ⭐ 背景**必须与右侧正文一致**（用户："应该做成白色和右边栏正文背景一致"）。
+   *    🔴 原先用 `var(--bg-2)`（= 令牌 `bg-layer-3`）——它在本页与 `--bg`
+   *       （= `bg-layer-1`，也就是 `.detail` / `body` 的背景）**不是同一个令牌**，
+   *       一旦两份令牌取值不同（暗色主题下就不同）就会**看出色差**。
+   *    ⇒ 改用 `var(--bg)`：`.detail` 本身没设背景、是**继承 body 的 `var(--bg)`**
+   *       ⇒ 这样按钮与正文背景**按定义就是同一个值**，不会再有偏差。 */
+  background: var(--bg);
+  color: var(--fg-dim);
+  cursor: pointer;
+  white-space: nowrap;
+  /* ⭐ 阴影**只往右打**（Y 偏移为 0）——用户反馈：斜向阴影（2px 3px）在视觉上
+   *    让按钮显得"没贴住交界处"、像浮起来一块。
+   *    ⇒ 收成纯水平方向，读起来是"从交界处往正文册投出一条淡淡的影"。
+   *    ⚠️ 用负 spread 收窄，避免上下也糊出影子。 */
+  box-shadow: 3px 0 6px -1px rgba(0, 0, 0, .14);
+}
+
+/* ⚠️ hover **只改颜色、不加边框**（用户明确："无边框（包括hover状态下）"）。
+ *    ⇒ 反馈全靠背景与文字色，不靠描边。 */
+.toc-btn:hover { background: var(--hover); color: var(--fg); }
+
+/* 🔴 **这里原先有一条 `.detail.has-toc { padding-top: 48px }`，2026-09-20 已删除**。
+ *    它存在的唯一理由是"横向按钮顶在正文区左上角、会压住标题"。
+ *    ⭐ 按钮改为**竖排贴边**后，它整个落在 `.detail` 的 `padding-left: 26px` 里
+ *      ⇒ 不再需要任何顶部占位 ⇒ **标题恢复原本的上边距**（用户明确要求）。
+ *    ⚠️ `has-toc` 这个类**仍然由 JS 打上**，但**不再影响布局**——
+ *       它现在只是"本详情当前挂着目录"的语义标记（探针与状态判断用）。
+ */
+
+/* 🔴 标题要留 `scroll-margin-top`：否则目录跳过去时，该节标题**紧贴容器顶边**。 */
+.md h1, .md h2, .md h3, .md h4 { scroll-margin-top: 12px; }
+
+pre.raw {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 13px;
+}
+
+/* ── 提示条 ─────────────────────────────────────────────────────────── */
+
+.notice {
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: 8px;
+  background: var(--bg-2);
+  padding: 10px 12px;
+  margin-bottom: 14px;
+  font-size: 13px;
+}
+
+.notice.err { border-left-color: var(--danger); }
+.notice.warn { border-left-color: var(--warn); }
+.mono { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; }
+.dim { color: var(--fg-dim); }
+
+/* ── 表单 ─────────────────────────────────────────────────────────────
+ * ⭐ **对齐 skill-explorer**：34px 高、圆角 8、bg-layer-2、focus 描边。
+ * ⚠️ **输入框不再用等宽字体**——那是"只读展示"的习惯；
+ *    可编辑的输入框用正文字体更好读（用户要求改填选方式）。
+ * ──────────────────────────────────────────────────────────────────── */
+
+.form-box:not(:empty) { margin-top: 12px; }
+
+.raw-block { margin-bottom: 12px; }
+.raw-block pre {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  font-size: 12px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+}
+
+.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+
+/* ⭐ 编辑面板用**单列**（title/desc 各占一行）——用户要求"各自一行输入框"。 */
+.form-grid.single { grid-template-columns: 1fr; }
+
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field .lbl { font-size: 12.5px; font-weight: 500; color: var(--fg); }
+.field .fhint { font-size: 11.5px; color: var(--fg-dim); line-height: 1.5; }
+.field .ro { font-size: 12.5px; font-family: ui-monospace, Consolas, monospace; padding: 6px 0; }
+
+/* ⭐ 控件统一规格（对齐 skill-explorer 的 input/textarea/select）。 */
+.field input[type="text"],
+.field input:not([type]),
+.field textarea,
+.field select {
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  border-radius: 8px;
+  color: var(--fg);
+  width: 100%;
+  box-sizing: border-box;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+.field input[type="text"],
+.field input:not([type]),
+.field select {
+  height: 34px;
+  padding: 0 12px;
+}
+.field textarea {
+  height: auto;
+  padding: 8px 12px;
+  min-height: 72px;      /* ⭐ 约 3 行字的高度（用户要求） */
+  resize: vertical;
+  line-height: 1.6;
+}
+.field input:focus, .field textarea:focus, .field select:focus {
+  outline: none;
+  border-color: var(--dsw-alias-label-primary, var(--fg));
+  box-shadow: 0 0 0 2px var(--hover);
+}
+
+.form-err { margin-top: 10px; }
+.err-line { color: var(--danger); font-size: 12.5px; margin-top: 2px; }
+
+/* ── ⭐⭐ 封面编辑面板（决策 114）──────────────────────────────────────
+ * 布局按用户 2026-09-18 的要求：
+ *   · 字段顺序：**项目 → 主题 → global**；
+ *   · 主题/项目用**勾选面板**（列出库里全部，已挂的预勾上）；
+ *   · 整个面板**只在右下角留一个保存**，旁边是删除。
+ * ──────────────────────────────────────────────────────────────────── */
+
+.editor {
+  margin: 14px 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 16px;
+}
+.editor > summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  user-select: none;
+  padding: 2px 0;
+}
+/* ⭐ 编辑面板的小标题与灰字说明（决策 117，用户："字号也不对，间隔也不对"）
+ * 基准取自 `dsh-skill-explorer/lib/page.html`：
+ *   .group-title { font-size:14px; font-weight:600 }
+ *   .group-hint  { font-size:12px; color:label-tertiary; margin:0 0 10px }
+ * ⚠️ 用户明确指出"小标题和选块的间隔也不对"——**标题与它下面的选块要留开**。
+ */
+.edit-block { margin: 18px 0 6px; }
+.edit-block h4 {
+  font-size: 14px;
+  margin: 0 0 10px;
+  color: var(--dsw-alias-label-primary, var(--fg));
+  font-weight: 600;
+  line-height: 1.4;
+}
+.edit-block.danger h4 { color: var(--dsw-alias-state-error-primary, var(--danger)); }
+
+/* ⭐ 灰字说明：**12px**（不是 11.5）、`label-tertiary`、行高 1.5。
+ *    ⚠️ `margin-top: 8px` 只对**编辑面板里**的生效——它还被列表项
+ *    （显示 id 那一行）复用，那里不需要这么大间距。 */
+.dim.small {
+  font-size: 12px;
+  color: var(--dsw-alias-label-tertiary, var(--fg-dim));
+  line-height: 1.5;
+}
+.editor .dim.small { margin-top: 8px; }
+
+/* ⭐ 勾选面板：列出库里全部候选，已挂的预勾上。 */
+.check-panel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-2);
+}
+.check-panel .check-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--fg);
+  cursor: pointer;
+  user-select: none;
+}
+.check-panel .check-item input { width: 14px; height: 14px; accent-color: var(--fg); cursor: pointer; }
+.check-panel .check-item .tag-id { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+.check-panel .empty-hint { font-size: 12px; color: var(--fg-dim); }
+
+/* ⭐ 底部操作栏：保存 + 删除，靠右（用户要求"整块只给一个保存，在右下角"）。 */
+.edit-footer {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.edit-footer .foot-msg {
+  margin-right: auto;
+  font-size: 12px;
+  color: var(--fg-dim);
+  line-height: 1.5;
+}
+.edit-footer .foot-msg.err { color: var(--dsw-alias-state-error-primary, var(--danger)); }
+.edit-footer .foot-msg.ok { color: var(--dsw-alias-state-success-primary, #16a34a); }
+
+/* ── 按钮 ─────────────────────────────────────────────────────────────
+ * ⭐ **与 skill-explorer 对齐**（用户 2026-09-18 要求："应该与已有的插件
+ *    比如 skill-explorer 的按钮样式对齐"）。
+ * 基准取自它的 `lib/page.html`：圆角 8、padding 6px 14px、13px、
+ * border-l2、bg-layer-1、120ms 过渡，`.primary` 用 label-primary 反白。
+ * ⚠️ **不要用硬编码颜色**——一律走 `--dsw-alias-*` 令牌，
+ *    这样明暗主题都自动跟随（本插件以前用的靛蓝 #4f46e5 在暗色下很刺眼）。
+ * ──────────────────────────────────────────────────────────────────── */
+
+button {
+  appearance: none;
+  font: inherit;
+  cursor: pointer;
+  border-radius: 8px;
+  padding: 6px 14px;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  transition: background 120ms ease;
+}
+button:hover { background: var(--hover); }
+button:disabled { opacity: .5; cursor: default; }
+/* 主按钮：反白（同 skill-explorer 的 `.primary`）。 */
+button.primary {
+  background: var(--dsw-alias-label-primary, var(--fg));
+  color: var(--dsw-alias-bg-layer-1, var(--bg));
+  border-color: transparent;
+}
+button.primary:hover { filter: brightness(1.06); }
+/* 危险：**只染文字**，不染边框（同基准的 `button.danger`）。 */
+button.danger { color: var(--dsw-alias-state-error-primary, var(--danger)); }
+button.danger:hover { background: var(--hover); }
+
+/* ── 审批页子标签 ───────────────────────────────────────────────────── */
+
+#panel-review { flex-direction: column; }
+
+/* ⭐ 归档页（决策 133）——**与审批页同构**：子标签栏 + 子面板，故同样要竖排。
+   ⚠️ `.panel` 是 `display:flex`（默认 row）⇒ 不写这条，子标签栏会和子面板并排。 */
+#panel-archive { flex-direction: column; }
+
+.subtabs {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+  padding: 10px 20px 0;
+  border-bottom: 1px solid var(--border);
+}
+.subtab {
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 14px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  background: transparent;
+  color: var(--fg-dim);
+  cursor: pointer;
+  position: relative;
+  top: 1px;
+}
+
+.subtab:hover { color: var(--fg); }
+.subtab.active { background: var(--bg-2); border-color: var(--border); color: var(--fg); font-weight: 600; }
+
+/* ── 窄屏：设置页的子导航改成**横向可滑动**（用户 2026-10-02 要求）──
+   🔴 问题：6 个标签在窄屏放不下 ⇒ 默认 flex 会**挤成两行**（实测截图），
+      而且"模板"被挤到右边、看起来像另一个东西。
+   ⭐ 做法：不换行 + 横向滚动 + 隐藏滚动条。
+   ⚠️ **必须同时加 `overflow-x:auto` 与 `flex-wrap:nowrap`** ——
+      只加前者而允许换行，仍然会折行（那才是本次的真实症状）。
+   ⚠️ 作用域**只到窄屏**：宽屏放得下、保持原来的样子。 */
+@media (max-width: 900px) {
+  .subtabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    /* ⭐ 滚动时不要连带页面：`overscroll-behavior` 防"滑到头继续滚整页"。 */
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+    /* ⚠️ 隐藏滚动条（各引擎写法不同，三条都要）——**内容仍可滑动**。 */
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .subtabs::-webkit-scrollbar { display: none; }
+  /* ⚠️ 标签**不许被压扁**：`flex:0 0 auto` 保证每个按自身宽度占位，
+        否则 flex 会把它们挤小（症状是文字竖排换行）。 */
+  .subtab { flex: 0 0 auto; white-space: nowrap; }
+  /* ⭐ 状态行（热重载策略 + 配置文件路径）窄屏不显示 —— 用户 2026-10-02 要求。
+     ⚠️ 只隐藏显示，**数据照常写入**（宽屏/其它逻辑仍能读到）。 */
+  .set-head .set-status { display: none; }
+}
+
+.subpanel { flex: 1 1 auto; overflow: auto; padding: 16px 20px 40px; }
+.subpanel .hint { margin: 0 0 12px; color: var(--fg-dim); font-size: 12.5px; }
+.subpanel .hint code { background: var(--bg-2); padding: 1px 5px; border-radius: 4px; }
+
+/* ⭐⭐ 待批子页：左列表 + 右详情（决策 130）。
+ * 🔴 它是**嵌套在 `.subpanel` 里的 `.panel`**，两处必须覆盖：
+ *    ① `.subpanel` 自身的 `padding` 与 `overflow: auto` 会把左右布局挤变形
+ *       ⇒ 给这个组合**去掉内边距、并让内层自己滚**；
+ *    ② `.subpanel` 是 `overflow: auto` 的块级容器，内层 `.panel` 需要**有确定高度**
+ *       才能让 `.side` / `.detail` 各自滚动（否则会随内容无限长、右侧滚不动）。 */
+/* 🔴🔴 **`display:flex` 是这里的关键，不能省**（2026-09-20 用户报告后查明）：
+ *    内层 `.panel` 想"撑满并让左右两栏各自滚"，**前提是它的父元素是 flex 容器**——
+ *    而 `.subpanel` 原来只有 `flex: 1 1 auto`（那是**它自己作为 flex 子项**的属性），
+ *    **自身并没有 `display:flex`** ⇒ 它是普通块级容器
+ *    ⇒ 内层 `.panel` 的 `flex: 1 1 auto` / `min-height: 0` **全部失效**，
+ *      高度变成"由内容撑开"，而 `.subpanel` 又是 `overflow: hidden`
+ *      ⇒ 内容被**裁掉且滚不动**（表现为"右侧正文无法滚动、左侧列表栏也不正常"）。
+ *    ⭐ 判据：**`flex: 1` 只在 flex 容器里才有意义**——看到"子项设了 flex 却不生效"，
+ *       先回头查父元素**有没有建立 flex 上下文**。 */
+.subpanel.review-split-panel { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+.review-split { flex: 1 1 auto; min-height: 0; }
+/* ⚠️ 复用 `.side` / `.detail` 的既有样式（左 25% / 右 75%），只覆盖 padding 差异。 */
+.review-split .side .filters { gap: 6px; }
+.review-split .detail { padding: 16px 22px 40px; }
+/* 🔴 **这里原先有一条 `.review-split .detail.has-toc { padding-top: 48px }`，2026-09-20 已删除**。
+ *    ⚠️ 它**必须跟着基础规则一起删**：基础那条（`.detail.has-toc`）删掉后，
+ *      这条 (0,3,0) 反而会**给待批页单独加上** 48px 顶部内边距
+ *      ⇒ 表现为"标题上方莫名多出一大块空白"。
+ *    ⭐ 本项目已记录过同型教训：**抽掉一个语义，要连带改所有"靠它间接推断"的地方。**
+ *    ⚠️ 另注：待批页的 `.detail` 左内边距是 **22px**（比通用的 26px 窄），
+ *       竖排按钮宽约 22px ⇒ 这里比其它页**贴得更紧**，属预期。 */
+
+/* ⭐⭐ 归档页的两个子页：左列表 + 右详情（决策 133）—— **与待批子页同一套处理**。
+ * 🔴 为什么必须各写一条、不能共用 `review-split` 的类名：那三处的取值
+ *    （去内边距 / 让内层自滚 / 详情内边距）是**同一类问题的同一个解**，
+ *    但类名带 `review-` 前缀 ⇒ 归档页复用它会让"看代码的人以为归档页属于审批页"。
+ *    ⚠️ 代价是这两组规则**必须一起改**（本文件已有过"抽掉基础规则、派生规则变孤儿"的教训）。
+ * 🔴🔴 `display:flex` **必须写**——理由与上面 `.subpanel.review-split-panel` 完全同一件事
+ *    （内层 `.panel` 的 `flex: 1 1 auto` 只有在 flex 容器里才生效；漏了就会"右侧正文滚不动"）。
+ *    ⭐ 这正是"两组规则必须一起改"的实例：我给待批子页补上后，这里**同样要补**。 */
+.subpanel.arc-split-panel { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+.arc-split { flex: 1 1 auto; min-height: 0; }
+.arc-split .side .filters { gap: 6px; }
+.arc-split .detail { padding: 16px 22px 40px; }
+
+/* ⭐ 归档物**不可编辑**（决策 133 / 用户裁定 ③）——被禁用的候选要一眼看出"不能选"。
+ * ⚠️ 只靠 `input:disabled` 的浏览器默认样式不够明显（在本项目的深色主题下近乎无差别）。 */
+.check-panel .check-item.off { opacity: .5; cursor: not-allowed; }
+.check-panel .check-item.off input { cursor: not-allowed; }
+.check-panel .check-item .off-note { font-size: 11px; color: var(--dsw-alias-label-tertiary, var(--fg-dim)); }
+
+/* ⭐ 归档时间等"已归档"提示条。 */
+.notice.archived { border-left-color: var(--dsw-alias-state-business-primary, var(--accent)); }
+
+/* ⭐⭐ 历史归档条目的提示条（决策 137）。
+ *   ⚠️ 用**另一条色**（warn）与「已归档」区分开——两者是**不同的状态**：
+ *      · archived = 人去归档的（可恢复）；
+ *      · history  = 工具自动截断产生的存档（不是知识，也不该被"恢复"）。
+ *   🔴 混用同一色会让人以为"这条被归档了，去归档页恢复它"。 */
+.notice.history { border-left-color: var(--warn); }
+
+/* ⭐⭐ 正文里「条目 id」变成的链接（决策 137）。
+ *   ⚠️ 它在 `.md` 内部、原本是 `<code>` 的样式 ⇒ 这里要**继承代码的观感**，
+ *      否则"代码突然变成蓝字"会显得突兀。
+ *   ⭐ 但**必须有可见的下划线与手型**——否则没人知道它能点。 */
+.md a.entry-link {
+  background: var(--bg-2);
+  padding: .15em .4em;
+  border-radius: 4px;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: .88em;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  cursor: pointer;
+}
+.md a.entry-link:hover { text-decoration-style: solid; }
+
+/* ⭐ 提名时间：**小字、不用标签**、放在标签下面、按钮上面（决策 130，用户要求）。
+ *   ⚠️ 视觉权重**必须明显弱于标签**——它是补充信息，不该抢标题与标签的注意力。
+ *   🔴 实测教训：第一版写 11px，而同处标签是 11.5px ⇒ **只差 0.5px、肉眼分不出**
+ *      （截图核对时才发现）。⇒ 改为 **10px**（与本项目列表小字时间 `.item-time` 同档），
+ *      并把颜色再降一档，确保"一眼看出是次要信息"。 */
+.pending-time {
+  margin-top: 6px;
+  font-size: 10px;
+  color: var(--fg-dim);
+  opacity: .82;
+  letter-spacing: .2px;
+}
+
+/* ⭐ 详情页顶部的审批按钮区（决策 130：按钮从列表卡搬到右侧详情）。 */
+.pending-actions {
+  margin: 0 0 18px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ── 占位页（已无使用；保留 .placeholder 供将来复用）──────────────────── */
+
+.placeholder { padding: 60px 20px; max-width: 640px; margin: 0 auto; text-align: center; }
+.placeholder h2 { font-size: 20px; margin-bottom: 14px; }
+.placeholder p { color: var(--fg-dim); margin: 8px 0; }
+.placeholder code { background: var(--bg-2); padding: 1px 6px; border-radius: 4px; }
+
+/* ══ ⭐⭐ 热知识页（热知识方案 §8）══════════════════════════════════════
+   ⚠️ 一律**复用既有类**（`.filters` / `.list` / `.item` / `.tag` / `.editor`），
+      只补这一页特有的几种排布；**不引入新颜色/新字号体系**（本项目纪律：
+      引入新写法前先看同一个载体里有没有人这么写）。 */
+
+/* 总开关：放子导航**之上**的显著位置（裁定 H-1）。 */
+.hot-head {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  flex: 0 0 auto;
+}
+.hot-master { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+
+/* ══ 🔴🔴 热知识页必须**纵向排列** ══════════════════════════════════════
+   ⚠️ `.panel` 是 `display: flex`（**默认 row**）⇒ 不写这条，
+      总开关 / 子导航 / 子面板会**并排**（实测截图：子导航跑到页面垂直中央、
+      总开关孤零零飘在左边、中间一大片空白）。
+   ⭐ 这与 `#panel-review` / `#panel-archive` 是**同一条修正**——
+      本项目已因同一原因踩过（决策 133 的归档页）。 */
+#panel-hot { flex-direction: column; }
+
+/* 热知识页的三个子面板：与归档页同款（**必须是 flex 容器**，
+   否则内层的 `flex: 1 1 auto` 全部失效 ⇒ "正文滚不动"，本项目踩过）。 */
+.subpanel.hot-live-panel,
+.subpanel.hot-block-panel { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+
+/* 热知识页里既要滚动又要撑满的区块 */
+.hot-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 10px 16px; }
+
+/* 一页里的分块（判定/预算/清单/画像/全局） */
+.hot-block { padding: 10px 16px; border-bottom: 1px solid var(--border); }
+.hot-block h4 { margin: 0 0 8px; font-size: 13px; }
+.hot-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 6px 0; }
+
+/* ⭐ 当前会话状态：作为「判定与绑定」块的**动态描述**放在最下面（用户 2026-09-23 要求）。
+   ⚠️ 样式**不新创**——取该块里既有的两种口径：
+   · 第一行（会话 id）用与 `.hot-row` 里普通文本一致的**正文字号与颜色**
+     （它是这一块里唯一的"事实"，不该被压暗）；
+   · 第二行（判定项目 + 来源）沿用既有的 `.dim.small` 小灰字 ——
+     与同块的「⚠️ 打开开关会额外消耗 token…」「② 未开启…」**逐项同口径**。
+   ⭐ 判据（本项目一贯）：引入新写法前先看同一个载体里有没有人这么写。 */
+.hot-session-status {
+  margin: 10px 0 2px;
+  padding-top: 8px;
+  /* 与上方开关区**拉开层次**：一条浅分隔线，说明"以下是当前状态、不是可改的设置" */
+  border-top: 1px dashed var(--border);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+/* 状态里的"标签 + 值"（如「判定项目：dsh-memj」）——用等宽字体标出值，便于与下拉框对照 */
+.hot-session-status code {
+  background: var(--bg-2);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+/* 第二行（来源说明）：沿用既有的小灰字 */
+.hot-session-status .dim.small { margin: 2px 0 0; }
+
+/* 超预算提示：**红字**（只提醒、不自动砍，裁定 4） */
+.hot-over { color: #c0392b; font-weight: 600; }
+
+/* 展开的正文（等宽、可滚、**必须能折行**——本项目踩过撑爆布局的坑） */
+.hot-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--bg-2);
+  padding: 8px 10px;
+  border-radius: 4px;
+  max-height: 320px;
+  overflow: auto;
+  font-size: 12px;
+}
+
+/* 热知识页的文本域（**原地编辑**用的那种：自带边框、独立一个控件）
+   ⚠️ **`#hot-persona-input` 已从这里移除**（2026-09-23）——它现在住进 `.composer`，
+      由**外框**负责画边框、它自己必须"无边框"。
+   🔴 **为什么必须移除而不是靠"写在后面"覆盖**：`#hot-persona-input` 是 **ID 选择器
+      `(1,0,0)`**，优先级**高于** `.composer textarea` 的 `(0,1,1)`
+      ⇒ 无论顺序如何，它的 `border: 1px solid` 都会赢 ⇒ **边框根本去不掉**。
+   ⭐ 判据：**想覆盖一条规则，先比较优先级；同优先级才轮到"写在后面"。**
+      （本项目已因同一模式踩过：为覆盖而写的提权规则，在基础规则删掉后反向生效。） */
+.hot-block textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: inherit;
+  font-size: 12.5px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+/* ⭐⭐ 「输入框 + 右下角按钮」一体的容器（用户 2026-09-23 要求，
+   参照 DSH 主输入框的形态：**一个框包住输入区，按钮在框内右下角**）。
+   🔴 **两个关键点（少一个就不"一体"）**：
+   ① **框只画在这一层**——里面的 `textarea` 必须**完全没有边框/背景**，
+      否则会出现"框中框"；
+   ② **按钮不占流**（绝对定位）——否则它会把输入区挤出一块空白。 */
+.composer {
+  position: relative;                 /* 按钮的定位祖先 */
+  border: 1px solid var(--border);
+  border-radius: 8px;                 /* 与外框的圆角口径一致（button 用 8px） */
+  background: var(--bg);
+  transition: border-color 120ms ease;
+}
+/* ⭐ 聚焦时**让外框来反应**（输入框自己没有轮廓了，否则聚焦时毫无反馈）。 */
+.composer:focus-within { border-color: var(--dsw-alias-label-primary, var(--fg)); }
+.composer textarea {
+  /* ⚠️ 这几条原来由 `#hot-persona-input` 提供，现在**必须在这里补全**
+     （它已被移出那个共用组，见上方注释）。 */
+  width: 100%;
+  box-sizing: border-box;
+  font-family: inherit;
+  font-size: 12.5px;
+  color: var(--fg);
+  /* ⭐ 以下是把"边框/背景/轮廓"全部让给外框 —— 这是"一体感"的关键。 */
+  border: 0;
+  background: transparent;
+  border-radius: 8px;                 /* 与容器同值：避免聚焦时出现方形高光 */
+  /* ⚠️ **右下留出按钮的位置**：否则长文本会滚到按钮底下被挡住。
+     32px ≈ 按钮高 30px + 与底边 6px 的余量。 */
+  padding: 8px 10px 32px;
+  /* 🔴 **`resize: none`**（用户 2026-09-23：*"输入框右下角是什么东西？那几个斜杠。去掉。"*）
+     —— 那是 textarea 的**缩放抓手**：默认出现在**元素自己的右下角**，
+     而按钮也定位在那里 ⇒ **两者叠在一起**（截图可见）。
+     ⭐ 而且在这个"一体框"结构里，**抓手本来就不该有**：它暗示"这个 textarea 可以单独缩放"，
+       但视觉上它是一个框的一部分 —— 拖它只会把外框撑变形（外框不跟着长）。
+     ⚠️ 顺带：`resize` 是**元素自己的属性**，容器上加什么都不管用。 */
+  resize: none;
+}
+/* ⭐ 去掉聚焦时浏览器默认的轮廓——它会给"无边框"的输入框画出**方形**高光，
+   与容器的圆角对不上（本项目要求的"一体的感觉"就毁在这一处细节上）。 */
+.composer textarea:focus { outline: none; }
+.composer > button {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+}
+
+/* ⭐⭐ 可展开卡片的头部行：**标题左、chevron 右**（用户 2026-09-23 要求）。
+   ⚠️ 卡片本身是纵向布局（标题 / 标签 / 按钮各占一行）⇒
+      "标题与箭头同一行且分列两端"必须**单独包一层 flex**，
+      不能指望在卡片上 `justify-content`（那会把所有子元素都摆成一行）。 */
+.item-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.item-head .item-title { flex: 1 1 auto; min-width: 0; }
+
+/* 卡片右侧的展开/进入箭头（`▾`/`▴` = 展开收起；`›` = 进入下一层，由 JS 定字符）。
+   ⚠️ 用字符而不是 SVG：本项目这套界面里没有图标体系，
+      而 `▾`/`▴`/`›` 都是**文本字符** ⇒ 自动跟随字号与颜色，不必额外对齐。 */
+.card-chevron {
+  flex: 0 0 auto;
+  color: var(--fg-dim);
+  font-size: 12px;
+  line-height: 1.6;
+  user-select: none;
+}
+/* ⭐ 整卡可点 ⇒ 给个手型提示。
+   ⚠️ 提示**加在 `.item` 上而不是只加在 `.item-head` 上**：
+      热区是**整张卡片**（包含下面那行标签），只给标题行加手型会让人以为
+      "只有标题能点、标签那片点了没用"——**光标与实际热区必须一致**。
+   ⚠️ 卡片里的**按钮**要还原成普通光标（那里点了是"按钮的动作"，不是"进详情"）。 */
+.item[data-clickable] { cursor: pointer; }
+.item[data-clickable] button { cursor: pointer; }
+
+/* ⭐⭐ 左栏"当前在右栏展开了正文"的那条（用户 2026-09-23）。
+   ⚠️ 用**左边框 + 背景**双重标记：只染背景的话，在选中态/hover 时会被盖住；
+      只画边框又与普通卡片难区分。 */
+.item.open {
+  background: var(--bg-2);
+  box-shadow: inset 3px 0 0 var(--dsw-alias-label-primary, var(--fg));
+}
+
+/* ⭐⭐ 右栏的「正文详情」块（点左栏卡片展开的那块）。
+   🔴🔴 **形态是"替换右栏内容"，不是浮层覆盖**（用户 2026-09-23 二次纠正：
+      *"现在虽然是覆盖的，但是还是漏出了项目热知识的列表。他展开后的 entry 正文详情
+        应该是直接覆盖整个右边栏的。或者说直接用 entry 的正文详情去替换掉右边栏才对的感觉。"*）
+
+   ⭐ **所以这里【不需要】`position` / `z-index` / 不透明背景 / `inset`** ——
+      那些是"浮层"才要的，而浮层**必须严丝合缝盖住下面**，只要有一点对不齐
+      （圆角/滚动条/padding/下层某块自己的 overflow）就会**漏出底下的内容**。
+      ⇒ **替换**由 JS 做（把右栏其它子元素 `hidden`），**物理上不可能漏**。
+   ⚠️ 本块现在只是右栏里**唯一可见**的那一块，正常参与流布局即可。 */
+#hot-entry-detail {
+  /* ⭐ 铺满右栏高度**不是靠 absolute**，而是让它自己撑开（见下 `flex` 那条）。 */
+  display: flex;
+  flex-direction: column;
+  /* 🔴🔴 **要顶到右栏的边**（用户要求"直接覆盖整个右边栏"）。
+     ⚠️ `.detail` 有 `padding: 16px 22px 40px`，而 `.hot-block` 自己还有 `padding: 10px 16px`
+     ⇒ 两层内边距叠起来，正文离右栏边缘 **38px**，看起来"没有铺满"。
+     ⇒ 用**负外边距抵消 `.detail` 的 padding**（`-16px -22px` 对应它的 16/22），
+       再保留 `.hot-block` 自己那层（那层是正文与边框之间的呼吸空间，要留）。
+     ⭐ 判据：**"铺满"是相对容器边缘量的** —— 实测宽度从 1375 提到 1419（= clientWidth）。 */
+  margin: -16px -22px;
+  /* ⭐ 高度上多减掉的 40px 是 `.detail` 的 `padding-bottom`：不减的话底部会多出 40px 空白。 */
+  min-height: calc(100% + 16px + 40px);
+  /* ⚠️ 不设 `background`：它是"替换"而不是"覆盖" ⇒ 底下没有需要挡住的东西，
+        用底色反而会在右栏留下一圈色差边（用户对色差很敏感，本项目记过一次）。 */
+  border-bottom: 0;
+}
+#hot-entry-detail .item-head {
+  align-items: center;
+  /* ⭐ 头部固定、正文区自己滚（长正文 1 万+ 字符，不能把整块撑长）。 */
+  flex: 0 0 auto;
+}
+#hot-entry-detail h4 { margin: 0; }
+#hot-entry-detail .entry-body-slot {
+  margin-top: 8px;
+  /* ⭐ **关键**：`flex: 1 1 auto` + `min-height: 0` 让正文区吃掉剩余高度并能自己滚。
+     ⚠️ `min-height: 0` 不能省：flex 子项默认 `min-height: auto` ⇒ 会被内容撑破。 */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+/* ⚠️ 正文**必须能折行**（本项目踩过"不可折行长串撑爆布局"的坑）。 */
+#hot-entry-detail .md {
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* ── 页脚与 toast ───────────────────────────────────────────────────── */
+
+footer {
+  flex: 0 0 auto;
+  padding: 8px 20px;
+  color: var(--fg-dim);
+  font-size: 11.5px;
+  border-top: 1px solid var(--border);
+}
+
+.toast {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  background: #111827;
+  color: #fff;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  opacity: 0;
+  transition: opacity .2s;
+  pointer-events: none;
+  max-width: 440px;
+  z-index: 50;
+}
+
+.toast.show { opacity: 1; }
+.toast.error, .toast.err { background: var(--danger); }
+
+/* ── 窄屏退化：两栏改上下堆叠（§12-75 的【我默认】）────────────────── */
+
+@media (max-width: 900px) {
+  /* ══════════════════════════════════════════════════════════════════════
+     ⭐⭐⭐ 窄屏（≤900px）：**左右栏 → 全屏两级导航**
+     （用户 2026-09-24 要求）
+
+     用户原话：*"所有有左右栏排版的页面（项目热知识的项目热知识编辑页另外设计先不动）。
+     现在是上下结构。我希望的是，打开的时候，默认是全屏的左栏列表，点击某条进入详情页（右栏），
+     右栏从右侧划入屏幕同样占全屏覆盖，应该有悬浮的半透明的收起按钮，
+     点击后收起详情页（右栏）。"*
+
+     🔴 **与旧行为（上下堆叠）的区别**：原来是把两栏压成"上 45% 列表 + 下 55% 详情"，
+     两栏**同时可见但都很矮**（手机上正文只剩半屏）。现在改成**一次只看一栏**。
+
+     🔴🔴 **实现方式：纯 CSS 定位 + 一个 `data-narrow-open` 开关**（不重排 DOM）：
+     - 详情栏默认 `translateX(100%)` 移出屏幕右侧（**滑入前的状态**）；
+     - 打开时加 `translateX(0)` ⇒ **从右侧滑入**（带过渡）；
+     - 列表栏始终占满 ⇒ "返回"就是把它移回去。
+     ⚠️ **不用 `hidden`**：那会**丢掉滑入动画**，且与既有的
+        "`hidden` 期间读 `scrollTop` 恒为 0"（决策 138 踩过）纠缠。
+     ⚠️ **`position: absolute` 而非 `fixed`**：定位基准是 `.panel`（它已经 `flex: 1 1 auto`、
+        且父级 `main` 撑满）⇒ **自动跟随窗口缩放**，不必用 JS 量高度。
+        🔴 用 `fixed` 的话得自己算 top/bottom（本页顶部还有标签栏与总开关，算错就盖住它们）。
+
+     ⚠️ **哪些页面适用**：所有 `.panel`（知识库 / 项目 / 主题 / 审批 / 归档知识 / 归档项目）。
+     🔴 **唯一例外：项目热知识的编辑页**（`#hot-project-editor`，用户明确说"另外设计先不动"）
+        ⇒ 下面用 `:not()` 把它排除掉，它**继续用旧的上下堆叠**。
+     ══════════════════════════════════════════════════════════════════════ */
+  .panel { flex-direction: column; }
+
+  /* ── 例外：热知识编辑页**在窄屏下重构为"列表 + 滑出的选择器"** ──
+     ⭐⭐ 用户 2026-09-24：*"【返回项目列表按钮】固定在上方，下方打开页面时默认全屏展示
+     项目热知识列表。右侧留【选择知识】按钮，点击从右侧滑出知识列表包括筛选和批量操作按钮（覆盖），
+     右侧出现【热知识】按钮，点击收起知识列表。窄屏就不给知识列表的详情页功能了。"*
+
+     🔴🔴 **与"通用两级导航"的方向相反，别搞混**：
+     · 通用页（知识库/项目/主题…）：**左栏是主视图**，右栏（详情）从**右**滑入；
+     · **编辑页：右栏（项目热知识）是主视图**，左栏（选择知识）从**右**滑入。
+     ⇒ 所以编辑页**不复用** `.panel > .detail` 那套选择器，单独写。 */
+  #hot-project-editor.panel {
+    position: relative;
+    overflow: hidden;          /* ⚠️ 左栏滑出屏幕时不许撑出滚动条 */
+    flex-direction: column;
+    /* ⭐ **顶部给固定的「返回项目列表」留位。**
+       🔴 **高度要按那个按钮的真实高度算**（按钮是绝对定位的，会盖住内容）：
+          实测按钮 = `top:10px` + 高 **35px**（`padding:6px 14px` + `font-size:13px`）
+          ⇒ 底边在 45px ⇒ 留 **58px**（含余量）。
+       ⚠️ 我第一版按"高 29px"算成了 52px —— 后来按钮尺寸改成与
+          「打开当前会话的项目」同款（高 35px）⇒ **留白必须跟着改**
+          （⭐ 判据：**改悬浮控件的尺寸，就要重算它的占位留白**）。
+       ⚠️ 只加 `padding-top`、**不动 `inset`** —— 面板仍要盖满整块。 */
+    padding-top: 58px;
+  }
+  /* ⭐ **主视图 = 右栏（项目热知识列表）**，常显、占满。 */
+  #hot-project-editor > .detail {
+    flex: 1 1 auto;
+    min-height: 0;
+    border-right: none;
+  }
+  /* ⭐⭐ **左栏（选择知识）= 从右侧滑出的覆盖层**（`translateX(100%)` 藏在右边）。 */
+  #hot-project-editor > .side {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    max-width: none;
+    min-width: 0;
+    background: var(--bg);     /* ⚠️ 必须不透明，否则会透出下面的项目热知识列表 */
+    border-right: none;
+    transform: translateX(100%);
+    transition: transform .22s ease;
+    pointer-events: none;
+    /* 🔴🔴 **这里曾经写死 `padding-top: 58px`（"别盖住顶部的返回按钮"）—— 错了。**
+       因为**展开时返回按钮是隐藏的**（用户要求："展开知识列表的时候，
+       返回项目列表的按钮不要了"）⇒ 两者**互斥**，根本不会重叠。
+       而写死 58px 的后果就是用户看到的那一幕：
+       **滑出层顶部空出一大块**（"咋上面还有那么大的空占位啊，我无语了"）。
+       ⭐ 判据：**两个互斥的东西不需要互相留位** —— "留白"只在两者会同时出现时才需要。
+       ⚠️ 所以这里是 **0**，而"收起态要留白"由**面板**的 `padding-top` 负责（它才是常显的那个）。 */
+    padding-top: 0;
+  }
+  /* 🔴 **窄屏下把 `.side` 里那个「返回项目列表」藏掉** ——
+     窄屏已经有一个**固定的**（`#narrow-back-projects`，在面板层），
+     而原来那个在 `.side` 里 ⇒ 滑出时会**出现两个一模一样的按钮**
+     （截图里就是这样：上面一个悬浮的、下面一个大的）⇒ 必须藏掉其中一个。
+     ⭐ 判据：**同一个动作在同一个屏幕上只该有一个入口**（多出来的那个是重复，不是便利）。 */
+  #hot-project-editor > .side #hot-back-projects { display: none; }
+  /* ⭐ 展开态（**与通用页共用 `data-narrow-open` 这个属性名** ——
+     它是"这一页的覆盖层开着"的单一事实来源，不另造状态）。 */
+  #hot-project-editor[data-narrow-open='1'] > .side {
+    transform: translateX(0);
+    pointer-events: auto;
+  }
+  /* ⭐⭐ **窄屏专用的两个悬浮按钮**（「返回项目列表」+「选择知识/热知识」）。
+     🔴🔴 **必须显式写 `display`** —— 全局有一条兜底
+     `.narrow-editor-back, .narrow-editor-toggle { display: none }`（防宽屏下冒出来），
+     而本块若不设 `display`，**兜底会照样赢**（两者特异性相同、兜底在前但… 实测它就是赢）
+     ⇒ 按钮在窄屏下**也不显示**。
+     ⭐ 判据：**给一个元素设了"默认隐藏"，那么"该显示"的地方必须显式写 `display`**
+        ——「隐藏」与「显示」要成对出现，别指望"没写就恢复默认"。 */
+  .narrow-editor-back,
+  .narrow-editor-toggle {
+    display: block;
+    position: absolute;
+    top: 10px;
+    z-index: 8;                /* ⭐ 要**压过滑出的左栏**（它是 z-index:5），
+                                  否则左栏一滑出来，「热知识」按钮就被盖住 */
+    font: inherit;
+    font-size: 13px;
+    line-height: 1;
+    padding: 7px 12px;
+    cursor: pointer;
+  }
+  /* ⭐⭐ **「返回项目列表」= 与「打开当前会话的项目」同款几何、通栏、左右留边距**
+     （用户 2026-09-24 第二次修正：*"应该和项目列表的这个打开当前会话的项目的按钮
+     一个样式（高和宽还有圆角），就还是要留左右边距的啊。"*）。
+     🔴 **我第一版做成"贴边通栏"（`left/right: 0` + `border-radius: 0`）—— 被否。**
+     ⭐ **判据：对齐既有按钮 = 复刻它的【实测几何】，不是"看起来差不多"。**
+        实测那个按钮（`#hot-open-current`，430px 视口下）：
+        · `x = 26`、`宽 = 378` —— ⚠️ **这个 26 不是"10px 边距"**：
+          它是 `.panel`(padding 16) + `.filters`(padding 10) **两层容器**加起来的
+          ⇒ 只写 `left: 10px` 会宽出 32px（我第一版就是 410 vs 378）。
+        · `高 = 35` = `line-height 20.8px` + `padding 6px×2` + `border 1px×2`
+          ⇒ ⚠️ **行高必须跟着对齐**：共享规则里的 `line-height: 1` 会让它只有 31px。
+        · `圆角 8px`（= `button` 基础类的值）。
+     ⚠️ 它仍是 `position: absolute`（不占布局）——位置由 `.panel` 的 `padding-top` 留出来。 */
+  .narrow-editor-back {
+    left: 26px;
+    right: 26px;
+    border-radius: 8px;
+    padding: 6px 14px;
+    /* 🔴 **用 `inherit` 拿回"和别处按钮一样的行高"** ——
+       共享规则里为"胶囊形悬浮按钮"写了 `line-height: 1`，而基准按钮继承的是
+       body 的 `20.8px`。不对齐行高 ⇒ 高度差 4px（实测 31 vs 35）。 */
+    line-height: inherit;
+    /* ⚠️ 通栏时**居中文字**（`button` 默认就是居中，这里显式写一遍防止被别处影响）。 */
+    text-align: center;
+  }
+  /* ⭐⭐ **展开选择层时，不要「返回项目列表」**（用户 2026-09-24：
+     *"展开知识列表的时候，返回项目列表的按钮不要了"*）。
+     🔴 理由：那一刻用户在做的是"挑知识"这件事，主导航该让位
+        （而且滑出的层是全屏覆盖，返回按钮留着也会被它盖住/造成两层都像"主视图"）。
+     ⭐ 判据：**"谁在主视图"决定谁显示** —— 选择层滑出时，它才是主视图。 */
+  #hot-project-editor[data-narrow-open='1'] > .narrow-editor-back { display: none; }
+  /* ⭐⭐ **「选择知识」/「热知识」：悬浮在右侧、距底边约 1/3 屏高处**
+     （用户 2026-09-24：*"在距底边三分之一屏幕高度的位置去悬浮吧。"*）。
+     🔴 **为什么不放在顶部**：顶部那行被**通栏的「返回项目列表」**占满了，
+        悬浮按钮压上去会**两个按钮重叠**（实测过：悬浮的盖住通栏按钮的右半截）。
+        ⇒ 挪到**垂直方向的另一个位置**，两者彻底错开。
+     ⭐ 判据：**悬浮控件要避开"占满整行"的元素** —— 通栏元素没有"让位"的余地。
+     🔴🔴 **必须用 `position: fixed`（不是 `absolute`）** ——
+        用户说的是"距底边 1/3 **屏幕**高度"，而 **`bottom` 的参照是"包含块"**：
+        用 `absolute` 时它会相对 `.panel` 量，而面板顶部还有标签栏、总开关、子导航
+        （实测面板顶在 170px）⇒ `33vh` 实际落成"距**视口**底边 328px"（比 277 多 51px）。
+        ⭐ 判据：**"距屏幕某边多少"要用 `fixed`**（参照视口）；
+           `absolute` 只能表达"距父容器某边"。
+     ⚠️ `fixed` 的代价：它**不跟着标签切换自动隐藏** ⇒ 但它有 `display: none` 兜底
+        （全局那条）且在宽屏不显示，所以只在"窄屏 + 热知识页 + 编辑页可见"时才出现
+        —— 那三种条件同时成立时它本来就该在。
+     ⚠️ 形状仍是"贴屏幕右边、右直角"（与通用页那两个悬浮按钮同一套观感）。 */
+  .narrow-editor-toggle {
+    position: fixed;
+    top: auto;
+    bottom: 33vh;
+    right: 0;
+    padding: 7px 12px 7px 14px;
+    color: var(--fg);
+    background: color-mix(in srgb, var(--bg) 72%, transparent);
+    border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+    border-right: none;
+    border-radius: 10px 0 0 10px;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    box-shadow: -2px 2px 8px rgba(0, 0, 0, .12);
+  }
+
+  /* ── 通用：两栏两级导航（编辑页除外）──
+     🔴🔴 **选择器必须限定"真的是两栏的 `.panel`"** —— 用 `:has(> .side > .list)`
+     这样的判据太绕，**直接排除 `.hot-scroll`**：
+     「会话实时状态」「全局热知识」「项目热知识选择器」三页是
+     `.panel.hot-scroll`（它们**没有左右栏**，本身就是滚动的），
+     ⚠️ 而我的 `overflow: hidden` / `position: relative` 一旦命中它们
+     ⇒ **把 `.hot-scroll` 自己的 `overflow: auto` 覆盖掉 ⇒ 那几页滚不动**
+     （用户 2026-09-24 实测报的 bug："会话实时状态页和全局热知识的列表都无法滑动"）。
+     ⭐ 判据：**改 `.panel` 这种"基础类"时，先把它的全部实例列出来**
+     （实测本页共 **9 个** `.panel`，其中 **3 个是 `.hot-scroll`**、
+     1 个是编辑页 ⇒ **只有 5 个真的需要两级导航**）。
+     ⚠️ 同族教训（本项目已记过）：**删/改基础规则前先 grep 它的全部提权变体**。 */
+  .panel:not(#hot-project-editor, .hot-scroll) {
+    position: relative;      /* ⭐ 详情栏的定位基准 = 本面板 */
+    overflow: hidden;        /* ⚠️ 详情栏滑出屏幕时**不许撑出滚动条**
+                                （不加这行，"藏在右边"的那一栏会让页面能横向滚） */
+  }
+  .panel:not(#hot-project-editor, .hot-scroll) > .side {
+    flex: 1 1 auto; max-width: none; min-width: 0;
+    border-right: none;
+  }
+  .panel:not(#hot-project-editor, .hot-scroll) > .detail {
+    position: absolute;
+    inset: 0;                /* 占满整个面板 = 全屏覆盖 */
+    z-index: 2;              /* 盖在列表栏之上 */
+    background: var(--bg);   /* ⚠️ **必须不透明**：否则会透出下面的列表
+                                （本项目已记过同族坑：浮层没盖严就会"漏出内容"） */
+    /* 🔴 **滑入前的状态：移出屏幕右侧**。用 `100%`（不是固定 px）⇒ 任意宽度都对。 */
+    transform: translateX(100%);
+    transition: transform .22s ease;
+    /* ⚠️ 移出屏幕后**不许被点到**（否则看不见却能触发） */
+    pointer-events: none;
+    /* ⭐⭐ **顶部不再需要为悬浮按钮留白**（用户 2026-09-24 又把它俩挪到了
+       屏幕中部「距底边 1/3 屏高」处 ⇒ **顶部不再有东西压标题**）。
+       🔴 **留白必须跟着按钮走** —— 这是本块第三次改：
+          · 最初按钮在顶部 ⇒ 46px；· 目录按钮也排上来 ⇒ 76px；
+          · **现在两个都挪到屏幕中部 ⇒ 回到常规内边距**。
+       ⭐ 判据：**"留白"是为某个悬浮控件留的 —— 控件搬走就要把留白收回**，
+          否则会白空一块（本项目刚在编辑页栽过同一个坑：
+          "咋上面还有那么大的空占位啊"）。
+       ⚠️ 仍留 `padding-top`（与 `.detail` 基础规则的 18px 一致）——
+          详情标题不该顶到容器最上沿。 */
+    padding-top: 18px;
+  }
+  /* ⭐ 打开态：滑进来、可交互。由 JS 在"选中某条"时加、在"收起"时去。 */
+  .panel:not(#hot-project-editor, .hot-scroll)[data-narrow-open='1'] > .detail {
+    transform: translateX(0);
+    pointer-events: auto;
+  }
+
+  /* ⚠️ "减少动态效果"下关掉滑入过渡 —— 那条规则**放在文件末尾**既有的
+     `@media (prefers-reduced-motion: reduce)` 块里（同一条件不写两处）。 */
+
+  /* ⚠️ 「返回列表」与「展开目录」的样式**都已移到文件末尾的全局区** ——
+     🔴 它们必须在媒体查询**外面**，理由有两条：
+     ① 宽屏下没有 `display:none` 兜底 ⇒ 按钮会冒出来（我实测踩过）；
+     ② 🆕 两个按钮**共用同一条外观规则**（用户要求"样式统一"）⇒
+        而 `.narrow-back` 是全局规则，共用的那份自然也该在全局。
+     ⚠️ 媒体查询里**只留"窄屏 + 打开态才显示"那两条**（见文件末尾）。 */
+
+  /* ⚠️ **目录面板（`.toc-layer`）不用管** —— 它自己就是 `z-index: 20`，
+     远高于详情栏（2）与收起按钮（3），且**同处一个层叠上下文**（都在 `.panel` 里，
+     而 `.panel` 现在有 `position: relative` 但**没有 `z-index`** ⇒ 不新建上下文）
+     ⇒ 打开目录时会正确地盖在最上面。
+     🔴 我一度在这里写了一条 `z-index: 6`，那是**画蛇添足且会把层级降低**（20 → 6）——
+     已删。⭐ 判据：**改层级前先读既有的 `z-index` 是多少**，别凭"看起来该高一点"就加。 */
+}
+
+/* ── ⭐ 设置悬浮面板（决策 97 / §8.8）─────────────────────────────────── */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(0, 0, 0, .38);
+  /* 面板对齐右上角（齿轮下方），不是居中弹窗。 */
+  display: flex;
+  justify-content: flex-end;
+  align-items: flex-start;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * ⭐⭐⭐ 设置页（决策 169）——从**悬浮卡片**改成**顶层视图** + 4 个子页
+ *
+ * 🔴 **用户 2026-09-28 的三条硬要求**（照它们写样式）：
+ *   ① *"点击设置后，还是开导航页面吧，不要再按现在面板的形式了"*
+ *      ⇒ 它是 `.panel`（与知识库/项目/热知识同构），**不是浮层**；
+ *   ② *"描述应该在设置开关或旋钮下面以描述的灰色小字样式统一"*
+ *      ⇒ 每个设置项 = **一行控件 + 下面一段灰色小字**（`.set-desc`）；
+ *   ③ *"配色只用黑白"* + *"描述文字不要出现 icon"*
+ *      ⇒ 只用 `--fg` / `--fg-dim` / `--border` / `--bg-2`，**且描述里不放图标**。
+ *
+ * ⚠️ 旧的 `.settings-card` / `.settings-head` / `.settings-body` / `.settings-foot`
+ *    已随悬浮卡片一起删除（**不保留死样式**——本项目"两份同类实现"的坑）。
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/* 与「归档」「热知识」同构：` .panel` 默认是 `display:flex`（row），
+   不写这条子导航栏会和子页并排。 */
+#panel-settings { flex-direction: column; }
+
+.set-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 14px 20px 0;
+  flex-wrap: wrap;
+}
+.set-head h2 { margin: 0; font-size: 15px; font-weight: 650; }
+/* ⚠️ 这是**动态状态**（当前生效值 / 热重载策略 / 配置文件路径），不是描述文字。
+ * ⭐⭐ 用户 2026-09-28：*"设置旁边描述和配置文件放到一行"*
+ *    ⇒ 状态文与配置文件路径**合成一行**（不再分两行；见 app.js 那里的拼法）。
+ * ⚠️ `pre-wrap` 去掉：留换行符会让它在窄屏外也断行（用户要的就是**一行**）。 */
+.set-status { font-size: 12px; line-height: 1.6; }
+/* 配置文件路径与描述之间的间隔（同一行内的分隔） */
+.set-status .sep { margin: 0 10px; opacity: .5; }
+
+/* ⭐⭐ **勾选 / 单选的选中填充 = 黑**（用户 2026-09-28 要求）。
+ *
+ * 🔴 **为什么必须显式写**：浏览器对 `checkbox` / `radio` 的选中态默认用**系统强调色**
+ *    （本机是蓝色）—— 与本项目"**只用黑白**"的配色不符（用户原话：*"配色只用黑白"*
+ *    以及 *"所有开关包括选项的选中状态的填充都改成黑色"*）。
+ *    ⭐ `accent-color` 是**唯一**能给原生控件换选中色的属性 ——
+ *    比自绘控件省掉一大堆代码，且**天然保留键盘与无障碍行为**。
+ * ⚠️ 用 `--accent`（= `--dsw-alias-label-primary`：亮色 `#0f1115`、暗色 `#f9fafb`）
+ *    ⇒ **跟随主题自动反转**，不是写死的黑（暗色主题下填白才看得见）。
+ * ⚠️ 作用域限在设置页内（`.set-scroll`），不动其它页已有的控件样式。 */
+.set-scroll input[type="checkbox"],
+.set-scroll input[type="radio"] {
+  accent-color: var(--accent);
+}
+
+/* 设置页的子页容器：**自己滚**（与 `.subpanel` 的既有约定一致）。 */
+.set-panel { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+.set-scroll { flex: 1 1 auto; overflow: auto; padding: 14px 20px 32px; }
+
+/* ⭐⭐ **内容限宽**（决策 169；**宽屏截图实测后补的**）。
+ * 🔴 **为什么必须限**：`.set-row` 是"左标签 + 右控件"的两端对齐，
+ *    不限宽时在 1280px 屏上两端会被拉到**相距上千像素**
+ *    ⇒ 实测截图里"严格 / 宽松"**一边一个**、下拉框贴到屏幕最右边，**中间全是空白**。
+ *    限宽后标签与控件保持"一眼能对应上"的距离。
+ * ⚠️ 用 `max-width` 而不是 `width`：窄屏时自然收缩（媒体查询里那条仍生效）。 */
+.set-scroll > * { max-width: 46em; }
+
+/* ── 分节 ── */
+.set-section { margin: 0 0 18px; }
+.set-section-title {
+  margin: 0 0 8px;
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--fg-dim);
+  letter-spacing: .02em;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* ── ⭐ 一个设置项：控件行 + 下方灰色描述（用户要求的核心形态）── */
+.set-item { padding: 9px 0; }
+.set-item + .set-item { border-top: 1px solid var(--border-l1, var(--border)); }
+
+/* 控件行：左标签、右控件（数值/下拉） */
+.set-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+}
+.set-row > strong { font-weight: 650; }
+/* 勾选/单选那种"整行可点"的：不两端对齐，左对齐排 */
+.set-click { justify-content: flex-start; cursor: pointer; }
+.set-click input { flex: 0 0 auto; }
+
+/* ⭐⭐ **一组互斥选项**（如"严格 / 宽松"）：**左对齐、彼此挨着**。
+ * 🔴 实测踩到：它们若直接用 `.set-row`（`justify-content: space-between`），
+ *    在宽屏下会被**拉到行的两端**（截图里"严格"在左、"宽松"在右）
+ *    —— 那看起来像"两个不相干的东西"，完全不是"一组单选"。
+ * ⚠️ 所以单给一个类：**不继承两端对齐**。 */
+.set-choices { display: flex; gap: 22px; flex-wrap: wrap; }
+
+/* 单个可点的选项（radio + 文字） */
+.set-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.set-choice input { flex: 0 0 auto; }
+
+/* 左标签（`<label for>` 绑控件）：点它也能聚焦控件 */
+.set-label { flex: 1 1 auto; min-width: 0; }
+
+/* 数值输入：统一宽度，不让它随内容跳动 */
+.set-row input[type="number"] { width: 9em; flex: 0 0 auto; }
+/* 描述里内嵌的小数字（抑制门阈值）——**故意更窄**，因为它跟在一句话中间 */
+.inline-num { width: 5.5em !important; margin: 0 2px; vertical-align: middle; }
+
+/* 下拉框：给足宽度但不超过容器 */
+.set-row select { min-width: 18em; max-width: 60%; flex: 0 1 auto; }
+
+/* ⭐⭐ 描述：**灰色小字、在控件下面**（用户 2026-09-28 明确要求）。
+   🔴 **文字里不放图标** —— 所以样式只管字号/颜色/行高。 */
+.set-desc {
+  margin: 5px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--fg-dim);
+  max-width: 62em;
+}
+/* 小节级的说明（不是某一项的）*/
+.set-note {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--fg-dim);
+  max-width: 62em;
+}
+
+/* 数值网格：两列自适应，窄屏自动降成单列 */
+.set-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(17em, 1fr));
+  gap: 0 20px;
+}
+/* ⚠️ 网格里的项**不画分隔线**（那会让两列的线错位） */
+.set-grid .set-item + .set-item { border-top: none; }
+/* ⭐⭐ 网格里的"标签 + 输入框"**不要两端对齐**（决策 169 宽屏实测）：
+ * 🔴 `space-between` 在 17em 宽的格子里会把标签顶到左、输入框顶到右
+ *    ⇒ 截图里"最多注入条数"与它的输入框之间空出一大段，**看着不像一对**。
+ *    ⇒ 改成**紧跟**（标签左、输入框在其右侧固定距离）。 */
+.set-grid .set-row { justify-content: flex-start; gap: 10px; }
+.set-grid .set-label { flex: 0 1 auto; }
+.set-grid .set-row input[type="number"] { width: 7em; }
+
+/* ── 每个子页自己的保存区 ── */
+.set-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 20px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+/* ⭐⭐ **版块内的保存区**（2026-10-07：沉淀页拆成按版块保存）。
+ * 🔴 与页面级 `.set-foot` 的区别：它**紧跟在某一个小节的内容后面**，
+ *    所以上边距更小、分隔线更淡 —— 否则一节里有 2~3 个 `.set-item` 时，
+ *    这条线和节与节之间的线**一样重**，看起来像"又开了一节"（实测截图踩到）。
+ * ⚠️ 它是 `.set-foot` 的**修饰类**（同时带两个类），不另造一套 —— 本项目铁律"实现只留一份"。 */
+.set-foot-inline {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+/* 版块内的保存按钮**小一号**：一屏里会出现 4 个，等大按钮会喧宾夺主。 */
+.set-foot-inline .set-save { font-size: 12.5px; padding: 4px 12px; }
+.set-msg { font-size: 12.5px; }
+
+/* ══════════════════════════════════════════════════════════════════════
+   【提示词】子页（2026-09-29 新增）
+   ⚠️ 全部走既有设计令牌（`--fg` / `--fg-dim` / `--border` / `--accent`），
+      不写死颜色 —— 暗色主题下要自动适配（本项目样式约定）。
+   ====================================================================== */
+
+/* ⭐⭐ 分组说明（2026-10-12 新增）——"这组是给谁看的、什么时候看"。
+   🔴 为什么需要它：分组轴换成"谁看"之后，**光有组名仍不够**
+     （"每轮常驻"能猜，"主动召回"就得解释）。这句由服务端回（`prompt-catalog.ts`）。
+   ⚠️ 与 `.set-desc` 的区别：它紧跟组标题、说明**整组**，所以稍强调一点、并留底部间距。 */
+.prompt-group-about {
+  margin: 2px 0 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--fg-dim);
+}
+
+/* ⭐⭐ 合并卡的「附：参数表 / 返回格式」（2026-10-12 新增）。
+   🔴 为什么折叠：一个工具的这三部分合成一张卡后，展开全部会让列表变很长；
+     而参数表通常只有 2~3 行，**折叠着也不影响扫读**。 */
+.prompt-parts {
+  margin: 8px 0 6px;
+  border-top: 1px dashed var(--border);
+  padding-top: 6px;
+}
+.prompt-parts > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--fg-dim);
+  /* ⚠️ 不要用 list-style:none 把三角去掉 —— 那是"这里能展开"的唯一提示 */
+}
+.prompt-part-label {
+  margin: 8px 0 4px;
+  font-size: 12px;
+  color: var(--fg);
+}
+/* 随行正文比主正文更矮、更淡（它是契约文本，不是给人编辑的说明） */
+.prompt-part-pre {
+  font-size: 12px;
+  max-height: 220px;
+}
+
+/* 一条提示词的卡片 */
+.prompt-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 0 0 10px;
+}
+.prompt-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+/* 标记（已改过 / 只读）：低调，不与正文争视线 */
+.prompt-tag {
+  font-size: 11px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--fg-dim);
+}
+/* "已改过"要一眼看得出来 —— 用强调色边框而非填充（保持黑白体系） */
+.prompt-tag-changed {
+  border-color: var(--accent);
+  color: var(--fg);
+}
+/* ⭐⭐ 写回三态标签（2026-10-12 新增）。
+   🔴 为什么必须显式区分：写回**保留覆盖项**（用户裁定）⇒ 覆盖值会一直挡着源码。
+      不显示状态的话，用户看不出写回做过没有，也看不出"改了源码怎么没生效"。
+   ⭐ "已写回"用**虚线**边框：它是好的终态，但不像"已改过"那样需要吸引注意。 */
+.prompt-tag-written {
+  border-style: dashed;
+  color: var(--fg-dim);
+}
+/* "已改未写回"用实心强调：这是**需要注意**的状态（编辑还只在库里）。 */
+.prompt-tag-edited {
+  border-color: var(--accent);
+  border-style: dashed;
+  color: var(--fg);
+}
+/* 「写回源码」按钮：与"恢复默认"同级，但语义不同 ⇒ 轻微区分（不抢 primary）。 */
+.prompt-writeback {
+  border-color: var(--accent);
+}
+.prompt-purpose {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--fg);
+}
+/* 六件事里的后四件：**两列网格**（标签列宽由最长标签决定 ⇒ 值列必然对齐）。
+   🔴 不用 `textContent` + `pre-wrap` 拼行 —— 标签长短不齐会让值列起点各异
+      （本项目第六十七批踩过：图标在时它充当了固定宽度前导，把这个毛病盖住了）。 */
+.prompt-meta {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 3px 10px;
+  margin: 7px 0 0;
+  font-size: 12px;
+}
+.prompt-meta-label { color: var(--fg-dim); }
+/* 破缓存 / 不可改：**必须醒目**（这是用户最容易忽略、代价最大的一条） */
+.prompt-warn { color: var(--fg); font-weight: 600; }
+.prompt-ok { color: var(--fg-dim); }
+
+.prompt-acts {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 9px;
+}
+.prompt-btn {
+  font: inherit;
+  font-size: 12.5px;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+}
+.prompt-btn:hover { border-color: var(--accent); }
+.prompt-editor { margin-top: 10px; }
+.prompt-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.6;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  /* ⚠️ 关掉缩放抓手：它默认画在右下角，会与下面的按钮视觉打架 */
+  resize: vertical;
+}
+.prompt-pre {
+  margin: 6px 0 0;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.6;
+  /* 🔴 长串必须能折行（本项目踩过：`white-space: pre` 拒折行 ⇒ 撑爆容器） */
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 22em;
+  overflow: auto;
+}
+.prompt-save { margin-top: 8px; }
+
+/* ══════════════════════════════════════════════════════════════════════
+   【提示词】页的**宽屏两栏**布局（2026-09-29 新增）
+
+   ⭐ 用户要求：宽屏时"左边栏列表 / 右边栏详情"（像知识库页那样），
+      但**左栏要给足宽度**（每块含完整六字段，不学知识库那么紧凑）；
+      **窄屏保持原设计**（三区堆叠 + 卡片就地展开）。
+   🔴 **实现方式**：同一份 DOM，只在宽屏把它变成 flex 两行两栏；
+      窄屏把 `.prompt-detail` 整个隐藏、`.prompt-side-scroll` 取消滚动限制。
+      ⚠️ 不用 JS 造两套 DOM —— 那会让"改一处漏一处"变成常态。
+   ====================================================================== */
+
+/* 宽屏（默认）：两栏 */
+.prompt-split {
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* 左栏：条目列表（**给足宽度** —— 用户要求不紧凑） */
+.prompt-side {
+  flex: 0 0 40%;
+  max-width: 40%;
+  min-width: 330px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--border);
+}
+.prompt-side-head {
+  flex: 0 0 auto;
+  padding: 12px 14px 6px;
+  border-bottom: 1px solid var(--border);
+}
+/* ⭐ 「跳到」下拉要**宽**（用户要从这里选任意一条，标题较长）。
+   🔴 默认 `.set-row` 是 `space-between` ⇒ 标签与控件各占两端，下拉被挤窄、
+      标题一大就看不全（截图实测）。⇒ 让控件吃掉剩余宽度。 */
+.prompt-side-head .set-row { justify-content: flex-start; }
+.prompt-side-head .set-row select { flex: 1 1 auto; min-width: 0; }
+.prompt-side-scroll {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 12px 14px 28px;
+}
+
+/* 右栏：详情 / 编辑（**独占剩余宽度、高度撑满** —— 用户要求"足够高度"） */
+.prompt-detail {
+  flex: 1 1 auto;
+  min-width: 0;
+  /* ⭐⭐⭐ **三段式：头（固定）｜正文（滚动）｜底（固定）**
+     —— 用户要求："编辑、恢复默认、退回历史版本应该在底部占位的，不跟随滚动的，
+        而提示词部分是在屏幕区域内滚动才对。"
+     🔴 所以**滚动条只属于 `.pd-body`**，右侧栏自己不滚（`overflow: hidden`）。
+     用 flex 列布局 + 中间 `flex:1; overflow:auto` 实现，不需要 `position: fixed`
+     （那样要自己算高度，窗口一缩放就会盖住别的东西）。 */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+}
+.prompt-detail-inner {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
+  max-width: none;
+}
+.prompt-detail .empty { color: var(--fg-dim); font-size: 13px; padding: 14px 20px; }
+.prompt-detail .prompt-textarea { min-height: 22em; }
+.prompt-detail .prompt-pre { max-height: none; }
+
+/* 头 / 体 / 底 三段 */
+.pd-head {
+  flex: 0 0 auto;
+  padding: 14px 20px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.pd-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 20px 16px;
+}
+.pd-foot {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px 20px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-1, transparent);
+}
+
+/* 列表块：可点（宽屏=选中，窄屏=展开）*/
+.prompt-card-clickable { cursor: pointer; }
+.prompt-card-clickable:hover { border-color: var(--accent); }
+/* 宽屏下"当前选中"要一眼看出（左边一条竖线 + 边框提亮）*/
+.prompt-card-active {
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+/* 窄屏（≤900px）：**保持原设计** —— 单列、卡片就地展开、右栏不出现 */
+@media (max-width: 900px) {
+  .prompt-split {
+    display: block;
+    overflow: auto;
+  }
+  .prompt-side {
+    flex: none;
+    max-width: none;
+    min-width: 0;
+    border-right: 0;
+    display: block;
+  }
+  .prompt-side-scroll { overflow: visible; padding: 0; }
+  .prompt-side-head { padding: 12px 14px 6px; }
+  /* 🔴 窄屏**整块隐藏右栏**（那一栏在窄屏没有意义，且它的内容会重复）。 */
+  .prompt-detail { display: none; }
+}
+
+/* ⭐⭐ 历史版本区（"备份回退"的入口）—— 低调但看得见 */
+.prompt-history {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+.prompt-history-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 5px 0;
+}
+.prompt-history-time {
+  font-size: 12px;
+  color: var(--fg-dim);
+  /* ⚠️ 等宽字体让时间戳对齐（否则每行按钮起点会因为月/日位数不同而参差） */
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   ⭐⭐⭐ 历史版本**弹窗**（用户 2026-09-29 要求："退回历史版本也应该有个按钮入口，
+   不要全展开。点击后弹窗显示可选历史版本，应该有预览功能。"）
+   🔴 用原生 `<dialog>` + `showModal()` —— 自带焦点陷阱 / Esc 关闭 / `::backdrop`，
+      不必自造遮罩（自造的要额外处理键盘可达性与层级）。
+   ====================================================================== */
+.prompt-dlg {
+  /* ⚠️ 原生 dialog 默认有 border/padding/max-width，这里统一按本项目风格收口 */
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0;
+  background: var(--bg-0, Canvas);
+  color: var(--fg, CanvasText);
+  max-width: min(1040px, 92vw);
+  width: 92vw;
+  max-height: 84vh;
+  /* 三段式：头 / 体（列表+预览）/ 底 —— 体内部各自滚动 */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+/* 🔴🔴 **关闭时必须真的消失** —— 这是本次修的一个真 bug：
+   给 `.prompt-dlg` 写了 `display: flex` ⇒ **覆盖掉原生 `<dialog>` 的
+   `display: none`**（UA 样式表里 `dialog:not([open]) { display: none }`，
+   而类选择器的优先级高于它）⇒ `dlg.close()` 之后 `open` 变 false，
+   但元素**仍然可见**（实测 1040×201 留在页面上），且**没有任何按钮能关它**
+   —— 用户看到的就是"关不掉的残留窗口"，而且每开一次多一个。
+   ⭐ 判据：**给原生元素（dialog/details…）写 `display` 时，必须同时处理它的
+   "未打开"状态** —— 原生控件靠属性/伪类控制显隐，用类选择器覆盖 display
+   会把那套机制废掉。 */
+dialog.prompt-dlg:not([open]) { display: none; }
+.prompt-dlg::backdrop { background: rgb(0 0 0 / 45%); }
+.prompt-dlg-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.prompt-dlg-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  gap: 0;
+}
+/* 左：版本列表（定宽、自己滚） */
+.prompt-dlg-list {
+  /* ⚠️ **要放得下整条时间戳**（`YYYY-MM-DDTHH-MM-SS-mmmZ` 约 24 字符）——
+      220px 会让它折成两三行（截图实测，很难读）。
+      ⇒ 按等宽字号（12px，约 7.2px/字符）算，24 字符 ≈ 173px + 内边距 ⇒ 取 260px。 */
+  flex: 0 0 260px;
+  max-width: 260px;
+  overflow-y: auto;
+  /* ⚠️ **不要在列表里出现横向滚动条**（截图实测有）——
+      时间戳已 `nowrap`，宽度按它算够了；万一还差一点，宁可让按钮内部裁掉，
+      也不要给整栏加一条横向滚动条（那会带出第二条滚动轴，很难看）。 */
+  overflow-x: hidden;
+  padding: 10px;
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.prompt-dlg-item {
+  text-align: left;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  /* ⚠️ 时间戳不许折行（折了就没法快速扫读） */
+  white-space: nowrap;
+  /* 宽度吃满列表栏（否则按钮宽度随文字长短不齐） */
+  width: 100%;
+}
+.prompt-dlg-item.active {
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+/* 右：预览（自己滚 —— 长正文不能把弹窗撑爆） */
+.prompt-dlg-preview {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: auto;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+}
+/* ⭐ 预览标题条（说明"这是哪一版 · 多少字符"）—— 固定不随正文滚 */
+.prompt-dlg-preview-bar {
+  flex: 0 0 auto;
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.prompt-dlg-pre { margin: 0; max-height: none; }
+/* 🔴 **预览区要铺满右边那一栏的高度** —— 否则短文本时下面是一大片空白
+   （截图实测：只显示一行「历史版-A」，右边整块空着，看着像坏了）。
+   ⚠️ 用 `min-height: 100%` 而不是给 dialog 定高：内容长时它照样长（外层滚动）。 */
+.prompt-dlg-pre {
+  min-height: 100%;
+  box-sizing: border-box;
+}
+.prompt-dlg-foot {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+}
+
+/* 窄屏：弹窗里的两栏改上下（220px 的列表会挤没预览区） */
+@media (max-width: 900px) {
+  .prompt-dlg { width: 96vw; max-height: 88vh; }
+  .prompt-dlg-body { flex-direction: column; }
+  .prompt-dlg-list {
+    flex: 0 0 auto;
+    max-width: none;
+    max-height: 24vh;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+}
+
+/* 窄屏：说明表改单列（两列在窄屏会把值挤成一列一个字） */
+@media (max-width: 900px) {
+  .prompt-meta { grid-template-columns: 1fr; gap: 1px; }
+  .prompt-meta-label { margin-top: 4px; }
+}
+
+/* 窄屏：控件行改为竖排（标签在上、控件在下），否则数字框会被挤 */
+@media (max-width: 900px) {
+  .set-head { padding: 12px 14px 0; }
+  .set-scroll { padding: 12px 14px 28px; }
+  .set-row { flex-wrap: wrap; }
+  .set-row select { min-width: 0; max-width: 100%; width: 100%; }
+  .set-row input[type="number"] { width: 100%; }
+  .set-grid { grid-template-columns: 1fr; }
+}
+
+.icon-btn {
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-dim);
+  cursor: pointer;
+}
+.icon-btn:hover { color: var(--fg); border-color: var(--border); }
+
+/* ⭐⭐ 主动注入（设计文档 §10.1）：勾选行与参数网格。
+   ⚠️ 用 `check-row` 而**不是复用 `radio-row`**：后者的名字与语义是"单选"，
+      这里是复选 —— 名字对不上会让人以为它们是一组互斥选项。 */
+/* 参数网格：窄屏自动降成单列（本插件的面板宽度有限）。 */
+.note { font-size: 12px; line-height: 1.55; margin: 8px 0 0; }
+
+/* ⭐⭐ 备份详情区（决策 135）——**跟着 git 开关展开**。
+   ⚠️ 里面的每一行都来自服务端真实返回，不做本地假进度。 */
+.backup-detail {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border-left: 2px solid var(--border);
+  background: var(--bg-2);
+  border-radius: 0 6px 6px 0;
+}
+.backup-steps { display: flex; flex-direction: column; gap: 3px; }
+.backup-step { font-size: 12px; line-height: 1.5; }
+.backup-step.ok { color: var(--fg); }
+.backup-step.bad { color: var(--danger, #c0392b); font-weight: 600; }
+.backup-info { font-size: 12px; line-height: 1.6; margin: 6px 0 0; }
+/* ⚠️ 尊重"减少动态效果"偏好：本插件不用动画表示进度，只做静态状态。 */
+@media (prefers-reduced-motion: reduce) {
+  .backup-detail { transition: none; }
+  /* ⭐ 窄屏"详情栏从右侧滑入"的过渡也一并关掉（用户 2026-09-24 的两级导航）——
+     此时它**直接出现/消失**，功能不变，只是没有位移动画。
+     ⚠️ 只关过渡，**不动 `transform`**（否则详情栏会一直摊在那儿，盖住列表）。 */
+  .panel:not(#hot-project-editor, .hot-scroll) > .detail { transition: none; }
+}
+
+/* 🔴 **这里曾有一条 `.primary { … padding: 6px 15px; border-radius: 7px }`**
+ *    （2026-09-18 删除）。它是**类选择器**、又在文件**末尾**，
+ *    于是**覆盖了前面 `button` 的基准样式**——表现为"我改了按钮样式但完全没生效"
+ *    （实测踩到：计算样式一直是 7px / 6px 15px，而不是新写的 8px / 6px 14px）。
+ *    ⇒ ⭐ **按钮样式只留一处**（`button` / `button.primary` / `button.danger`），
+ *      不要再加裸 `.primary`——同优先级下**后者胜**，很难排查。
+ */
+
+/* ⭐⭐ 英文召回索引的「检查并补全」（用户 2026-09-26 要求）。
+ * ⚠️ **不新增按钮样式** —— 复用既有 `button` 基准（见上面那条注释：
+ *    "按钮样式只留一处"，裸类选择器会压过基准样式、很难排查）。
+ * 这里只加**布局**与**明细区**的样式。 */
+.idx-check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+  font-size: 13px;
+}
+
+.idx-detail {
+  margin-top: 8px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-soft, rgba(127, 127, 127, 0.06));
+  font-size: 12.5px;
+  line-height: 1.75;
+  color: var(--fg-dim, inherit);
+}
+
+/* ⭐⭐ 体检明细的**三列网格**（决策 170 补；用户 2026-09-28 复报"没有对齐"）。
+ *
+ * 🔴🔴 **为什么必须用网格、不能靠 `pre-wrap` 拼文本**：
+ *    原来是 `textContent = lines.join('\n')` + `white-space: pre-wrap`，每行形如
+ *    `标签：值` —— 而**标签长短不齐** ⇒ 每行的"值"起点各不相同 ⇒ **看起来全都没对齐**。
+ *    ⚠️ 图标（`✅`/`🔴`）在时它**顺便充当了一个固定宽度的前导**，把这个毛病盖住了；
+ *    **去掉图标之后就暴露出来**（这正是用户看到的现象）。
+ *    ⭐ 判据：**"对齐"要靠布局（列）保证，不能靠字符凑**。
+ *
+ * ⚠️ `max-content` 让**标签列按最长标签定宽** ⇒ 所有行共用同一条值列起点；
+ *    `1fr` 给值列，`max-content` 给右侧注记（"有问题"/"库里 N"）——
+ *    三列在**所有行之间**对齐（grid 的特性，不是每行独立算的）。 */
+.idx-rows {
+  display: grid;
+  grid-template-columns: max-content max-content 1fr;
+  column-gap: 14px;
+  row-gap: 1px;
+  align-items: baseline;
+}
+/* 值列：数字用等宽数字宽，避免 `1` 与 `313` 宽度不同导致右边界抖 */
+.idx-v { font-variant-numeric: tabular-nums; }
+/* 右侧注记：异常项加重（⚠️ 不用颜色，只加重 —— 本项目只有黑白） */
+.idx-n { font-size: 12px; }
+.idx-n.idx-bad { font-weight: 650; color: var(--fg); }
+
+/* 问题清单（若有）：与网格分开，避免被当成一行 */
+.idx-problems { margin: 6px 0 0; font-size: 12px; }
+
+/* 🔴 必须在最后（坑 #36）：类选择器 `display:*` 会压过 UA 的 `[hidden]{display:none}`，
+   导致 `el.hidden = true` 视觉无效（表现为"标签切不掉"）。 */
+[hidden] { display: none !important; }
+
+/* ── ⭐⭐ 窄屏的悬浮按钮组（「返回列表」+「展开目录」）──
+   🔴🔴 **两个按钮共用同一条外观规则**（用户 2026-09-24：
+     *"窄屏详情页的【返回列表】和【展开目录】按钮应该样式统一。
+     且希望右边不要圆角和边框，贴到屏幕右边，像是从屏幕长出来的一样。"*）
+
+   ⭐ **统一的做法是"共用一条规则"，不是"两边各抄一份相同的值"** ——
+     后者迟早会漂移（本项目铁律：**实现只留一份**）。
+   🔴 **两个按钮在 DOM 里是分开的**：
+     · `.narrow-back` 是 JS 插在 `.panel` 下的（详情栏的兄弟）；
+     · `.toc-btn` 是 `attachToc()` 插在 `.side` 下的。
+     ⇒ 所以这里用**并列选择器**把它们拉到同一套外观上。
+
+   ⭐ **"从屏幕长出来"的形状**（用户原话）：
+     · **右边不留圆角**（`border-radius: 10px 0 0 10px`）—— 右边缘是屏幕边，
+       圆角会露出"这是一块浮起来的东西"；
+     · **右边不要边框**（`border-right: none`）；
+     · **贴到屏幕右边**（`right: 0`）—— 不是"离边 10px 的悬浮物"。
+     ⚠️ 但**左侧仍留圆角**：左边缘是"长出来的根"，直角会显得像被切断。
+
+   🔴🔴 **整组规则放在媒体查询里**（窄屏才生效）——
+     我第一版把它写成全局的，那样会**误伤宽屏**：
+     `.toc-btn` 在宽屏下是**竖排在左栏边缘**的（`writing-mode: vertical`、贴左栏右边线），
+     而共享规则里的 `right:0 / border-right:none / display:none` 会把它
+     **挪到屏幕最右、抹掉右边框、并隐藏** ⇒ 宽屏的目录按钮直接坏掉。
+     ⭐ 判据：**并列选择器里只要有一个成员"只在某种条件下适用"，
+       整组就该跟着那个条件**（否则另一个成员会被无关的条件改造）。
+     ⚠️ 唯一的全局例外是下面那条 `display:none` —— 见它的注释。 */
+@media (max-width: 900px) {
+  .narrow-back,
+  .panel:not(#hot-project-editor, .hot-scroll) > .side > .toc-btn {
+  position: absolute;
+  /* ⭐ **贴到屏幕右边**（不是 right:10px 那种"悬浮物"） */
+  right: 0;
+  /* ⭐ 高度与内边距**两个按钮一致**（`.toc-btn` 的基础规则里是竖排的，
+     这里要显式盖掉 `writing-mode` 等） */
+  padding: 7px 12px 7px 14px;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--fg);
+  /* ⭐ **半透明**（用户点名要的）：底色按不透明度给 */
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+  /* ⭐ 边框：**只留左、上、下三边**（右边贴屏幕 ⇒ 不要边框） */
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-right: none;
+  /* ⭐ 形状：**左边圆角、右边直角** —— "从屏幕长出来" */
+  border-radius: 10px 0 0 10px;
+  cursor: pointer;
+  /* ⭐ 毛玻璃：内容从下面滚过时**文字仍然清楚**（纯半透明会糊成一片） */
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  /* ⚠️ 阴影**只往左下投**，右边不留 —— 否则会在贴边处露出一条阴影缝 */
+  box-shadow: -2px 2px 8px rgba(0, 0, 0, .12);
+  /* ⚠️ **默认隐藏**：只有"窄屏 + 详情打开"才显示（见本块末尾那两条）。
+     也顺便兜住"窗口从窄变宽"的情况 —— 那时 JS 会去掉打开态属性，
+     按钮随之消失，不需要 JS 另外删它。 */
+  display: none;
+  }
+  .narrow-back:hover,
+  .panel:not(#hot-project-editor, .hot-scroll) > .side > .toc-btn:hover {
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+  }
+
+  /* ⭐⭐ **两个按钮都挪到「距屏幕底边 1/3 屏高」处**（用户 2026-09-24：
+     *"窄屏状态下，知识库详情页，返回列表和展开目录按钮也放到距底边三分之一屏幕高度的位置吧。"*）。
+
+     🔴🔴 **必须用 `position: fixed`** —— 用户说的是"距**屏幕**底边"，
+     而 `bottom` 的参照是**包含块**：这两个按钮分别挂在 `.panel` 与 `.side` 里，
+     而面板顶还有标签栏（实测面板顶在 170px 附近）⇒ 用 `absolute` 会**偏一截**
+     （编辑页那个按钮实测偏了 51px）。⭐ 判据：**"距屏幕某边"用 `fixed`**。
+
+     ⚠️ **两个按钮要竖排错开**（它们都在右侧、若同高会**叠在一起**）：
+     · 「返回列表」在上、「展开目录」在它下方 38px；
+     · **整体以 1/3 屏高为基准**：目录按钮落在 33vh，返回按钮在它上方 38px。
+     ⭐ 顺序与原来一致（返回在上），只是整体挪到了屏幕中部右侧。 */
+  .narrow-back,
+  .panel:not(#hot-project-editor, .hot-scroll) > .side > .toc-btn {
+    position: fixed;
+    top: auto;
+    bottom: 33vh;
+    right: 0;
+  }
+  /* ⭐ 「返回列表」在目录按钮**上方 38px**（一个按钮高 29 + 间距 9）。 */
+  .narrow-back { bottom: calc(33vh + 38px); z-index: 4; }
+  .panel:not(#hot-project-editor, .hot-scroll) > .side > .toc-btn {
+    /* ⭐⭐ **必须压过目录面板本身**（用户 2026-09-24：
+       *"目录在窄屏状态下展开时，除了跳转收起，也还是要保留【收起目录】按钮的"*）。
+       🔴 目录面板 `.toc-layer` 是 `z-index: 20`，而 `.side` 里那个按钮若层级不够
+          ⇒ **展开后按钮被面板盖住、点不到** ⇒ 用户就"只能靠点目录项收起"。
+       ⚠️ 宽屏下本来就是 30（基础规则里写着"必须在 `.toc-layer`(20) 之上"）——
+          我窄屏这版一度写成 5，**把它压到了面板下面**（等于丢掉一个入口）。
+       ⭐ 判据：**"这个按钮在面板展开时还要不要用"决定它的层级** ——
+          要 ⇒ 必须 > 20；不要 ⇒ 才会小于 20。 */
+    z-index: 30;
+    /* ⚠️ `.toc-btn` 的基础规则里有竖排相关的属性，这里全部盖掉。 */
+    left: auto;
+    transform: none;
+    writing-mode: horizontal-tb;
+  }
+  /* ⭐ **只在"窄屏 + 通用两栏页 + 详情栏已滑入"时显示**（编辑页不在其列）。
+     ⚠️ 与 JS 的 `isNarrow()`（同为 900px）**是两个必须一致的数字**，改一处要改两处。 */
+  .panel:not(#hot-project-editor, .hot-scroll)[data-narrow-open='1'] > .narrow-back { display: flex; }
+  /* ⭐ 目录按钮**跟着面板打开态显隐**（用户要求"只有展开详情页时才显示"）——
+     它挂在 `.side` 上、不在 `.detail` 里，所以这里要单独写一条。 */
+  .panel:not(#hot-project-editor, .hot-scroll)[data-narrow-open='1'] > .side > .toc-btn { display: block; }
+}
+
+/* ⚠️⚠️ **全局兜底：`.narrow-back` 在任何情况下都不该在宽屏出现** ——
+   上面那组规则整块在媒体查询里 ⇒ **宽屏下它没有任何 `display` 声明**，
+   会退回 `display` 的默认值 ⇒ **按钮冒出来**（实测踩过）。
+   ⭐ 所以这一条必须留在**媒体查询外面**。
+   ⚠️ 注意**不要**给 `.toc-btn` 也加全局 `display:none` ——
+   宽屏下它是**正常的常显按钮**（用户明确要保留宽屏行为）。 */
+.narrow-back { display: none; }
+
+/* ══════════════════════════════════════════════════════════════════════
+   ⭐⭐⭐ 【模板】子页（决策 205）
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* 列表：每份模板一行。 */
+.tpl-list { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.tpl-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px;
+}
+.tpl-row-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.tpl-row-err { color: var(--dsw-alias-state-error-primary, var(--danger)); font-size: 12px; }
+
+/* ⭐ 模板行里的按钮要**小巧**（否则 `button` 的默认 padding 会让它很大）。
+   ⚠️ 不能用 `flex:1`——那会把按钮拉满整行。 */
+.tpl-row > span > button,
+.tpl-sec > button {
+  padding: 2px 8px; font-size: 12px; line-height: 1.6; flex: 0 0 auto;
+}
+
+/* 节编辑行：⭐ 用 grid（节名 / 可截断 / 删除 一行；书写规范**通栏**一行）。
+   ⚠️ 规范那格是 `textarea`（2026-10-05 用户要求）——它可能要写不少字，
+      ⇒ **必须通栏**，不能跟节名挤在同一行（否则写两行就看不见了）。
+   🔴 **每个元素都要显式给行列** —— 只给一部分会让 grid 的**自动放置**
+      把剩下的塞进意料之外的位置（实测：删除按钮跑到第 1 行、与节名挤在一起）。 */
+.tpl-sections { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.tpl-sec {
+  display: grid; grid-template-columns: minmax(90px, 1fr) auto auto;
+  gap: 6px; align-items: center;
+}
+.tpl-sec-name { grid-column: 1; grid-row: 1; }
+.tpl-sec-trunc { grid-column: 2; grid-row: 1; }
+.tpl-sec > button { grid-column: 3; grid-row: 1; }
+/* 规范：通栏、可多行、可纵向拖拽；`box-sizing` 必须显式给（否则 100% + padding 会溢出）。 */
+.tpl-sec-desc {
+  grid-column: 1 / -1; grid-row: 2;
+  box-sizing: border-box; width: 100%; min-width: 0;
+  resize: vertical; overflow: hidden;
+  font: inherit; line-height: 1.6; padding: 6px 8px;
+}
+.tpl-sec input[type="text"] { width: 100%; min-width: 0; }
+.tpl-sec-trunc { display: flex; align-items: center; gap: 4px; font-size: 12px; white-space: nowrap; }
+
+/* ══════════════════════════════════════════════════════════════════════
+   ⭐⭐⭐ **规范块的就地编辑**（决策 220，2026-10-12 用户要求）
+   —— 项目详情页里，每节标题下那个 ```memj:spec 灰色块右上角的「编辑」按钮，
+      以及点开后挂在它下面的那个编辑器。
+   ⚠️ 全部走既有设计令牌（`--fg` / `--fg-dim` / `--border` / `--accent` /
+      `--bg-2`），**不写死颜色** —— 暗色主题下要自动适配（本项目样式约定）。
+   ====================================================================== */
+
+/* ⭐ 包住规范块的那一层：**只是给按钮提供定位锚点**，本身不参与布局
+   （`position: relative` + 不设尺寸 ⇒ 它正好等于 pre 的盒子）。
+   🔴 为什么必须包一层：按钮要绝对定位在**块的右上角**，
+      而 `.md` 下那个 `pre` 是 marked 直接产出的，往上加 `position: relative`
+      要动它的内联样式（改渲染库产物）⇒ 另包一层最干净、也不影响 pre 自身的样式。 */
+.spec-block { position: relative; }
+
+/* 「编辑」按钮：贴着块右上角，**默认半透明**（不喧宾夺主），
+   鼠标进到这一节时才变实 —— 一屏里可能有 6 个块，全亮会像一排主按钮。 */
+.spec-edit-btn {
+  position: absolute; top: 6px; right: 8px;
+  padding: 2px 10px; font-size: 12px; line-height: 1.7;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg, #fff); color: var(--fg-dim);
+  cursor: pointer; opacity: .55;
+}
+.spec-block:hover .spec-edit-btn,
+.spec-edit-btn:focus-visible { opacity: 1; }
+.spec-edit-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+/* 编辑器：挂在规范块**后面**（不遮挡它）—— 这样对照着改，也不会把正文挤走。 */
+.spec-editor {
+  display: flex; flex-direction: column; gap: 8px;
+  margin: 8px 0 14px; padding: 10px 12px;
+  border: 1px solid var(--border); border-left: 3px solid var(--accent);
+  border-radius: 8px; background: var(--bg-2);
+}
+.spec-editor-head { display: flex; flex-direction: column; gap: 2px; }
+/* ⚠️ 输入框必须通栏 + 显式 `box-sizing`（否则 100% + padding 会溢出，
+   本项目在模板页那一格上实测踩过）。 */
+.spec-editor-text {
+  box-sizing: border-box; width: 100%; min-width: 0;
+  resize: vertical; overflow: hidden;
+  font: inherit; line-height: 1.6; padding: 6px 8px;
+}
+/* 「可自动截断」勾选：**一行一句说明**，不能只放个裸勾选框
+   （它的语义是"这节会自动瘦身"，不解释没人知道勾了会发生什么）。 */
+.spec-editor-trunc {
+  display: flex; align-items: flex-start; gap: 6px;
+  font-size: 12.5px; color: var(--fg-dim); cursor: pointer;
+}
+.spec-editor-trunc input { margin-top: 2px; flex: 0 0 auto; }
+.spec-editor-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.spec-editor-foot .primary { margin-left: auto; }
+.spec-editor-msg { font-size: 12.5px; min-width: 0; }
+.spec-editor-msg.err { color: var(--dsw-alias-state-error-primary, var(--danger)); }
+
+/* 校验错误清单（保存失败时显示）。 */
+.tpl-errors {
+  margin-top: 8px; padding: 8px 10px; border-radius: 6px;
+  border: 1px solid var(--dsw-alias-state-error-primary, var(--danger));
+  color: var(--dsw-alias-state-error-primary, var(--danger)); font-size: 13px;
+}
+.tpl-errors ul { margin: 0; padding-left: 18px; }
+
+/* ⭐ 提醒（**不阻断保存**，2026-10-05）——刻意用**不同颜色**与错误区分：
+   错误是红的（不改就不给存），提醒是中性偏暖的（存了，只是让你确认一下）。 */
+.tpl-warnings {
+  margin-top: 8px; padding: 8px 10px; border-radius: 6px;
+  border: 1px solid var(--dsw-alias-state-warning-primary, #b8860b);
+  color: var(--dsw-alias-state-warning-primary, #b8860b); font-size: 13px;
+}
+.tpl-warnings ul { margin: 0; padding-left: 18px; }
+
+/* ═══════════════ 知识类型页（决策 215；2026-10-05 改版）═══════════════
+   ⭐ 改版后：**默认收起**（列表态只给摘要）⇒ 点「编辑」才展开成字段。
+   🔴 收起态**不是"藏起来"**：id / 徽标 / 计数 / `when` 预览都要看得见，
+      否则用户还得逐条点开才知道哪条是哪条。 */
+.kinds-list { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+
+/* 顶部工具条：「＋ 添加」放这里 —— 用户裁定"不能非要划到最下面才能新建"。 */
+.kinds-toolbar { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+
+/* 收起态：一行摘要（整行可点，不要求精确点到「编辑」两个字上）。 */
+.kind-row { display: flex; flex-direction: column; gap: 4px; }
+.kind-preview {
+  font-size: 12px; line-height: 1.5;
+  /* 预览只给一行 —— 收起的意义就在于"一屏能看完全部"。
+     ⚠️ 用 `text-overflow` 而不是切开字符串：中文与英文混排时截断位置才对。 */
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.kind-edit { padding: 2px 10px; font-size: 12px; line-height: 1.6; }
+
+/* 展开态：卡片描边加重（一眼看出哪一条正开着）。 */
+.kind-card.editing {
+  border-color: var(--dsw-alias-border-primary, #888);
+  box-shadow: 0 0 0 1px var(--dsw-alias-border-primary, #888) inset;
+}
+.kind-body { display: flex; flex-direction: column; gap: 8px; }
+/* 本条自己的操作行：保存 / 取消 / 删除 靠左排。 */
+.kind-foot { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
+.kind-cancel { padding: 2px 10px; font-size: 12px; line-height: 1.6; }
+.kind-card {
+  border: 1px solid var(--dsw-alias-border-secondary, #d0d0d0);
+  border-radius: 8px; padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.kind-card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.kind-id { font-weight: 600; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+/* 徽标：内置（中性）/ 保留（警示色）—— 两者含义不同，颜色也别一样。 */
+.kind-badge {
+  font-size: 11px; padding: 1px 6px; border-radius: 4px;
+  border: 1px solid var(--dsw-alias-border-secondary, #bbb); color: var(--dim, #666);
+}
+.kind-badge.reserved {
+  border-color: var(--dsw-alias-state-warning-primary, #b8860b);
+  color: var(--dsw-alias-state-warning-primary, #b8860b);
+}
+.kind-count { font-size: 12px; margin-left: auto; }
+.kind-del { padding: 2px 8px; font-size: 12px; line-height: 1.6; }
+.kind-field { display: flex; flex-direction: column; gap: 3px; }
+.kind-field-label { font-size: 12px; color: var(--dim, #666); }
+.kind-field input[type="text"],
+.kind-field textarea {
+  box-sizing: border-box; width: 100%; min-width: 0;
+  font: inherit; line-height: 1.6; padding: 4px 8px;
+}
+/* 书写规范是多行 ⇒ 允许纵向拖拽、自动长高（`overflow:hidden` 免得出现内层滚动条）。 */
+.kind-field textarea { resize: vertical; overflow: hidden; }
+/* ⚠️ 只读态要**看得出来** —— 否则用户会一直试着改"内置"那几格。 */
+.kind-field input:disabled,
+.kind-field textarea:disabled { background: var(--dsw-alias-bg-secondary, #f5f5f5); cursor: not-allowed; }
+
+/* ⭐⭐⭐ 「你配的这个模型已经不在可用清单里了」告警（2026-10-07 用户裁定）。
+ * 🔴 **它取代了旧做法**：过去把失效模型**当成一个 option 插进下拉框**，
+ *    那等于把一个错误状态伪装成合法选项 —— 用户以为能用，实际跑不通
+ *    （实测：翻译模型 `sf/…` 已消失，**155 条知识全部翻译失败**而界面极不显眼）。
+ * ⭐ 用 `.notice.warn`（既有的告警条）**再压一压尺寸** ——
+ *    它紧跟在某个 `<select>` 后面，不该像页面级通知那么大。
+ * ⚠️ 只改**尺寸与间距**，颜色一律沿用 `.notice.warn` 的令牌（暗色主题要自动适配）。 */
+.model-warn {
+  margin: 6px 0 0;
+  padding: 7px 10px;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   【决策模型配置】页（2026-10-07）：provider 列表 + 展开编辑卡片
+   ⚠️ 形态**照 DSH 官方「模型」设置页**（一行一个 provider，点开才编辑）
+      —— 用户原话：*"就也应该像 dsh 官方的模型设置一样"*。
+   全部走既有设计令牌（`--fg` / `--fg-dim` / `--border` / `--bg-2`），
+   不写死颜色（暗色主题要自动适配 —— 本项目样式约定）。
+   ====================================================================== */
+
+/* 一行一个 provider：点「编辑」展开那张卡片。 */
+.jev-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-2);
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+/* 密钥状态点：实心 = 已配置。⚠️ 只表示"有密钥"，**不代表连通**
+   （"配了"与"真能调通"是两件事 —— 后者由卡片里的「测试连接」回答）。 */
+.jev-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.jev-dot.ok { background: var(--fg); }
+.jev-dot.bad { background: transparent; border: 1px solid var(--fg-dim); }
+.jev-name { font-weight: 650; }
+/* ⚠️ `min-width: 0` + 省略号：端点可能很长，不让它把按钮挤出屏幕
+   （本项目踩过"长内容把行内其它元素挤走"的同族坑）。 */
+.jev-meta { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 展开的编辑卡片：**缩进一点**，表明"它属于上面那一行"。 */
+.jev-card {
+  margin: 0 0 12px 18px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+}
+
+/* 模型列表：一行一个输入框 + 删除。 */
+.jev-models { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.jev-model-line { display: flex; align-items: center; gap: 8px; }
+.jev-model-line input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+
+/* ⚠️ 窄屏：卡片左缩进在小屏上很浪费横向空间 ⇒ 收掉。 */
+@media (max-width: 900px) {
+  .jev-card { margin-left: 0; }
+  .jev-row { flex-wrap: wrap; }
+}
+
+/* ⚠️ 窄屏：节行本来就已是"第 1 行 = 节名 + 可截断 + 删除、第 2 行 = 规范通栏"
+   （2026-10-05 把规范改成 textarea 时一并调成了这个形态）⇒
+   **这里不再需要改布局**，只把第 1 行的节名压缩一点，别让"可截断 + 删除"被挤出去。
+   🔴 保留本段的理由：**窄屏曾经因为漏给行列而错位过**（删除按钮跑到第 1 行与节名挤在一起）
+      ⇒ 留一条显式声明 + 这句注释，提醒后来人**新增元素时要给行列**。 */
+@media (max-width: 900px) {
+  .tpl-sec { grid-template-columns: minmax(60px, 1fr) auto auto; }
+  .tpl-sec-name { grid-column: 1; grid-row: 1; }
+  .tpl-sec-trunc { grid-column: 2; grid-row: 1; }
+  .tpl-sec > button { grid-column: 3; grid-row: 1; justify-self: end; }
+  .tpl-sec-desc { grid-column: 1 / -1; grid-row: 2; }
+}
