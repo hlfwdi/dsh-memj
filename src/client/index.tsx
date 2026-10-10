@@ -69,6 +69,173 @@ const MEMJ_MARK_GRAD_ID = 'dsh-memj-mark-grad'
 const CMD_GET_PROJECT = 'memj-get-handoff-project'
 const CMD_GET_THEME = 'memj-get-handoff-theme'
 
+// ══════════════════════════════════════════════════════════════════════════
+// ⭐⭐ 应用内右侧栏面板（桌面版唯一的出路）
+//
+// 🔴 **为什么需要它**：入口原本是 `<a target="_blank">`，而**桌面壳的
+//    window-open 策略只对 `https:` 外链调 `shell.openExternal`**
+//    （读桌面版 `app.asar` 得到：`if (destination.protocol === "https:" &&
+//    !destination.username && !destination.password) shell.openExternal(url)`），
+//    而本页是 **`http://127.0.0.1:<port>/plugins/dsh-memj/`（http + 同源）**
+//    ⇒ 在桌面版里点击**什么都不会发生**（浏览器版正常开新标签）。
+//
+// ✅ 出路 = DSH 官方的**右侧栏页类型**（两阶段注册）：
+//    ① `ctx.sidebarRightTabs.register(definition)` —— 声明"有这么一个页类型"；
+//    ② 把正文注册进 keyed seat `sidebar.right.pane.tab`，**key = 该定义的 `id`**；
+//    ③ 打开用 `ctx.sidebarRight.openTab(kind)`。
+//    ⚠️ 这两个服务是**宿主动态 provide** 的（不在 inspect 的 Service 目录里），
+//       **老版本 DSH 没有** ⇒ 全程走 `ctx.inject`（服务不出现就整段不执行），
+//       所以老版本行为一字不变（仍是开新标签）。
+// ══════════════════════════════════════════════════════════════════════════
+
+/** 右侧栏页类型的 kind —— `openTab` 用它指名要开哪一个。 */
+const SIDEBAR_KIND = 'dshMemj'
+
+/**
+ * 页类型的**实现 id** —— 它同时是 `sidebar.right.pane.tab` 那个 seat 的 key
+ * （⚠️ 不是 kind：kind 可以被别的实现接管，id 才是实现自己的身份）。
+ */
+const SIDEBAR_TYPE_ID = 'dsh-memj/panel'
+
+/** 页签标题（DSH 在打开时把 `title()` 的返回值捕获进布局记录）。 */
+const SIDEBAR_TITLE = 'memj 记忆库'
+
+/**
+ * ⭐ 桌面壳检测：桌面版的 preload 会往 window 上挂 `dshDesktop`
+ * （`electron.contextBridge.exposeInMainWorld("dshDesktop", …)`）。
+ *
+ * ⚠️ **这是 DSH 自己客户端代码用的同一判据**（`ui-chat` 用它挑默认转写视图、
+ * `ui-settings-account` 用它决定要不要显示 onboarding），**不是我编的 UA 嗅探**。
+ * @returns 是否跑在桌面壳里。
+ */
+function isDesktopShell(): boolean {
+  try {
+    return typeof globalThis === 'object' && globalThis !== null && 'dshDesktop' in globalThis
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 「点入口能在应用内右侧栏打开」这件事，由 `apply()` 期的能力探测决定，
+ * 而入口按钮组件**拿不到**那对服务 ⇒ 用这个极小的订阅点把结论传过去。
+ *
+ * ⚠️ `null` = 不可用（老 DSH / 浏览器版）⇒ 入口退回原来的"开新标签"。
+ */
+let openInSidebar: ((sessionId: string) => void) | null = null
+const sidebarReadyListeners = new Set<() => void>()
+
+/**
+ * 公布/撤销"应用内打开"这个能力，并通知入口按钮重画。
+ * @param opener - 打开函数；`null` 表示不可用。
+ */
+function publishSidebarOpener(opener: ((sessionId: string) => void) | null): void {
+  openInSidebar = opener
+  for (const listener of sidebarReadyListeners) listener()
+}
+
+/**
+ * 面板页址 —— ⭐ **与独立页完全同一个地址**（`?session=` 也照旧），
+ * 所以右侧栏里跑的就是那一整页，没有第二份 UI 要维护。
+ * @param sessionId - 当前会话 id；空串表示不带会话。
+ * @returns 相对页址。
+ */
+function memjPageUrl(sessionId: string): string {
+  return sessionId === '' ? `${PLUGIN_BASE}/` : `${PLUGIN_BASE}/?session=${encodeURIComponent(sessionId)}`
+}
+
+/**
+ * 右侧栏里的 memj 面板：把**现有那一整页**用 iframe 嵌进来。
+ *
+ * ⚠️ **刻意不重写一份 UI**：那一页自带 9 个子页、目录按钮与**窄屏两级导航**
+ * （`@media (max-width: 900px)`），在右侧栏这种窄容器里会自己走窄屏形态。
+ * @param props - 会话槽位注入的标准 props（只用 `sessionId`）。
+ * @returns iframe。
+ */
+function MemjPanelBody(props: { sessionId?: unknown }): React.ReactElement {
+  const sid = typeof props.sessionId === 'string' ? props.sessionId : ''
+  return React.createElement('iframe', {
+    // ⚠️ key 绑会话：**换会话就整块重挂**，否则页面会停在上一个会话的绑定上。
+    key: sid,
+    src: memjPageUrl(sid),
+    title: SIDEBAR_TITLE,
+    style: { display: 'block', width: '100%', height: '100%', border: '0' },
+  })
+}
+
+/** `ctx.slots` 在本插件需要的两个方法（keyed seat 的 key 不在本仓的类型表里 ⇒ 在这里收窄）。 */
+interface PanelSlotsFace {
+  inject(key: string, callback: () => () => void): () => void
+  register(options: Record<string, unknown>, component: unknown): () => void
+}
+
+/**
+ * 注册「右侧栏页类型」（DSH 0.2.0-rc.2+ 的两阶段注册）。
+ *
+ * ⭐ 整体包在 `ctx.inject(['sidebarRight','sidebarRightTabs'], …)` 里 ——
+ * 宿主不提供这两个服务时回调**永不执行**（`registry.ts` 的 inject 是
+ * "等声明/等服务"，不是抛错）⇒ 老版本零影响。
+ * @param ctx - 客户端上下文。
+ */
+function installSidebarPanel(ctx: ClientContext): void {
+  ctx.inject(['sidebarRight', 'sidebarRightTabs'] as never, (scope) => {
+    const tabs = scope.get('sidebarRightTabs') as
+      | { register(definition: Record<string, unknown>): () => void }
+      | undefined
+    const nav = scope.get('sidebarRight') as
+      | { openTab(kind: string, options?: Record<string, unknown>): void }
+      | undefined
+    if (tabs === undefined || nav === undefined) return
+
+    // ① 阶段一：页类型本身。
+    scope.effect(
+      () =>
+        tabs.register({
+          id: SIDEBAR_TYPE_ID,
+          kind: SIDEBAR_KIND,
+          // `extension` = "产品之外的插件类型"档位；本 kind 是我们自己的，不顶掉任何内置类型。
+          priority: 'extension',
+          // ⭐ 面板藏起来/切会话后**不要卸载**：那一页有自身状态（当前子页、筛选、绑定），
+          //    默认行为会在隐藏时卸载 ⇒ 每次再打开都回到首页。
+          keepMounted: true,
+          title: () => SIDEBAR_TITLE,
+          // 顺带进右侧栏的「+ / 引导页」列表，让这个面板**可被发现**。
+          guide: [
+            {
+              id: 'panel',
+              order: 40,
+              title: () => SIDEBAR_TITLE,
+              description: () => '在右侧栏打开 memj 记忆库',
+            },
+          ],
+        }),
+      'dsh-memj: sidebar tab type',
+    )
+
+    // ② 阶段二：正文（keyed seat 的 key 必须是**上面那个 id**）。
+    const slots = scope.slots as unknown as PanelSlotsFace
+    scope.effect(
+      () =>
+        slots.inject('sidebar.right.pane.tab', () =>
+          slots.register({ name: 'sidebar.right.pane.tab', key: SIDEBAR_TYPE_ID }, MemjPanelBody as never),
+        ),
+      'dsh-memj: sidebar panel body',
+    )
+
+    // ③ 只有桌面壳改走这条入口：浏览器里"开新标签"是可用且更自然的做法，不改它。
+    if (!isDesktopShell()) return
+    publishSidebarOpener((sessionId) => {
+      // ⚠️ `openTab` 作用在**在屏会话**上；没有会话时它会抛 ⇒ 那时退回原行为。
+      if (sessionId === '') return
+      try {
+        nav.openTab(SIDEBAR_KIND)
+      } catch {
+        /* 打不开就什么都不做：调用方已经把 href 留在那里。 */
+      }
+    })
+  })
+}
+
 /**
  * 从 host HTTP API 取项目/主题清单，转成弹窗选项。
  *
@@ -212,10 +379,21 @@ function MemjEntryButton({ wide, useSessions }: EntryButtonProps): React.ReactEl
     broadcastSession(sid)
   }, [sid])
 
-  const href =
-    sid === ''
-      ? `${PLUGIN_BASE}/`
-      : `${PLUGIN_BASE}/?session=${encodeURIComponent(sid)}`
+  // ⭐ 能力探测：应用内右侧栏可用 **且** 跑在桌面壳里 ⇒ 点击改走应用内。
+  //    ⚠️ 结论是**异步**到的（`ctx.inject` 等服务 provide），所以订阅而不是读一次。
+  const [inApp, setInApp] = React.useState(openInSidebar !== null)
+  React.useEffect(() => {
+    const sync = (): void => setInApp(openInSidebar !== null)
+    sidebarReadyListeners.add(sync)
+    sync()
+    return () => {
+      sidebarReadyListeners.delete(sync)
+    }
+  }, [])
+  /** 没有在屏会话时 `openTab` 无处落 ⇒ 那种情况仍走新标签。 */
+  const inAppReady = inApp && sid !== ''
+
+  const href = memjPageUrl(sid)
 
   return React.createElement(
     'a',
@@ -223,10 +401,22 @@ function MemjEntryButton({ wide, useSessions }: EntryButtonProps): React.ReactEl
       href,
       // ⚠️ 开新标签用 `<a target="_blank" rel="noopener noreferrer">`
       // （DSH 前端自身唯一在用模式）；`window.open` 也可用但必须同步调用。
+      // ⭐ 桌面壳下 `target="_blank"` 是**死路**（见文件上方那段说明）⇒ 那时由
+      //    `onClick` 改走应用内右侧栏；`href` 仍留着（中键 / 带修饰键点击、可访问性）。
       target: '_blank',
       rel: 'noopener noreferrer',
+      ...(inAppReady
+        ? {
+            onClick: (event: React.MouseEvent): void => {
+              // 带修饰键 ⇒ 不接管，交给浏览器（"另开一处"的保底行为不变）。
+              if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+              event.preventDefault()
+              openInSidebar?.(sid)
+            },
+          }
+        : {}),
       'aria-label': '打开 memj 记忆库',
-      title: 'memj 记忆库',
+      title: inAppReady ? 'memj 记忆库（在右侧栏打开）' : 'memj 记忆库',
       style: {
         display: 'flex',
         alignItems: 'center',
@@ -388,7 +578,10 @@ export function apply(ctx: ClientContext): void {
     )
   })
 
-  // ── 2. `/memj-review` 的 popupSelect 装饰 ─────────────────────────────────
+  // ── 2. 应用内右侧栏面板（桌面壳唯一的出路；老 DSH 与浏览器版整段不执行）────
+  installSidebarPanel(ctx)
+
+  // ── 3. `/memj-review` 的 popupSelect 装饰 ─────────────────────────────────
   const commandUi = ctx.get('commandUi') as CommandUiContract | undefined
   if (commandUi === undefined) return
   const sessions = ctx.get('sessions') as ISessions | undefined
