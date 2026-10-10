@@ -575,6 +575,20 @@ dsh plugin --profile web add dsh-memj
 
 ⚠️ **profile 名按你自己的来**：默认是 `web`，也可以是 `tui` / `headless` / 你自己建的。
 
+#### ⚠️ 升级时：请带上版本号
+
+```bash
+dsh plugin --profile web add dsh-memj@0.1.1     # ✅ 显式要这个版本
+```
+
+🔴 **只写包名（`add dsh-memj`）可能把你留在旧版本**：pnpm 会优先复用 profile 里
+`pnpm-lock.yaml` 已经锁定的那个版本 —— 只要它满足 `package.json` 里的范围
+（如 `^0.1.0`），pnpm 就认为"已经装好了"，**不会去 npm 上看有没有新版**。
+⚠️ **这不是 npm 包或 GitHub 仓库的问题**：全新环境（没有锁文件）装到的就是 `latest`；
+只有**装过旧版的机器**会被自己的锁文件钉住。
+（界面上安装时，在输入框里填 `dsh-memj@<版本>` 即可。）
+⭐ 锁文件本身是**好东西**，别手动删：它还钉着 tarball 的 `integrity` 哈希（防同名同版本被换内容）。
+
 ### 从 GitHub 直接安装（不经过 npm）
 
 包已提交 `lib/` 构建产物 ⇒ **仓库可以直接装**（不需要本地构建）：
