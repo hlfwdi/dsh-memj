@@ -19,6 +19,21 @@ AI写的readme.我再简单总结一下，插件把项目落一个可自由编�
 
 ---
 
+## 快速开始
+
+```bash
+dsh plugin --profile web add dsh-memj
+```
+
+**一条命令就够**，装完**不用重启**。
+
+- 📦 npm：<https://www.npmjs.com/package/dsh-memj>（`pnpm add dsh-memj` 也可）
+- 🐙 GitHub：<https://github.com/jojoman2024/dsh-memj>
+- ⚠️ **需 DSH `0.2.0-rc.2`**（该版本在 npm 上是 **`@next`** 标签；`latest` 是更老的 `0.1.0-rc.6`）
+  —— 详见 [安装](#安装) 一节
+
+---
+
 ## 目录
 
 **三个设计核心**（就在下面）：
@@ -35,6 +50,7 @@ AI写的readme.我再简单总结一下，插件把项目落一个可自由编�
 - [四种使用方式](#四种使用方式)
 - [三种召回机制](#三种召回机制)
 - [人侧面板](#人侧面板)
+- [快速开始](#快速开始)
 - [安装](#安装)
 - [库长什么样](#库长什么样)
 - [配置](#配置)
@@ -539,9 +555,13 @@ node -p "require('@deepseek-ai/dsh-tools/package.json').version"
 
 ### 常规安装（从 npm）
 
+**包页：<https://www.npmjs.com/package/dsh-memj>**
+
 ```bash
 dsh plugin --profile web add dsh-memj
 ```
+
+> 也可以直接 `pnpm add dsh-memj`（等价；`dsh plugin add` 多做的是下面那两步自动登记）。
 
 **一条命令就够** —— 它会：① 在 profile 目录里跑 pnpm 把它装进 `dependencies`；
 ② 发现包里声明了 `dsh.bundle` ⇒ **自动**把 `dsh-memj` 加进 `dsh.profile.bundles`；
@@ -554,6 +574,18 @@ dsh plugin --profile web add dsh-memj
 更简单的，可以走 DSH 界面的插件管理页安装，同样不需要重启。
 
 ⚠️ **profile 名按你自己的来**：默认是 `web`，也可以是 `tui` / `headless` / 你自己建的。
+
+### 从 GitHub 直接安装（不经过 npm）
+
+包已提交 `lib/` 构建产物 ⇒ **仓库可以直接装**（不需要本地构建）：
+
+```bash
+dsh plugin --profile web add https://github.com/jojoman2024/dsh-memj
+```
+
+⭐ 这也是本仓**特意提交 `lib/`** 的原因 —— 生态里多数 DSH 插件仓都是这么做的。
+⚠️ 但**日常建议用 npm 那条**：它有版本号可追溯，且 `files` 白名单保证了包内只含运行时需要的东西
+（`node_modules` / `scripts` / `src` 之类不会被装进去）。
 
 ### 开发时安装（本地源码）
 
