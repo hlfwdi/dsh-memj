@@ -47,6 +47,9 @@
     "docs/screenshots"
   ],
   "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/jojoman2024/dsh-memj.git" },
+  "homepage": "https://github.com/jojoman2024/dsh-memj#readme",
+  "bugs": { "url": "https://github.com/jojoman2024/dsh-memj/issues" },
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/"
