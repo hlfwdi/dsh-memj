@@ -38,11 +38,18 @@
 
 ## 快速开始
 
+⭐ **推荐：直接在 DSH 界面里装** —— 左侧「插件」页 → 右上角 **「添加插件」** →
+输入框填 **`dsh-memj`** → **「安装」**。
+
+![在 DSH 界面里添加插件](docs/screenshots/16-install-gui.png)
+
+**不用敲命令、不用重启**，装完侧边栏就有入口。（安装源按你的网络情况选即可。）
+
+也可以走命令行（等价）：
+
 ```bash
 dsh plugin --profile web add dsh-memj
 ```
-
-**一条命令就够**，装完**不用重启**。
 
 - 📦 npm：<https://www.npmjs.com/package/dsh-memj>（`pnpm add dsh-memj` 也可）
 - 🐙 GitHub：<https://github.com/jojoman2024/dsh-memj>
@@ -572,7 +579,17 @@ pnpm add @deepseek-ai/dsh-agent@next    # 而不是 @latest
 node -p "require('@deepseek-ai/dsh-tools/package.json').version"
 ```
 
-### 常规安装（从 npm）
+### 从 DSH 界面安装（推荐）
+
+⭐ 左侧「插件」页 → 右上角 **「添加插件」** → 输入框填 **`dsh-memj`** → **「安装」**。
+
+![在 DSH 界面里添加插件](docs/screenshots/16-install-gui.png)
+
+- **不用敲命令、不用重启**：装完稍等几秒，侧边栏入口与 `/plugins/dsh-memj/*` 就绪；
+- **安装源**按你的网络情况选即可（国内可走镜像源）；
+- **升级同理**：输入框里填 `dsh-memj@<版本>`（原因见下「升级时请带上版本号」）。
+
+### 常规安装（命令行 / npm）
 
 **包页：<https://www.npmjs.com/package/dsh-memj>**
 
