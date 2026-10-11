@@ -1,5 +1,7 @@
 # dsh-memj —— 让记忆跟着项目走
 
+[English](README.en.md) | 中文
+
 一个 **DeepSeek Harness 记忆插件**。
 
 ## 最大的卖点：你可以用它，做一个你的记忆系统

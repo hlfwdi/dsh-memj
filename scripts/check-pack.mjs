@@ -28,33 +28,61 @@
  *   顺序是"**先造出产物，再断言产物真的被装进去了**"。
  */
 import { execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const root = join(here, '..')
 
-/** 必须在 tarball 里的文件（相对仓库根，npm 用 `/` 分隔）。 */
-const REQUIRED = ['lib/index.js', 'lib/client.js', 'cordis.patch.yml', 'README.md', 'LICENSE']
+/**
+ * 必须在 tarball 里的文件（相对仓库根，npm 用 `/` 分隔）。
+ *
+ * ⚠️ `README.en.md` 也要列 —— 它是英文版正文，README.md 顶部的语言切换行指着它；
+ *    漏发 ⇒ GitHub 上点「English」是 404，而**本地一切正常**（同"两边不一致"那一族）。
+ */
+const REQUIRED = [
+  'lib/index.js',
+  'lib/client.js',
+  'cordis.patch.yml',
+  'README.md',
+  'README.en.md',
+  'LICENSE',
+]
 
 /**
- * README 里引用的图片**必须随包发出去**。
+ * **每一份** README 里引用的图片都必须随包发出去。
  *
  * 🔴 **为什么单独断言它**：npm 页面用的是**包内**的 README。
  *   `files` 里漏掉 `docs/` ⇒ README 照发，但**图全裂**（GitHub 上却完全正常，
  *   因为那边读的是仓库）⇒ ⭐ **本地与 GitHub 都看不出问题，只有 npm 读者看得见**。
  *   ⇒ 这正是本项目一贯的判据：**要断言的是产物**，而"两边表现不一致"的地方
  *     必须有一条只有它才能发现的检查。
+ *
+ * ⚠️ **必须扫全部 README***（不只 README.md）：多语言时，`.en` 那份额外的图
+ *   若单独漏发，只有该语言的读者看得见坏图 ⇒ 扫一份等于**给另一份开了后门**。
  */
 function readmeImages() {
-  let text
-  try {
-    text = readFileSync(new URL('../README.md', import.meta.url), 'utf8')
-  } catch {
-    return []
+  const found = []
+  for (const name of readmeFiles()) {
+    let text
+    try {
+      text = readFileSync(new URL(`../${name}`, import.meta.url), 'utf8')
+    } catch {
+      continue
+    }
+    for (const m of text.matchAll(/\]\((docs\/[^)]+\.(?:png|jpe?g|webp|gif))\)/gi)) {
+      if (!found.includes(m[1])) found.push(m[1])
+    }
   }
-  return [...text.matchAll(/\]\((docs\/[^)]+\.(?:png|jpe?g|webp|gif))\)/gi)].map((m) => m[1])
+  return found
+}
+
+/** 仓库根下的全部 README*.md（多语言版本会自动纳入检查）。 */
+function readmeFiles() {
+  return readdirSync(root)
+    .filter((n) => /^README(\.[a-z]{2}(-[A-Za-z]{2,4})?)?\.md$/i.test(n))
+    .sort()
 }
 
 /** 低于这个文件数 ⇒ 一定是"空壳包"（实测正常包是 16 个）。 */
