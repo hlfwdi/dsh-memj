@@ -48,16 +48,9 @@ export interface ContextUsage {
   source: 'projected' | 'pressure'
 }
 
-/** `ctx.get('tokenMeter')` 的结构化类型（**不 import 它的包**，见文件头约束 2）。 */
-interface TokenMeterLike {
-  measure?: (
-    session: unknown,
-    requestHeader?: unknown,
-  ) => {
-    pressureTokens?: unknown
-    projectedTokens?: unknown
-    contextWindow?: unknown
-  } | undefined
+/** `ctx.get('sessionProjections')` 的结构化类型（**不 import 它的包**）。 */
+interface SessionProjectionsLike {
+  stateOf?: (session: unknown, key: string) => unknown
 }
 
 /** 把未知值收成有限正数；否则 `undefined`。 */
@@ -78,29 +71,30 @@ export function readContextUsage(
   session: unknown,
 ): ContextUsage | undefined {
   if (session === undefined || session === null) return undefined
-  let meter: TokenMeterLike | undefined
+  let sp: SessionProjectionsLike | undefined
   try {
-    meter = ctx.get('tokenMeter') as TokenMeterLike | undefined
+    sp = ctx.get('sessionProjections') as SessionProjectionsLike | undefined
   } catch {
     return undefined
   }
-  if (meter === undefined || meter === null || typeof meter.measure !== 'function') return undefined
+  if (sp === undefined || sp === null || typeof sp.stateOf !== 'function') return undefined
 
-  let m: ReturnType<NonNullable<TokenMeterLike['measure']>>
+  let st: { pressureTokens?: unknown; projectedTokens?: unknown; contextWindow?: unknown } | undefined
   try {
-    m = meter.measure(session)
+    // ⭐ 字段来自**投影**（不是 `tokenMeter.measure()`，见文件头的修正说明）。
+    st = sp.stateOf(session, 'contextPressure') as typeof st
   } catch {
-    // ⚠️ 测量失败（会话形状不符/回放异常）⇒ 静默跳过，**不能连累轮次结束**。
+    // ⚠️ 读投影失败（会话形状不符 / 该投影未注册）⇒ 静默跳过，**不能连累轮次结束**。
     return undefined
   }
-  if (m === undefined || m === null) return undefined
+  if (st === undefined || st === null) return undefined
 
-  const projected = posNum(m.projectedTokens)
-  const pressure = posNum(m.pressureTokens)
+  const projected = posNum(st.projectedTokens)
+  const pressure = posNum(st.pressureTokens)
   const used = projected ?? pressure
   if (used === undefined) return undefined
 
-  const win = posNum(m.contextWindow)
+  const win = posNum(st.contextWindow)
   const out: ContextUsage = {
     used: Math.round(used),
     source: projected !== undefined ? 'projected' : 'pressure',

@@ -18,7 +18,7 @@
  * ⚠️ 必须在 `pnpm run build` 之后跑（import `lib/` 产物）。
  * 用法：node scripts/test-context-report.mjs
  */
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -43,8 +43,22 @@ const check = (n, c, e = '') => {
 
 console.log(`库根: ${lib}\n`)
 
-/** 造一个只实现 `measure` 的 tokenMeter 桩。 */
-const meterOf = (ret) => ({ measure: () => ret })
+/**
+ * 造一个 `sessionProjections` 桩：`stateOf(session, 'contextPressure')` 回给定值。
+ *
+ * 🔴🔴 **2026-10-12 修正**：本套件第一版造的是 **`tokenMeter` 桩**（`{ measure: () => ret }`），
+ *    而**真实代码根本不从 `measure()` 读那三个字段** ——
+ *    `measure()` 的真实返回是 `{ logRevision, baseline, surfaceDeltaTokens,
+ *    totalTokens, surfaceTokens, nodes }`，**没有** `pressureTokens` /
+ *    `projectedTokens` / `contextWindow`。
+ *    ⇒ 那三个字段来自**会话投影** `contextPressure`。
+ *
+ *    ⚠️ **第一版全绿、而产品一行都没注入过** —— 因为**桩喂了不存在的形状**，
+ *       刚好把那个 bug「喂饱」了。这正是本项目记过的
+ *       「夹具要照真实 API 形状，不是照自己的想象」+「用假对象核外部 API = 没核」。
+ *    ✅ 现在按**真实入口**造桩：`stateOf(session, 'contextPressure')`。
+ */
+const projOf = (ret) => ({ stateOf: (_s, key) => (key === 'contextPressure' ? ret : undefined) })
 
 /** 造一个会记录"调了哪个方法、传了什么"的 agent 桩。 */
 const agentStub = () => {
@@ -57,8 +71,10 @@ const agentStub = () => {
   }
 }
 
-/** 造一个 `ctx.get` 桩。 */
-const ctxOf = (svc) => ({ get: (name) => (name === 'tokenMeter' ? svc : undefined) })
+/** 造一个 `ctx.get` 桩（按服务名分派）。 */
+const ctxOf = (svc, name = 'sessionProjections') => ({
+  get: (n) => (n === name ? svc : undefined),
+})
 
 const CFG = { ...DEFAULT_CONFIG, contextReportOnTurnEnd: true, contextReportMinPercent: 50 }
 
@@ -75,26 +91,26 @@ console.log('【1】⭐⭐ 三态：拿不到 / 无窗口 / 低于阈值 / 过�
 
   // ② 挂了，但没有任何 usage（两个字段都缺）
   const a2 = agentStub()
-  const r2 = reportContextUsage(ctxOf(meterOf({ surfaceTokens: 0 })), CFG, a2)
+  const r2 = reportContextUsage(ctxOf(projOf({ surfaceTokens: 0 })), CFG, a2)
   check('② 无 usage ⇒ 不注入', r2.injected === false, JSON.stringify(r2))
   check('  没调任何 agent 方法', a2.calls.length === 0)
 
   // ③ 有 usage，但路由没上报窗口 ⇒ 算不出百分比 ⇒ 不报
   const a3 = agentStub()
-  const r3 = reportContextUsage(ctxOf(meterOf({ pressureTokens: 90000 })), CFG, a3)
+  const r3 = reportContextUsage(ctxOf(projOf({ pressureTokens: 90000 })), CFG, a3)
   check('③ 无窗口 ⇒ 不注入（没有百分比就没有判断价值）', r3.injected === false, JSON.stringify(r3))
   check('  理由点明窗口', r3.reason.includes('窗口'), r3.reason)
 
   // ④ 低于阈值
   const a4 = agentStub()
-  const r4 = reportContextUsage(ctxOf(meterOf({ pressureTokens: 10000, contextWindow: 100000 })), CFG, a4)
+  const r4 = reportContextUsage(ctxOf(projOf({ pressureTokens: 10000, contextWindow: 100000 })), CFG, a4)
   check('④ 10% < 50% ⇒ 不注入', r4.injected === false, JSON.stringify(r4))
   check('  理由带两个数（占用与阈值）', r4.reason.includes('10%') && r4.reason.includes('50%'), r4.reason)
   check('  没调任何 agent 方法', a4.calls.length === 0)
 
   // ⑤ 过阈值 ⇒ 注入
   const a5 = agentStub()
-  const r5 = reportContextUsage(ctxOf(meterOf({ pressureTokens: 60000, contextWindow: 100000 })), CFG, a5)
+  const r5 = reportContextUsage(ctxOf(projOf({ pressureTokens: 60000, contextWindow: 100000 })), CFG, a5)
   check('⑤ 60% ≥ 50% ⇒ 注入', r5.injected === true, JSON.stringify(r5))
   check('  结论带上百分比', r5.percent === 60, String(r5.percent))
   check('  **只调了 inject、没调 followup**',
@@ -107,14 +123,14 @@ console.log('【2】⭐⭐⭐ 优先用 projectedTokens（它能反映 compactio
 // ══════════════════════════════════════════════════════════════
 {
   const both = readContextUsage(
-    ctxOf(meterOf({ pressureTokens: 40000, projectedTokens: 70000, contextWindow: 100000 })),
+    ctxOf(projOf({ pressureTokens: 40000, projectedTokens: 70000, contextWindow: 100000 })),
     { id: 's' },
   )
   check('两个都在时，用 projected（70%）而不是 pressure（40%）',
     both?.percent === 70 && both?.source === 'projected', JSON.stringify(both))
 
   const onlyPressure = readContextUsage(
-    ctxOf(meterOf({ pressureTokens: 55000, contextWindow: 100000 })),
+    ctxOf(projOf({ pressureTokens: 55000, contextWindow: 100000 })),
     { id: 's' },
   )
   check('只有 pressure 时退回它', onlyPressure?.percent === 55 && onlyPressure?.source === 'pressure',
@@ -123,7 +139,7 @@ console.log('【2】⭐⭐⭐ 优先用 projectedTokens（它能反映 compactio
   // ⚠️ 反证：有 projected 时**不能**退回 pressure
   const a = agentStub()
   const r = reportContextUsage(
-    ctxOf(meterOf({ pressureTokens: 10000, projectedTokens: 80000, contextWindow: 100000 })),
+    ctxOf(projOf({ pressureTokens: 10000, projectedTokens: 80000, contextWindow: 100000 })),
     CFG, a,
   )
   check('⭐ 反证：pressure 只有 10%，但 projected 80% ⇒ 仍要注入',
@@ -155,17 +171,17 @@ console.log('【4】⭐⭐ 开关与载荷边界')
 {
   const a = agentStub()
   const off = reportContextUsage(
-    ctxOf(meterOf({ pressureTokens: 90000, contextWindow: 100000 })),
+    ctxOf(projOf({ pressureTokens: 90000, contextWindow: 100000 })),
     { ...CFG, contextReportOnTurnEnd: false }, a,
   )
   check('开关关 ⇒ 不注入', off.injected === false && off.reason.includes('开关'), JSON.stringify(off))
   check('  没调 agent', a.calls.length === 0)
 
-  const noAgent = reportContextUsage(ctxOf(meterOf({ pressureTokens: 90000, contextWindow: 100000 })), CFG, undefined)
+  const noAgent = reportContextUsage(ctxOf(projOf({ pressureTokens: 90000, contextWindow: 100000 })), CFG, undefined)
   check('没有 agent ⇒ 不注入且不抛', noAgent.injected === false, JSON.stringify(noAgent))
 
   const badAgent = reportContextUsage(
-    ctxOf(meterOf({ pressureTokens: 90000, contextWindow: 100000 })), CFG, { session: {} },
+    ctxOf(projOf({ pressureTokens: 90000, contextWindow: 100000 })), CFG, { session: {} },
   )
   check('agent 没有 inject ⇒ 不注入且不抛', badAgent.injected === false, JSON.stringify(badAgent))
 
@@ -195,6 +211,33 @@ console.log('【5】⭐⭐⭐ 注册：关着 ⇒ 一个监听器都不挂')
   let threw = false
   try { handlers[0].fn({}) } catch { threw = true }
   check('🔴 钩子收到空载荷也不抛（钩子异常会毁掉轮次）', threw === false)
+
+}
+
+// ══════════════════════════════════════════════════════════════
+console.log('【6】⭐⭐⭐ 静态反证：不得再从 `tokenMeter.measure()` 读那三个字段')
+// ══════════════════════════════════════════════════════════════
+// 🔴🔴 **这是本次真 bug 的防线**（2026-10-12）：
+//    第一版从 `ctx.get('tokenMeter').measure(session)` 读
+//    `pressureTokens` / `projectedTokens` / `contextWindow`，
+//    而**那三个字段不在 measure() 的返回里**（实测返回是
+//    `{logRevision, baseline, surfaceDeltaTokens, totalTokens, surfaceTokens, nodes}`）
+//    ⇒ 每次都走"拿不到测量"那一支早退 ⇒ **一行都没注入过，且不报错**。
+//
+//    ⚠️ 套件当时**全绿**，因为桩喂了不存在的形状（夹具照想象写）。
+//    ⇒ 光改对代码不够，**还要有一条能报红的检查**盯着它别回来。
+//    ⭐ 判据：这类"调用了一个方法、却读了它没有的字段"的错，
+//       **运行时是静默的**（字段 just undefined），只有静态核对方法名/字段名才拦得住。
+{
+  const src = readFileSync(new URL('../src/context-report.ts', import.meta.url), 'utf8')
+  // 去掉注释，免得注释里提到旧写法就假红（本项目踩过：修复说明里逐字引用了错代码）。
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
+  check('🔴 源码里**没有** `tokenMeter` 这个服务名', !/tokenMeter/.test(code),
+    '又回去读 measure() 了？那三个字段不在它的返回里')
+  check('🔴 源码里**没有** `.measure(` 调用', !/\.measure\s*\(/.test(code),
+    'measure() 返回 totalTokens/surfaceTokens，不是 pressure/projected/contextWindow')
+  check('⭐ 走的是 `sessionProjections` 的 `contextPressure` 投影',
+    /sessionProjections/.test(code) && /contextPressure/.test(code))
 }
 
 rmSync(lib, { recursive: true, force: true })
