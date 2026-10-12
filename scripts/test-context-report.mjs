@@ -65,7 +65,8 @@ const agentStub = (opts = {}) => {
   const calls = []
   return {
     calls,
-    session: { id: 's-1' },
+    // ⭐ `delegationDepth` 挂在 **session.header** 上（`SessionHeader`，同步可读）。
+    session: { id: 's-1', header: opts.depth === undefined ? {} : { delegationDepth: opts.depth } },
     // ⭐ `agent.options` 是**真实存在的字段**（`runtime-types.d.ts` 的 Agent 接口）
     //    —— 我拿它取 provider/model，再去问路由要窗口。
     options: { provider: opts.provider ?? 'p', model: opts.model ?? 'm' },
@@ -308,6 +309,54 @@ console.log('【7】⭐⭐⭐ 投影不给窗口时，向路由要（本机生�
     CFG, a4,
   )
   check('🔴 llm 抛错 ⇒ 吞掉、仍注入（不能毁掉轮次）', r4.injected === true, JSON.stringify(r4))
+}
+
+// ══════════════════════════════════════════════════════════════
+console.log('【8】⭐⭐⭐ 防递归（插件的最后一道防线）')
+// ══════════════════════════════════════════════════════════════
+// 🔴 **这是本模块最要紧的一道门**（2026-10-12 补）：
+//    演示规则的形态是「占用 ≥60% ⇒ fork 子代理去 handoff」，而 `subagent_fork`
+//    **继承本会话上下文** ⇒ 子代理一出生就带着同样高的占用 ⇒ **它也会收到注入**
+//    ⇒ 再 fork ⇒ **无限递归**。⚠️ 不报错，只是子会话越滚越多、token 猛烧。
+//    ⭐ 与 `score-auto` 的第②道门同一判据（那里明写它是"防递归的唯一防线"）。
+//    ⚠️ 提示词里也写了"你是子代理就别触发"，但**那只靠模型自觉** ——
+//       模型漏检一次就炸 ⇒ **插件这道门才是真防线**，所以它必须有断言盯着。
+{
+  // ① 子代理 ⇒ 不注入（哪怕占用 90%、远过阈值）
+  const a = agentStub({ depth: 1 })
+  const r = await reportContextUsage(
+    ctxOf(projOf({ pressureTokens: 900000, contextWindow: 1000000 }), { llm: llmOf(1000000) }),
+    CFG, a,
+  )
+  check('🔴 子代理（depth=1）⇒ **不注入**（哪怕 90% 也拦住）',
+    r.injected === false, JSON.stringify(r))
+  check('  理由点名 delegationDepth 与"防递归"',
+    r.reason.includes('delegationDepth') && r.reason.includes('递归'), r.reason)
+  check('  没调任何 agent 方法', a.calls.length === 0)
+
+  // ② 顶层会话（header 无该字段）⇒ 照常注入
+  const a2 = agentStub({ depth: undefined })
+  const r2 = await reportContextUsage(
+    ctxOf(projOf({ pressureTokens: 900000, contextWindow: 1000000 }), { llm: llmOf(1000000) }),
+    CFG, a2,
+  )
+  check('⭐ 顶层会话（header 无该字段 ⇒ 当 0）⇒ 照常注入', r2.injected === true, JSON.stringify(r2))
+
+  // ③ depth = 0 显式 ⇒ 照常
+  const a3 = agentStub({ depth: 0 })
+  const r3 = await reportContextUsage(
+    ctxOf(projOf({ pressureTokens: 900000, contextWindow: 1000000 }), { llm: llmOf(1000000) }),
+    CFG, a3,
+  )
+  check('⭐ depth=0 显式 ⇒ 照常注入', r3.injected === true, JSON.stringify(r3))
+
+  // ④ 嵌套更深（depth=2）⇒ 同样拦住
+  const a4 = agentStub({ depth: 2 })
+  const r4 = await reportContextUsage(
+    ctxOf(projOf({ pressureTokens: 900000, contextWindow: 1000000 }), { llm: llmOf(1000000) }),
+    CFG, a4,
+  )
+  check('🔴 更深嵌套（depth=2）⇒ 同样拦住', r4.injected === false, JSON.stringify(r4))
 }
 
 rmSync(lib, { recursive: true, force: true })

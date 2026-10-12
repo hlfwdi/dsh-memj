@@ -92,6 +92,39 @@ export function registerContextReport(opts: { ctx: Context; config: MemjConfig }
 }
 
 /**
+ * ⭐⭐⭐ **读本会话的 `delegationDepth`**（`> 0` = 它自己是子代理）。
+ *
+ * ── 为什么这条如此重要 ──────────────────────────────────────────────────────
+ * 用户那条演示规则是「占用 ≥60% ⇒ fork 子代理去 handoff」，而 `subagent_fork`
+ * **继承本会话上下文** ⇒ 子代理一出生就带着同样高的占用 ⇒ 它也会收到注入
+ * ⇒ 再 fork ⇒ **递归**。⚠️ 不报错，只是子会话越滚越多。
+ * ⇒ **本函数就是那道"防递归的唯一防线"**（与 `score-auto` 的第②道门同一判据）。
+ *
+ * ── 怎么读（比 `score-auto` 更省）────────────────────────────────────────────
+ * ⭐ `delegationDepth` 就在 **`session.header`** 上（`SessionHeader.delegationDepth`，
+ *    读 `@deepseek-ai/dsh-session` 的 `types.d.ts` 确认："absent (zero) for a
+ *    top-level session, parent depth + 1 for a subagent child"）
+ *    ⇒ **同步可读**，不必像 `score-auto` 那样走 `sessionQuery.observeSession()` 那趟 I/O。
+ *    ⚠️ 这对 `agent/turn-stopping`（`@mode serial`，会被 await）尤其要紧。
+ *
+ * ⚠️ **读不到时回 `0`（= 当作顶层会话）** —— 与 `score-auto` 的取舍一致：
+ *    回 0 的最坏后果是"子代理多报了一次占用"（无害）；
+ *    回大数则一旦读取失败就**永久不报**（更隐蔽）。
+ *
+ * @param session - `agent.session`。
+ * @returns `delegationDepth`；读不到时 `0`。
+ */
+function delegationDepthOf(session: unknown): number {
+  try {
+    const h = (session as { header?: { delegationDepth?: unknown } } | undefined)?.header
+    const d = h?.delegationDepth
+    return typeof d === 'number' && Number.isFinite(d) ? d : 0
+  } catch {
+    return 0
+  }
+}
+
+/**
  * ⭐⭐ **轮末入口**（钩子调它；也可被测试直接调）。
  *
  * 🔴 顺序刻意如此：**开关 → agent 形状 → 读占用（廉价、纯回放）→ 阈值 → 才注入**。
@@ -112,6 +145,27 @@ export async function reportContextUsage(
   if (!config.contextReportOnTurnEnd) return { injected: false, reason: '开关关着' }
   if (agent === undefined || agent === null) return { injected: false, reason: '载荷里没有 agent' }
   if (typeof agent.inject !== 'function') return { injected: false, reason: 'agent 没有 inject 方法' }
+
+  // ── ⓪ 🔴🔴 **防递归**（2026-10-12 补；这是本模块**最要紧**的一道门）──
+  //
+  // **为什么必须有**：用户那条演示规则的形态是
+  //    「占用 ≥60% ⇒ fork 一个子代理去做 handoff」。
+  // 🔴 而 `subagent_fork` **继承本会话上下文** ⇒ 子代理**一出生就带着同样高的占用**
+  //    ⇒ 它**同样会收到本条注入** ⇒ 按同一条规则**再 fork 一个** ⇒ **无限递归**。
+  //    ⚠️ 而且它**不报错**（只会看到子会话越来越多、token 猛烧）。
+  //
+  // ⭐ 与 `score-auto` 的「第②道门」**同一判据**（那里明写它是"防递归的唯一防线"）。
+  // ⚠️ **提示词里也写了"你自己是子代理就别触发"，但那只靠模型自觉** ——
+  //    模型漏检一次就炸 ⇒ **插件侧这道门才是真的防线**。
+  //
+  // ⚠️ 读不到时按 `0`（= 当作顶层会话）—— 与 `score-auto` 的取舍一致：
+  //    回 0 的最坏后果是"子代理多报了一次占用"（无害）；
+  //    回大数则一旦读取失败就**永久不报**（更隐蔽）。
+  // ⭐ 好在 `delegationDepth` 就在 `session.header` 上 ⇒ **同步可读**，不用查日志。
+  const depth = delegationDepthOf(agent.session)
+  if (depth > 0) {
+    return { injected: false, reason: `本会话是子代理（delegationDepth=${depth}）⇒ 不报（防递归）` }
+  }
 
   // ── ① 读占用 ──
   // ⭐ 走 `readContextUsageWithWindow`：投影不给窗口时，**再向 `ctx.llm.resolveModelInfo`
