@@ -60,13 +60,28 @@ console.log(`库根: ${lib}\n`)
  */
 const projOf = (ret) => ({ stateOf: (_s, key) => (key === 'contextPressure' ? ret : undefined) })
 
-/** 造一个会记录"调了哪个方法、传了什么"的 agent 桩。 */
+/**
+ * 造一个会记录"调了哪个方法、传了什么"的 agent 桩。
+ *
+ * 🔴🔴 **每个桩必须有自己的 `session.id`**（2026-10-12 修）：
+ *    边沿触发把"上次报过的百分比"**按 session.id 记在内存表里**
+ *    ⇒ 若所有用例都用同一个 id（我第一版写的 `'s-1'`），
+ *      **前一个用例报过 80%，后一个用例就被判"不足一阶"而不报** ⇒
+ *      **5 条假失败**（而产品完全正确）。
+ *    ⭐ 判据：**凡"按 id 记状态"的实现，测试夹具就必须给每个用例独立的 id** ——
+ *       否则用例之间会通过那张表互相污染（本项目"设计 N 次重复实验时先问每轮起点一样吗"的同族）。
+ */
+let nextSessionSeq = 0
 const agentStub = (opts = {}) => {
   const calls = []
+  nextSessionSeq += 1
   return {
     calls,
     // ⭐ `delegationDepth` 挂在 **session.header** 上（`SessionHeader`，同步可读）。
-    session: { id: 's-1', header: opts.depth === undefined ? {} : { delegationDepth: opts.depth } },
+    session: {
+      id: opts.id ?? `s-${nextSessionSeq}`,
+      header: opts.depth === undefined ? {} : { delegationDepth: opts.depth },
+    },
     // ⭐ `agent.options` 是**真实存在的字段**（`runtime-types.d.ts` 的 Agent 接口）
     //    —— 我拿它取 provider/model，再去问路由要窗口。
     options: { provider: opts.provider ?? 'p', model: opts.model ?? 'm' },
@@ -357,6 +372,61 @@ console.log('【8】⭐⭐⭐ 防递归（插件的最后一道防线）')
     CFG, a4,
   )
   check('🔴 更深嵌套（depth=2）⇒ 同样拦住', r4.injected === false, JSON.stringify(r4))
+}
+
+// ══════════════════════════════════════════════════════════════
+console.log('【9】⭐⭐⭐ 边沿触发（治"过线后每轮刷屏"）')
+// ══════════════════════════════════════════════════════════════
+// 🔴 **用户实测撞到的第三个坑**（2026-10-12）：`contextReportMinPercent` 是**电平**判据 ——
+//    一旦过线，只要没掉下去就**每轮都报**；而长会话占用**单调上涨**
+//    ⇒ 从过线那一刻起**每轮一条、永不停止**。用户连收 **十几条**"不动作"的注入。
+//    ⚠️ 而且它**自激**：注入文本占 token ⇒ 占用更高 ⇒ 下一轮更过线。
+//    ⭐ 最糟的是：规则②「同一会话至多一次」一旦成立 ⇒ 后续每条**必然空操作**
+//       ⇒ 那形态 = **保证无效的每轮噪音**。
+{
+  const cfg = { ...CFG, contextReportStepPercent: 10 }
+  const runs = []
+
+  // ⚠️ 记忆表按 `session.id` 存 ⇒ **必须用同一个 agent 桩**才测得到边沿。
+  const shared = agentStub()
+  shared.session.id = 's-edge'
+  const driveSame = async (pct) => {
+    const r = await reportContextUsage(
+      ctxOf(projOf({ pressureTokens: pct * 10000, contextWindow: 1000000 }), { llm: llmOf(1000000) }),
+      cfg, shared,
+    )
+    runs.push({ pct, injected: r.injected, reason: r.reason })
+    return r
+  }
+  await driveSame(61)   // 首次过阈值 ⇒ 报
+  await driveSame(62)   // 只涨 1% ⇒ 不报
+  await driveSame(65)   // 涨 4% ⇒ 不报
+  await driveSame(69)   // 累计涨 8% ⇒ 不报（不足一阶 10）
+  await driveSame(71)   // 累计涨 10% ⇒ 报
+  await driveSame(72)   // 又只涨 1% ⇒ 不报
+
+  console.log('  序列:', runs.map((r) => `${r.pct}%:${r.injected ? '报' : '—'}`).join('  '))
+  check('⭐ 61% 首次报', runs[0].injected === true, JSON.stringify(runs[0]))
+  check('🔴 62% 不报（每轮都报的旧毛病已治）', runs[1].injected === false, JSON.stringify(runs[1]))
+  check('🔴 65% 不报', runs[2].injected === false, JSON.stringify(runs[2]))
+  check('🔴 69% 仍不报（累计 +8% < 一阶 10%）', runs[3].injected === false, JSON.stringify(runs[3]))
+  check('⭐ 71% 报（累计 +10% 达一阶）', runs[4].injected === true, JSON.stringify(runs[4]))
+  check('🔴 72% 又不报', runs[5].injected === false, JSON.stringify(runs[5]))
+  check('  未报的理由点明"一阶"',
+    String(runs[1].reason).includes('一阶'), runs[1].reason)
+
+  // 反证：台阶=1 ⇒ 每涨 1% 都该报（证明台阶真的在起作用）
+  const shared2 = agentStub()
+  shared2.session.id = 's-step1'
+  const cfg1 = { ...CFG, contextReportStepPercent: 1 }
+  const q = (pct) => reportContextUsage(
+    ctxOf(projOf({ pressureTokens: pct * 10000, contextWindow: 1000000 }), { llm: llmOf(1000000) }),
+    cfg1, shared2,
+  )
+  const q1 = await q(70)
+  const q2 = await q(71)
+  check('🔴 反证：台阶=1 时 70%→71% 也该报（证明台阶在起作用）',
+    q1.injected === true && q2.injected === true, `${q1.injected}/${q2.injected}`)
 }
 
 rmSync(lib, { recursive: true, force: true })

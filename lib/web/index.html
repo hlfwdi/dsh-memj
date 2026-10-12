@@ -606,6 +606,14 @@
         </div>
         <p class="set-desc">占用率低于这个数就不注入 —— 注入的文本本身也占 token，每轮都报会把上下文越推越高，而占用低时模型也不需要动作。它与提示词里写的阈值是两件事：<b>这个管"要不要报"，提示词那个管"报到之后要不要做事"</b>。</p>
       </div>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="ctx-report-step">每涨这么多才重报</label>
+          <input type="number" id="ctx-report-step" min="1" max="100" step="1">
+          <span class="set-suffix">%</span>
+        </div>
+        <p class="set-desc">🔴 <b>没有它就会每轮刷屏</b>：上面那个"低于此占用率不报"是<b>电平</b>判据 —— 一旦过线，只要占用没掉下去就<b>每轮都报</b>；而长会话的占用是单调上涨的，于是从过线那一刻起就<b>每轮一条、永不停止</b>（而且注入文本本身还在推高占用）。<br>这里改成<b>边沿</b>触发：只有比<b>上次报过的</b>又高出这么多才重报。例：阈值 50、台阶 10 ⇒ 50% 报一次、60% 再报一次、70% 又一次，中间那些轮次都安静。<br>⚠️ 占用<b>回落再涨回去</b>会重报（那是真实的状态变化，该报）。</p>
+      </div>
       <div class="set-foot set-foot-inline">
         <button type="button" class="primary set-save" data-savepage="sink-ctxreport">保存</button>
         <span class="dim set-msg" id="settings-msg-sink-ctxreport"></span>

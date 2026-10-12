@@ -2272,6 +2272,7 @@ export async function handleApi(
             // ⭐⭐⭐ 上下文占用率上报（决策 226；2026-10-12）
             contextReportOnTurnEnd: cfg.contextReportOnTurnEnd,
             contextReportMinPercent: cfg.contextReportMinPercent,
+            contextReportStepPercent: cfg.contextReportStepPercent,
             // ⭐⭐ 英文召回索引（设计文档 §9）：翻译模型 / 模板 / 并发 / 诊断
             enIndex: cfg.enIndex,
             enIndexDiag: cfg.enIndexDiag,
@@ -2498,7 +2499,7 @@ export async function handleApi(
       //    ⚠️ 与上面那组**键名不像但性质相同**：漏进这份"要接受的键"清单
       //    ⇒ 单独提交会被判"什么都没给" ⇒ **400**（本项目已踩过一次，见上方的注释）。
       const CONTEXT_REPORT_BOOL_KEYS = ['contextReportOnTurnEnd'] as const
-      const CONTEXT_REPORT_NUM_KEYS = ['contextReportMinPercent'] as const
+      const CONTEXT_REPORT_NUM_KEYS = ['contextReportMinPercent', 'contextReportStepPercent'] as const
       const contextReportWanted = [
         ...CONTEXT_REPORT_BOOL_KEYS, ...CONTEXT_REPORT_NUM_KEYS,
       ].filter((k) => (payload as Record<string, unknown>)[k] !== undefined)

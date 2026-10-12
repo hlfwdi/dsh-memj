@@ -59,6 +59,32 @@ export interface AutoContextOutcome {
 const SECTION_NAME = '上下文占用'
 
 /**
+ * 🔴 **"上次报过的百分比"**（每会话一个）—— 边沿触发要用。
+ *
+ * ⚠️ **只在内存**（进程重启即失）。⭐ 可接受：重启后第一轮会重报一次，
+ *    而那**正是"新状态"**（进程换了、模型可能也换了），重报一次无害。
+ * ⚠️ 不落盘的理由：它只是个**去噪用的记忆**，丢了最坏是"多报一条"，不值得为它引入 I/O。
+ */
+const lastReportedPercent = new Map<string, number>()
+
+/** 从会话对象取 id（读不到时回 `''`，那时边沿判据退化成"每会话至多一次"）。 */
+function sessionIdOf(session: unknown): string {
+  try {
+    const id = (session as { id?: unknown } | undefined)?.id
+    return typeof id === 'string' ? id : ''
+  } catch {
+    return ''
+  }
+}
+
+/** 记住"这次报的是多少"（`percent` 缺席时记 `-1`，表示"报过绝对值了"）。 */
+function rememberReportedPercent(sid: string, percent: number | undefined): void {
+  try {
+    lastReportedPercent.set(sid, percent === undefined ? -1 : percent)
+  } catch { /* 记不住不影响主流程 */ }
+}
+
+/**
  * ⭐⭐⭐ **挂上"轮末报上下文占用"的钩子**。
  *
  * @param opts - `ctx` 与配置。
@@ -190,6 +216,39 @@ export async function reportContextUsage(
     return { injected: false, reason: `占用 ${usage.percent}% < 阈值 ${config.contextReportMinPercent}%` }
   }
 
+  // ── ②′ 🔴🔴 **边沿触发**（2026-10-12 补；治"每轮刷屏"）──
+  //
+  // **现象**：`contextReportMinPercent` 是**电平**判据 —— 一旦过线，
+  //   只要没掉下去，**每一轮都会报**。而占用在长会话里**单调上涨**
+  //   ⇒ 从过线那一刻起，**每轮一条，永不停止**。
+  //   ⚠️ 实测：用户连收 **十几条**"不动作"的注入；而且它**自己在推高占用**
+  //      （注入文本占 token ⇒ 占用更高 ⇒ 下一轮更过线）⇒ **自激**。
+  //   ⭐ 更糟的是：**规则②「同一会话至多一次」一旦成立，后续每一条都必然是空操作**
+  //      ⇒ 当前形态 = **保证无效的每轮噪音**。
+  //
+  // **修法**：改成**边沿触发** —— 只在"**比上次报过的高出一个台阶**"时才报。
+  //   ⭐ 台阶 = `contextReportStepPercent`（默认 10）：60% 报一次、70% 再报一次……
+  //   ⇒ 一条长会话总共报几次，而不是每轮一次。
+  //   ⚠️ **占用回落再涨回去** ⇒ 会重报（那是真实的状态变化，该报）。
+  //
+  // ⚠️ 记忆在**内存**（每会话一个数）⇒ 重启即失。可接受：
+  //    重启后第一轮会重报一次（无害，而且那正是"新状态"）。
+  const sid = sessionIdOf(agent.session)
+  const lastReported = lastReportedPercent.get(sid)
+  if (usage.percent !== undefined && lastReported !== undefined) {
+    if (usage.percent - lastReported < config.contextReportStepPercent) {
+      return {
+        injected: false,
+        reason: `占用 ${usage.percent}% 距上次报过的 ${lastReported}% 不足一阶（${config.contextReportStepPercent}%）⇒ 不重复报`,
+      }
+    }
+  } else if (usage.percent === undefined && lastReported === undefined) {
+    // 无百分比（本路由不给窗口）：没有"台阶"可比 ⇒ 退回**每会话至多一次**。
+    // ⚠️ 不这样兜的话，无窗口路由会退回"每轮都报"那个老毛病。
+  } else if (usage.percent === undefined && lastReported !== undefined) {
+    return { injected: false, reason: '本路由无窗口（无台阶可比）且已报过一次 ⇒ 不重复报' }
+  }
+
   // ── ③ 注入（**只提供事实，不规定动作**）──
   // ⚠️ `inject()` 收的是 **`UserMessage`**（`runtime-types.d.ts:209`），
   //    不是裸对象 ⇒ 必须走 `createUserMessage`（照 `commands.ts` 的 `submitContext`）。
@@ -203,6 +262,8 @@ export async function reportContextUsage(
     },
   })
   agent.inject(message)
+  // ⭐ 记下"这次报的是多少"，供下一轮的边沿判据用。
+  rememberReportedPercent(sid, usage.percent)
   // ⚠️ `percent` 可能是 `undefined`（本路由不给窗口）⇒ 那句日志要如实写成 `—`，
   //    不能拼成 "undefined%"（那看着像 bug，而其实是数据源的已知边界）。
   const pct = usage.percent === undefined ? '（无窗口）' : `${usage.percent}%`

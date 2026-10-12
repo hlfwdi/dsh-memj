@@ -391,6 +391,8 @@ export async function writeSetting(
     //    🔴 **默认关 ⇒ 不影响任何现有行为**。
     | 'contextReportOnTurnEnd'
     | 'contextReportMinPercent'
+    // ⭐⭐⭐ 边沿触发的台阶（2026-10-12）：治"过线后每轮都刷屏"。
+    | 'contextReportStepPercent'
     // ⭐⭐ 主动注入（设计文档 §10.1）：开关 / 通路 / 模型 / 范围 / 触发口径 / 各种阈值
     | 'activeInject'
     | 'activeInjectChannel'

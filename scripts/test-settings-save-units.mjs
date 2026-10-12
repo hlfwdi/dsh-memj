@@ -55,9 +55,10 @@ const EXPECT = {
   'sink-theme': ['themeCreation'],
   'sink-progress': ['progressCharsWarn', 'progressCharsKeep'],
   // ⭐⭐⭐ 上下文占用上报（决策 226；2026-10-12）——
-  //    ⚠️ 它**带一个配套参数**（阈值）⇒ 按本项目判据（"一个勾选就是全部语义"才适合即时）
+  //    ⚠️ 它**带配套参数**（阈值 + 台阶）⇒ 按本项目判据（"一个勾选就是全部语义"才适合即时）
   //       必须走**保存按钮**，**不是**即时开关。
-  'sink-ctxreport': ['contextReportOnTurnEnd', 'contextReportMinPercent'],
+  //    ⭐ 台阶（`contextReportStepPercent`）是"边沿触发"用的：治"过线后每轮刷屏"。
+  'sink-ctxreport': ['contextReportOnTurnEnd', 'contextReportMinPercent', 'contextReportStepPercent'],
   'sink-git': ['backupGit'],
   'sink-tag': ['tagNormalizeProvider', 'tagNormalizeModel', 'tagNormalizeOnHandoff', 'tagNormalizeReasoningEffort'],
   // ── 热知识注入 ──
