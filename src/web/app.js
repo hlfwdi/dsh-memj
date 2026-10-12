@@ -73,6 +73,10 @@ const SAVE_UNITS = {
   // ── 沉淀 ──
   'sink-theme': 'sink',
   'sink-progress': 'sink',
+  // ⭐⭐⭐ 上下文占用上报（决策 226；2026-10-12 用户裁定）——
+  //    ⚠️ 它**带一个配套参数**（阈值）⇒ 按本项目判据**必须走保存按钮**，
+  //       不能做成即时开关（"一个勾选就是全部语义"才适合即时）。
+  'sink-ctxreport': 'sink',
   'sink-git': 'sink',
   'sink-tag': 'sink',
   // ── 热知识注入 ──
@@ -149,6 +153,10 @@ const NUM_KEYS = {
   'sink-progress': [
     ['progress-warn', 'progressCharsWarn', '触发阈值', 1000, 1000000, true],
     ['progress-keep', 'progressCharsKeep', '截断目标', 1000, 1000000, true],
+  ],
+  // ── 沉淀 · 上下文占用上报（决策 226）──
+  'sink-ctxreport': [
+    ['ctx-report-min', 'contextReportMinPercent', '低于此占用率不报', 1, 100, true],
   ],
   // ── 热知识注入 · 预算 ──
   'hot-budget': [
@@ -4024,6 +4032,11 @@ async function openSettingsPage(sub = 'sink', { keepMessage = false } = {}) {
     if (warnInput) warnInput.value = String(s.progressCharsWarn ?? '')
     const keepInput = document.getElementById('progress-keep')
     if (keepInput) keepInput.value = String(s.progressCharsKeep ?? '')
+    // ⭐⭐⭐ 上下文占用上报（决策 226）：回填开关与阈值。
+    const ctxReportBox = document.getElementById('ctx-report-on')
+    if (ctxReportBox) ctxReportBox.checked = s.contextReportOnTurnEnd === true
+    const ctxReportMin = document.getElementById('ctx-report-min')
+    if (ctxReportMin) ctxReportMin.value = String(s.contextReportMinPercent ?? '')
     // ⭐ git 版本维护开关（决策 135；台账开关已在决策 136 删除）。
     const gitBox = document.getElementById('backup-git')
     if (gitBox) gitBox.checked = s.backupGit === true
@@ -5633,6 +5646,11 @@ async function saveSettings(unit = state.setSub) {
         break
       case 'sink-progress':
         payload = nums
+        break
+      case 'sink-ctxreport':
+        // ⚠️ 布尔**原样传**（省略 = 关不掉这个开关）；阈值走 `nums`（表驱动展开）。
+        //    🔴 本单元**带配套参数** ⇒ 按本项目判据**必须走保存按钮**，不做即时开关。
+        payload = { contextReportOnTurnEnd: chk('ctx-report-on'), ...nums }
         break
       case 'sink-git':
         // ⚠️ **布尔原样传**（不能因为 false 就省略 —— 省略 = 关不掉这个开关）。

@@ -589,6 +589,30 @@
     </section>
 
     <section class="set-section">
+      <h3 class="set-section-title">上下文占用上报</h3>
+      <p class="set-note">把「这次会话用了多少上下文」在每轮结束时告诉模型。DSH 本身<b>不把占用率暴露给模型</b>（压缩是面向用户的命令，不是模型工具），所以模型原本无从知道自己用了多少 —— 打开这个开关，它就能知道，进而能按你写在提示词里的规则去动作。</p>
+      <div class="set-item">
+        <label class="set-row set-click">
+          <input type="checkbox" id="ctx-report-on">
+          <strong>每轮结束时把上下文占用率报给模型</strong>
+        </label>
+        <p class="set-desc">注入一条「窗口 / 当前用量 / 百分比」。⭐ 插件只报<b>事实</b>，不规定任何动作：要不要依据它做事，由<b>你的提示词</b>决定（比如"占用超过 60% 就 fork 一个子代理去异步沉淀"）。没写规则时模型会忽略它。关掉则一个监听器都不挂。</p>
+      </div>
+      <div class="set-item">
+        <div class="set-row">
+          <label class="set-label" for="ctx-report-min">低于此占用率不报</label>
+          <input type="number" id="ctx-report-min" min="1" max="100" step="1">
+          <span class="set-suffix">%</span>
+        </div>
+        <p class="set-desc">占用率低于这个数就不注入 —— 注入的文本本身也占 token，每轮都报会把上下文越推越高，而占用低时模型也不需要动作。它与提示词里写的阈值是两件事：<b>这个管"要不要报"，提示词那个管"报到之后要不要做事"</b>。</p>
+      </div>
+      <div class="set-foot set-foot-inline">
+        <button type="button" class="primary set-save" data-savepage="sink-ctxreport">保存</button>
+        <span class="dim set-msg" id="settings-msg-sink-ctxreport"></span>
+      </div>
+    </section>
+
+    <section class="set-section">
       <h3 class="set-section-title">标签规范化</h3>
       <p class="set-note">词表存在 tags/vocabulary.json，与水位线同一个文件。之后只处理上次运行之后更新过的知识（没有时间戳的老条目不在其中，除非用 full 全库重跑）。它是积累的判断，不是可以从别处重建的派生数据，删掉就永久丢了。</p>
       <div class="set-item">

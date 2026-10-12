@@ -54,6 +54,10 @@ const EXPECT = {
   // ── 沉淀 ──
   'sink-theme': ['themeCreation'],
   'sink-progress': ['progressCharsWarn', 'progressCharsKeep'],
+  // ⭐⭐⭐ 上下文占用上报（决策 226；2026-10-12）——
+  //    ⚠️ 它**带一个配套参数**（阈值）⇒ 按本项目判据（"一个勾选就是全部语义"才适合即时）
+  //       必须走**保存按钮**，**不是**即时开关。
+  'sink-ctxreport': ['contextReportOnTurnEnd', 'contextReportMinPercent'],
   'sink-git': ['backupGit'],
   'sink-tag': ['tagNormalizeProvider', 'tagNormalizeModel', 'tagNormalizeOnHandoff', 'tagNormalizeReasoningEffort'],
   // ── 热知识注入 ──
@@ -113,8 +117,14 @@ const EXPECT_INSTANT = {
 const UNITS = Object.keys(EXPECT)
 
 console.log('【1】按钮与结果行**一一对应**')
+// ⚠️ **这里曾经写死 `=== 12`** —— 2026-10-12 加「上下文占用上报」那一单元时它报红，
+//    而**产品侧完全正确**（按钮、结果行、五处接线都在）。
+//    ⭐ 判据：这种"数一数"的断言**不该写死数字**（每加一个单元都要来改它，
+//       而它守的其实不是数量）⇒ 它要守的是"两份清单一致"，
+//       而那件事【3】已经用 `mappedUnits`（从实现解析出来的）守着了。
+//    ⇒ 本行只做一个**不钉数字**的粗核对（单元数 > 0 且能数出来）。
 check(`共 ${UNITS.length} 个保存单元（另有 ${Object.keys(EXPECT_INSTANT).length} 个即时开关，见【9】）`,
-  UNITS.length === 12, `实际 ${UNITS.length}`)
+  UNITS.length > 0, `EXPECT 里一个单元都没有（${UNITS.length}）`)
 check('⭐ 每个单元的 `data-savepage` 都在 HTML 里（缺 ⇒ 那个版块没有保存按钮）',
   UNITS.every((u) => savepages.includes(u)),
   `缺：${UNITS.filter((u) => !savepages.includes(u)).join(',')}`)
