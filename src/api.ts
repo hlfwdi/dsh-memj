@@ -2269,6 +2269,9 @@ export async function handleApi(
             hotScoreSubagentProvider: cfg.hotScoreSubagentProvider,
             hotScoreSubagentModel: cfg.hotScoreSubagentModel,
             hotScoreTimeoutMs: cfg.hotScoreTimeoutMs,
+            // ⭐⭐⭐ 上下文占用率上报（决策 226；2026-10-12）
+            contextReportOnTurnEnd: cfg.contextReportOnTurnEnd,
+            contextReportMinPercent: cfg.contextReportMinPercent,
             // ⭐⭐ 英文召回索引（设计文档 §9）：翻译模型 / 模板 / 并发 / 诊断
             enIndex: cfg.enIndex,
             enIndexDiag: cfg.enIndexDiag,
@@ -2491,6 +2494,15 @@ export async function handleApi(
         'hotScoreTimeoutMs',
       ].filter((k) => (payload as Record<string, unknown>)[k] !== undefined)
       const wantsAnyHotScore = hotScoreWanted.length > 0
+      // ⭐⭐⭐ 上下文占用率上报（决策 226；2026-10-12）——
+      //    ⚠️ 与上面那组**键名不像但性质相同**：漏进这份"要接受的键"清单
+      //    ⇒ 单独提交会被判"什么都没给" ⇒ **400**（本项目已踩过一次，见上方的注释）。
+      const CONTEXT_REPORT_BOOL_KEYS = ['contextReportOnTurnEnd'] as const
+      const CONTEXT_REPORT_NUM_KEYS = ['contextReportMinPercent'] as const
+      const contextReportWanted = [
+        ...CONTEXT_REPORT_BOOL_KEYS, ...CONTEXT_REPORT_NUM_KEYS,
+      ].filter((k) => (payload as Record<string, unknown>)[k] !== undefined)
+      const wantsAnyContextReport = contextReportWanted.length > 0
       // ⭐⭐ 主动注入（设计文档 §10.1）
       const wantsActive = payload.activeInject !== undefined
       const wantsActiveChannel = payload.activeInjectChannel !== undefined
@@ -2566,6 +2578,9 @@ export async function handleApi(
         //    而 tsc 与单测都照不到（只有隔离实例真 POST 才抓到）。
         //    ⇒ ⭐ 本次用**一个布尔**（表驱动算出来的）覆盖全部 10 个键 ⇒ 结构上漏不了。
         && !wantsAnyHotScore
+        // ⭐⭐⭐ 上下文占用率上报（决策 226）—— 🔴 **同一个落点**：
+        //    漏了这里 ⇒ 单独提交这两个键返 400、面板保存失败（tsc 与单测都照不到）。
+        && !wantsAnyContextReport
       ) {
         return {
           status: 400,
@@ -2577,7 +2592,8 @@ export async function handleApi(
               '`hotFullWarnChars` / `hotSessionKeep` / `enIndex` / `translateProvider` / ' +
               '`translateModel` / `translateTemplate` / `tagNormalizeProvider` / ' +
               '`tagNormalizeModel` / `tagNormalizeOnHandoff` / ' +
-              '`tagNormalizeReasoningEffort` 之一。',
+              '`tagNormalizeReasoningEffort` / ' +
+              '`contextReportOnTurnEnd` / `contextReportMinPercent` 之一。',
           },
         }
       }
@@ -3297,6 +3313,21 @@ export async function handleApi(
       }
       if (payload.hotScoreTimeoutMs !== undefined) {
         const bad = await writeHotScore('hotScoreTimeoutMs', payload.hotScoreTimeoutMs, () => posAt('hotScoreTimeoutMs', 300000))
+        if (bad !== undefined) return bad as never
+      }
+
+      // ⭐⭐⭐ 上下文占用率上报（决策 226；2026-10-12 用户裁定）——
+      //    ⚠️ 复用 `writeHotScore` 那个助手（它只是"校验通过才写"，与评分无关，
+      //       名字带 hotScore 是历史原因；⭐ 不新造第二个几乎相同的助手）。
+      for (const k of CONTEXT_REPORT_BOOL_KEYS) {
+        if ((payload as Record<string, unknown>)[k] === undefined) continue
+        const bad = await writeHotScore(k, (payload as Record<string, unknown>)[k], () => boolAt(k))
+        if (bad !== undefined) return bad as never
+      }
+      for (const k of CONTEXT_REPORT_NUM_KEYS) {
+        if ((payload as Record<string, unknown>)[k] === undefined) continue
+        // 1–100 的整数（百分比）。
+        const bad = await writeHotScore(k, (payload as Record<string, unknown>)[k], () => natAt(k, 100))
         if (bad !== undefined) return bad as never
       }
 

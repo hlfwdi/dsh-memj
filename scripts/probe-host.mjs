@@ -373,14 +373,31 @@ check('无重复 (kind,path)',
 check('无尾斜杠', registeredRoutes.every((r) => !r.path.endsWith('/')))
 
 console.log('\n【E】启动诊断文件（排查"静默不注册"的依据）')
-// ⚠️ 诊断是**异步追加写**（不阻塞 apply），所以要给它一点时间落盘。
+// ⚠️ 诊断是**异步追加写**（`diag()` 里是 `void (async () => … appendFile …)()`），
+//    而它是**逐条追加**的（apply-start / inject-callback-ran / tools-registered…）
+//    ⇒ 🔴 **"文件存在"与"内容写完"是两个时刻**。
+//
+// 🔴🔴 **2026-10-12 修掉一个真实的 flaky**（本探针曾偶发 98/2，两条红就出在这里）：
+//    原实现等的是 `!existsSync(diag)` ⇒ **文件一出现就往下走**，
+//    而那一刻**后面的几条可能还没 append 上去** ⇒ 下面 4 条断言**随机红**。
+//    ⭐ 独立探针实测：文件先出现，**1–2 ms 后**内容才齐（窗口很窄，所以难复现）。
+//    ✅ 正解：**等它要断言的东西**（那几条记录），不是等一个更弱的前置条件。
+//    ⭐ 与本项目既有判据同族：**"元素存在"≠"里面有内容"**；
+//       也符合"探针的'没等到'与代码的'没写完'表现完全一样 ⇒ 等条件，不等毫秒"。
 const diag = join(lib, '.startup-diag.txt')
-for (let i = 0; i < 50 && !existsSync(diag); i += 1) {
+const WANT_DIAG = ['apply-start', 'inject-callback-ran', 'tools-registered']
+const diagText = () => {
+  try { return readFileSync(diag, 'utf8') } catch { return '' }
+}
+// 等到"要断言的那几条"都出现为止（上限 ~2s，比原来更宽裕也更准）。
+for (let i = 0; i < 100; i += 1) {
+  const t = diagText()
+  if (WANT_DIAG.every((w) => t.includes(w))) break
   await new Promise((r) => setTimeout(r, 20))
 }
 check('诊断文件已写出', existsSync(diag))
 if (existsSync(diag)) {
-  const text = readFileSync(diag, 'utf8')
+  const text = diagText()
   check('记录了 apply-start', text.includes('apply-start'))
   check('记录了 inject-callback-ran', text.includes('inject-callback-ran'))
   check('记录了 tools-registered', text.includes('tools-registered'))

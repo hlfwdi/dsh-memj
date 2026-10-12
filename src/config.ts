@@ -222,6 +222,36 @@ export const Config = z.object({
    */
   hotScoreThreshold: z.number().min(0).max(1).default(0.7),
 
+  // ── 上下文占用率上报（决策 226；2026-10-12 用户裁定）──────────────────────
+  //
+  // ⭐ **它解决什么**：「上下文用到多少了」这件事 DSH **只对插件可见、不对模型可见**
+  //    （`dsh-compaction` README 原文：压缩"不会注册面向模型的压缩工具"）
+  //    ⇒ 「到 60% 就自动沉淀」这类规则**纯靠提示词写不出来**（模型拿不到那个数）。
+  //    本功能把那个数**每轮末报给模型** ⇒ 规则就能写在提示词里了。
+  //
+  // 🔴 **插件只报事实，不规定动作** —— 阈值动作由**用户的提示词**决定
+  //    （注入文本末句："若你的提示词中规定了…现在可以判断是否执行；否则忽略本条"）。
+
+  /**
+   * ⭐⭐⭐ **总开关**（**默认关**；用户裁定）。
+   *
+   * ⚠️ **关着 ⇒ 一个监听器都不挂**（照 `hotScoreOnTurnEnd` 的做法）——
+   *    不是"挂上去再判 false"：后者仍在事件链上占位，且诊断行会变成**假绿**。
+   */
+  contextReportOnTurnEnd: z.boolean().default(false),
+
+  /**
+   * ⭐⭐ **低于此占用率就不报**（默认 50）。
+   *
+   * 🔴 **为什么必须有阈值、不能每轮都报**：注入的文本**本身占 token**
+   *    ⇒ 每轮都报会持续推高占用（"自我强化"）。低占用时模型也不需要动作。
+   *
+   * ⚠️ **它与提示词里的阈值是【两个不同的东西】，别混**：
+   *    本键管"**插件要不要把数报出来**"（省 token）；提示词里的 60% 管
+   *    "**模型看到数之后要不要动作**"。两者可以不同值。
+   */
+  contextReportMinPercent: z.natural().min(1).max(100).default(50),
+
   /**
    * ⭐⭐ **滚动窗口（小时）**：只有窗口内加过分的事件才算数（用户裁定：*"30 个小时"*）。
    *
@@ -957,6 +987,10 @@ export const DEFAULT_CONFIG: MemjConfig = {
   tagNormalizeOnHandoff: true,
   // ⭐⭐⭐ 知识评分（决策 177 / 178）：总开关**默认关**（用户裁定）；**其余是它的参数**。
   hotScoreOnTurnEnd: false,
+  // ⭐⭐⭐ 上下文占用率上报（决策 226）：总开关**默认关**（用户裁定）；
+  //    ⭐ 阈值 50 —— 低于它不报（注入文本本身占 token，每轮都报会推高占用）。
+  contextReportOnTurnEnd: false,
+  contextReportMinPercent: 50,
   hotScoreThreshold: 0.7,
   hotScoreWindowHours: 30,
   hotScoreTopN: 20,

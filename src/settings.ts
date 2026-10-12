@@ -384,6 +384,13 @@ export async function writeSetting(
     | 'hotScoreSubagentProvider'
     | 'hotScoreSubagentModel'
     | 'hotScoreTimeoutMs'
+    // ⭐⭐⭐ 上下文占用率上报（决策 226；2026-10-12 用户裁定）——
+    //    轮末把占用率注入给模型（`agent.inject`，不唤醒），
+    //    让它能依据"提示词里写的阈值动作"自行判断该不该动作。
+    //    ⭐ 它服务的是**上下文管理**，与热知识/主动注入都不同；
+    //    🔴 **默认关 ⇒ 不影响任何现有行为**。
+    | 'contextReportOnTurnEnd'
+    | 'contextReportMinPercent'
     // ⭐⭐ 主动注入（设计文档 §10.1）：开关 / 通路 / 模型 / 范围 / 触发口径 / 各种阈值
     | 'activeInject'
     | 'activeInjectChannel'

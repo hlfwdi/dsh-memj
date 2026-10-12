@@ -58,6 +58,8 @@ import { registerHotInjection } from './hot-watch.ts'
 import { registerTagAutoNormalize } from './tag-auto.ts'
 // ⭐⭐⭐ 轮末自动知识评分（决策 177）。
 import { registerAutoScore } from './score-auto.ts'
+// ⭐⭐⭐ 轮末上报上下文占用率（决策 226）—— 让模型能知道"上下文用了多少"。
+import { registerContextReport } from './context-auto.ts'
 // ⭐⭐ 英文召回索引（设计文档 §9；B 方案：召回只读它）
 import { registerEnIndex } from './en-index.ts'
 // ⭐⭐ 主动注入（设计文档 §5/§7）：触发 + 注入两个钩子。
@@ -380,6 +382,21 @@ export function apply(ctx: Context, config: MemjConfig = DEFAULT_CONFIG): void {
     } catch (err) {
       diag(`score-auto-THREW ${err instanceof Error ? err.message : String(err)}`, config)
     }
+
+    // ── 3g. ⭐⭐⭐ 轮末上报上下文占用率（决策 226；2026-10-12 用户裁定）──
+    //     ⭐ **它把"占用率"这个事实交给模型** ⇒ 「到 60% 就异步沉淀」这类规则
+    //        从此**可以写在提示词里**（此前做不到：模型拿不到那个数）。
+    //     🔴 **只用 `agent.inject()`**（不唤醒、不额外烧一轮）；
+    //        ⛔ 用 `followup()` 会让"每轮报一次"变成"每轮多跑一轮"。
+    //     🔴 **只有开关打开才挂钩子**（同上面四处：关着时**一个监听器都不挂**）。
+    //     ⚠️ 它与 `tag-auto` / `score-auto` 挂**同一个事件**（`agent/turn-stopping`）——
+    //        三者互不知情、各判各的门；⭐ 本模块**同步完成、无 I/O 等待**（不起子代理）。
+    try {
+      const hooked = registerContextReport({ ctx: scoped as unknown as Context, config })
+      diag(hooked ? 'context-report-registered' : 'context-report-skipped(disabled)', config)
+    } catch (err) {
+      diag(`context-report-THREW ${err instanceof Error ? err.message : String(err)}`, config)
+    }
   })
 
   // ── 4. 路由 ──
@@ -668,6 +685,10 @@ export * from './score-turn.ts'
 //    —— 那是"模型输出不可信"的唯一防线，必须单独验。
 export * from './score-chat.ts'
 export * from './score-auto.ts'
+// ⭐⭐⭐ **轮末上下文占用上报**（决策 226）：纯函数层（读测量 + 渲染文本）要能被测试直接调
+//    —— ⚠️ "拿不到就静默跳过"这条是本功能的主要失败模式，必须单独验。
+export * from './context-report.ts'
+export * from './context-auto.ts'
 // ⚠️ 形状校验函数一并导出：闸门（`gate.ts`）与 `runHandoff` **共用同一份实现**，
 //    测试要直接验"两处确实是同一套规则"（§3.11.6）。
 export {
