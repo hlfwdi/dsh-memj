@@ -107,6 +107,51 @@ export function readContextUsage(
 }
 
 /**
+ * ⭐⭐ **同一份占用的第二种入口：补上"窗口从哪来"**。
+ *
+ * 🔴 **为什么需要它**（2026-10-12 实测）：`contextPressure` 投影的 `contextWindow`
+ *    在**本机生产环境恒为 `null`** —— 因为**这个路由没上报窗口**
+ *    （`/api/hot` 的 `budget.contextWindow` 也是 null、`basis:"fallback"`）。
+ *    ⇒ 只走投影那一路的话，`percent` 永远算不出来、功能**永久静默失效**。
+ *
+ * ⭐ **正规来源**（`token-meter` 的 README 原话）：
+ *    *"模型容量属于拥有精确提供方／模型路由的适配器，可通过
+ *      `ctx.llm.resolveModelInfo().context` 获取"*。
+ *    本项目**早有实现**：`hot-watch.ts` 的 `resolveContextWindow()`（主动注入的 chat 通路
+ *    算"窗口 60% 预算"就用它）⇒ 这里**复用同一条查询**（不另写一份）。
+ *
+ * @param ctx - 插件上下文。
+ * @param session - 会话对象。
+ * @param provider - 路由提供方（来自 `agent.options.provider`）。
+ * @param model - 模型名（来自 `agent.options.model`）。
+ * @returns 占用结果；投影不可用时返回 `undefined`。
+ */
+export async function readContextUsageWithWindow(
+  ctx: { get: (name: string) => unknown },
+  session: unknown,
+  provider: string,
+  model: string,
+): Promise<ContextUsage | undefined> {
+  const base = readContextUsage(ctx, session)
+  if (base === undefined) return base
+  if (base.window !== undefined) return base // 投影已给窗口 ⇒ 不必再查
+  if (provider === '' || model === '') return base
+  try {
+    const llm = ctx.get('llm') as
+      | { resolveModelInfo?: (p: string, m: string) => Promise<{ context?: { contextWindow?: number } }> }
+      | undefined
+    if (llm?.resolveModelInfo === undefined) return base
+    const info = await llm.resolveModelInfo(provider, model)
+    const w = posNum(info?.context?.contextWindow)
+    if (w === undefined) return base
+    return { ...base, window: Math.round(w), percent: Math.round((base.used / w) * 100) }
+  } catch {
+    // ⚠️ 拿不到窗口 ⇒ 如实退回"只有绝对值"，**不抛**（不连累轮次结束）。
+    return base
+  }
+}
+
+/**
  * 把占用结果渲染成**给模型看的一段文本**。
  *
  * 🔴🔴 **最后那句是灵魂**，别删：它让「要不要动作」**留在用户的提示词里**，

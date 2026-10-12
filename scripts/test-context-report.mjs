@@ -61,19 +61,31 @@ console.log(`库根: ${lib}\n`)
 const projOf = (ret) => ({ stateOf: (_s, key) => (key === 'contextPressure' ? ret : undefined) })
 
 /** 造一个会记录"调了哪个方法、传了什么"的 agent 桩。 */
-const agentStub = () => {
+const agentStub = (opts = {}) => {
   const calls = []
   return {
     calls,
     session: { id: 's-1' },
+    // ⭐ `agent.options` 是**真实存在的字段**（`runtime-types.d.ts` 的 Agent 接口）
+    //    —— 我拿它取 provider/model，再去问路由要窗口。
+    options: { provider: opts.provider ?? 'p', model: opts.model ?? 'm' },
     inject: (m) => calls.push({ method: 'inject', message: m }),
     followup: (m) => calls.push({ method: 'followup', message: m }),
   }
 }
 
-/** 造一个 `ctx.get` 桩（按服务名分派）。 */
-const ctxOf = (svc, name = 'sessionProjections') => ({
-  get: (n) => (n === name ? svc : undefined),
+/**
+ * 造一个 `ctx.get` 桩（按服务名分派）。
+ * @param svc - `sessionProjections` 桩。
+ * @param extra - 额外服务（如 `llm`）—— ⭐ 窗口的**第二来源**要走它。
+ */
+const ctxOf = (svc, extra = {}) => ({
+  get: (n) => (n === 'sessionProjections' ? svc : extra[n]),
+})
+
+/** 造一个 `llm` 桩：`resolveModelInfo` 回窗口。 */
+const llmOf = (window) => ({
+  resolveModelInfo: async () => ({ context: window === undefined ? {} : { contextWindow: window } }),
 })
 
 const CFG = { ...DEFAULT_CONFIG, contextReportOnTurnEnd: true, contextReportMinPercent: 50 }
@@ -82,35 +94,35 @@ const CFG = { ...DEFAULT_CONFIG, contextReportOnTurnEnd: true, contextReportMinP
 console.log('【1】⭐⭐ 三态：拿不到 / 无窗口 / 低于阈值 / 过阈值')
 // ══════════════════════════════════════════════════════════════
 {
-  // ① tokenMeter 根本没挂
+  // ① 投影服务根本没挂
   const a1 = agentStub()
-  const r1 = reportContextUsage(ctxOf(undefined), CFG, a1)
-  check('① 没挂 tokenMeter ⇒ 不注入', r1.injected === false, JSON.stringify(r1))
-  check('  理由点名 tokenMeter', r1.reason.includes('tokenMeter'), r1.reason)
+  const r1 = await reportContextUsage(ctxOf(undefined), CFG, a1)
+  check('① 没挂 sessionProjections ⇒ 不注入', r1.injected === false, JSON.stringify(r1))
+  check('  理由点名投影服务', r1.reason.includes('sessionProjections'), r1.reason)
   check('  没调任何 agent 方法', a1.calls.length === 0)
 
   // ② 挂了，但没有任何 usage（两个字段都缺）
   const a2 = agentStub()
-  const r2 = reportContextUsage(ctxOf(projOf({ surfaceTokens: 0 })), CFG, a2)
+  const r2 = await reportContextUsage(ctxOf(projOf({ surfaceTokens: 0 })), CFG, a2)
   check('② 无 usage ⇒ 不注入', r2.injected === false, JSON.stringify(r2))
   check('  没调任何 agent 方法', a2.calls.length === 0)
 
-  // ③ 有 usage，但路由没上报窗口 ⇒ 算不出百分比 ⇒ 不报
+  // ③ 有 usage、两边都没窗口 ⇒ ⭐ **降级成只报绝对值**（不是不报，见【7】）
   const a3 = agentStub()
-  const r3 = reportContextUsage(ctxOf(projOf({ pressureTokens: 90000 })), CFG, a3)
-  check('③ 无窗口 ⇒ 不注入（没有百分比就没有判断价值）', r3.injected === false, JSON.stringify(r3))
-  check('  理由点明窗口', r3.reason.includes('窗口'), r3.reason)
+  const r3 = await reportContextUsage(ctxOf(projOf({ pressureTokens: 90000 })), CFG, a3)
+  check('③ 无窗口 ⇒ **仍注入**（降级报绝对值；旧版这里是不报 ⇒ 永久失效）',
+    r3.injected === true, JSON.stringify(r3))
 
   // ④ 低于阈值
   const a4 = agentStub()
-  const r4 = reportContextUsage(ctxOf(projOf({ pressureTokens: 10000, contextWindow: 100000 })), CFG, a4)
+  const r4 = await reportContextUsage(ctxOf(projOf({ pressureTokens: 10000, contextWindow: 100000 })), CFG, a4)
   check('④ 10% < 50% ⇒ 不注入', r4.injected === false, JSON.stringify(r4))
   check('  理由带两个数（占用与阈值）', r4.reason.includes('10%') && r4.reason.includes('50%'), r4.reason)
   check('  没调任何 agent 方法', a4.calls.length === 0)
 
   // ⑤ 过阈值 ⇒ 注入
   const a5 = agentStub()
-  const r5 = reportContextUsage(ctxOf(projOf({ pressureTokens: 60000, contextWindow: 100000 })), CFG, a5)
+  const r5 = await reportContextUsage(ctxOf(projOf({ pressureTokens: 60000, contextWindow: 100000 })), CFG, a5)
   check('⑤ 60% ≥ 50% ⇒ 注入', r5.injected === true, JSON.stringify(r5))
   check('  结论带上百分比', r5.percent === 60, String(r5.percent))
   check('  **只调了 inject、没调 followup**',
@@ -138,7 +150,7 @@ console.log('【2】⭐⭐⭐ 优先用 projectedTokens（它能反映 compactio
 
   // ⚠️ 反证：有 projected 时**不能**退回 pressure
   const a = agentStub()
-  const r = reportContextUsage(
+  const r = await reportContextUsage(
     ctxOf(projOf({ pressureTokens: 10000, projectedTokens: 80000, contextWindow: 100000 })),
     CFG, a,
   )
@@ -170,24 +182,24 @@ console.log('【4】⭐⭐ 开关与载荷边界')
 // ══════════════════════════════════════════════════════════════
 {
   const a = agentStub()
-  const off = reportContextUsage(
+  const off = await reportContextUsage(
     ctxOf(projOf({ pressureTokens: 90000, contextWindow: 100000 })),
     { ...CFG, contextReportOnTurnEnd: false }, a,
   )
   check('开关关 ⇒ 不注入', off.injected === false && off.reason.includes('开关'), JSON.stringify(off))
   check('  没调 agent', a.calls.length === 0)
 
-  const noAgent = reportContextUsage(ctxOf(projOf({ pressureTokens: 90000, contextWindow: 100000 })), CFG, undefined)
+  const noAgent = await reportContextUsage(ctxOf(projOf({ pressureTokens: 90000, contextWindow: 100000 })), CFG, undefined)
   check('没有 agent ⇒ 不注入且不抛', noAgent.injected === false, JSON.stringify(noAgent))
 
-  const badAgent = reportContextUsage(
+  const badAgent = await reportContextUsage(
     ctxOf(projOf({ pressureTokens: 90000, contextWindow: 100000 })), CFG, { session: {} },
   )
   check('agent 没有 inject ⇒ 不注入且不抛', badAgent.injected === false, JSON.stringify(badAgent))
 
   // 🔴 测量本身抛异常 ⇒ 吞掉，不能连累轮次
   const throwing = { measure: () => { throw new Error('boom') } }
-  const t = reportContextUsage(ctxOf(throwing), CFG, agentStub())
+  const t = await reportContextUsage(ctxOf(throwing), CFG, agentStub())
   check('🔴 测量抛异常 ⇒ 吞掉、不注入（不能毁掉轮次）', t.injected === false, JSON.stringify(t))
 }
 
@@ -238,6 +250,64 @@ console.log('【6】⭐⭐⭐ 静态反证：不得再从 `tokenMeter.measure()`
     'measure() 返回 totalTokens/surfaceTokens，不是 pressure/projected/contextWindow')
   check('⭐ 走的是 `sessionProjections` 的 `contextPressure` 投影',
     /sessionProjections/.test(code) && /contextPressure/.test(code))
+}
+
+// ══════════════════════════════════════════════════════════════
+console.log('【7】⭐⭐⭐ 投影不给窗口时，向路由要（本机生产就是这个情形）')
+// ══════════════════════════════════════════════════════════════
+// 🔴 **这是用户实测撞到的第二个坑**（2026-10-12）：
+//    本机 `/api/hot` 的 `budget.contextWindow` **恒为 null、basis=fallback**
+//    ⇒ `contextPressure` 投影**不给窗口** ⇒ 只有投影那一路的话 `percent` 永远算不出来
+//    ⇒ 功能**永久静默失效**（用户看到的就是"什么都没发生"）。
+//    ✅ 兜底：拿 `agent.options.provider/model` 去 `ctx.llm.resolveModelInfo()` 问一次
+//       （`token-meter` 的 README 明说"模型容量……可通过 resolveModelInfo().context 获取"；
+//        本项目 `hot-watch.ts` 的 `resolveContextWindow` 早有同款实现）。
+{
+  // ① 投影不给窗口，但 llm 能给 ⇒ 必须算出百分比并注入
+  const a = agentStub()
+  const r = await reportContextUsage(
+    ctxOf(projOf({ pressureTokens: 80000 }), { llm: llmOf(100000) }),
+    CFG, a,
+  )
+  check('⭐ 投影无窗口 + llm 有窗口 ⇒ 算出 80% 并注入',
+    r.injected === true && r.percent === 80, JSON.stringify(r))
+
+  // ② 两边都没有窗口 ⇒ 仍然注入（降级成"只报绝对值"），不是整条不报
+  const a2 = agentStub()
+  const r2 = await reportContextUsage(
+    ctxOf(projOf({ pressureTokens: 80000 }), { llm: llmOf(undefined) }),
+    CFG, a2,
+  )
+  check('⭐ 两边都没窗口 ⇒ **仍然注入**（降级报绝对值，不是永久失效）',
+    r2.injected === true, JSON.stringify(r2))
+  check('  此时 reason 里如实写"无窗口"', r2.reason.includes('无窗口'), r2.reason)
+  check('  且**不伪造** percent', r2.percent === undefined, String(r2.percent))
+
+  const msg = a2.calls[0]?.message
+  const txt = JSON.stringify(msg ?? {})
+  check('  注入文本说明"本路由未上报窗口"', txt.includes('未上报'), txt.slice(0, 200))
+  check('🔴 文本里**不出现**编造的百分比（没有分母就不能给小数）', !/\d+%/.test(txt), txt.slice(0, 200))
+
+  // ③ 投影有窗口 ⇒ 不该再去问 llm（省一次查询）
+  let asked = 0
+  const a3 = agentStub()
+  await reportContextUsage(
+    ctxOf(projOf({ pressureTokens: 60000, contextWindow: 100000 }), {
+      llm: { resolveModelInfo: async () => { asked += 1; return { context: { contextWindow: 1 } } } },
+    }),
+    CFG, a3,
+  )
+  check('⭐ 投影已给窗口 ⇒ 不再问 llm（省一次查询）', asked === 0, `问了 ${asked} 次`)
+
+  // ④ llm 抛错 ⇒ 吞掉，不连累轮次
+  const a4 = agentStub()
+  const r4 = await reportContextUsage(
+    ctxOf(projOf({ pressureTokens: 80000 }), {
+      llm: { resolveModelInfo: async () => { throw new Error('boom') } },
+    }),
+    CFG, a4,
+  )
+  check('🔴 llm 抛错 ⇒ 吞掉、仍注入（不能毁掉轮次）', r4.injected === true, JSON.stringify(r4))
 }
 
 rmSync(lib, { recursive: true, force: true })

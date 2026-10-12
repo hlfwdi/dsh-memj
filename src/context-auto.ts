@@ -43,7 +43,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { createUserMessage, type ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { MemjConfig } from './config.ts'
-import { readContextUsage, renderContextUsage } from './context-report.ts'
+import { readContextUsageWithWindow, renderContextUsage } from './context-report.ts'
 
 /** 一次轮末注入的结果（**只用于日志与测试**）。 */
 export interface AutoContextOutcome {
@@ -74,9 +74,12 @@ export function registerContextReport(opts: { ctx: Context; config: MemjConfig }
   const log = (m: string): void => {
     try { console.log(`[dsh-memj/context-auto] ${m}`) } catch { /* 日志失败不影响主流程 */ }
   }
-  ctx.on('agent/turn-stopping', (payload: { agent?: Agent }): void => {
+  ctx.on('agent/turn-stopping', async (payload: { agent?: Agent }): Promise<void> => {
     try {
-      const r = reportContextUsage(ctx, config, payload?.agent, log)
+      // ⚠️ `reportContextUsage` 现在是 async（拿窗口要向 `ctx.llm.resolveModelInfo` 问一次）。
+      //    ⭐ 这一步**很快**（一次本地查表，且同模型会命中适配器缓存）⇒ 不违反
+      //    "serial 钩子里别 await 慢操作"那条纪律（它**不起子代理、不发网络请求**）。
+      const r = await reportContextUsage(ctx, config, payload?.agent, log)
       // ⭐ **未注入也记一行**（"为什么没报"是排障主战场）；
       //    真注入时 `reportContextUsage` 内部已打过一行更详细的。
       if (!r.injected) log(`skipped: ${r.reason}`)
@@ -100,29 +103,36 @@ export function registerContextReport(opts: { ctx: Context; config: MemjConfig }
  * @param log - 日志函数（测试可传空实现）。
  * @returns 结论。
  */
-export function reportContextUsage(
+export async function reportContextUsage(
   ctx: { get: (name: string) => unknown },
   config: MemjConfig,
   agent: Agent | undefined,
   log: (m: string) => void = (): void => {},
-): AutoContextOutcome {
+): Promise<AutoContextOutcome> {
   if (!config.contextReportOnTurnEnd) return { injected: false, reason: '开关关着' }
   if (agent === undefined || agent === null) return { injected: false, reason: '载荷里没有 agent' }
   if (typeof agent.inject !== 'function') return { injected: false, reason: 'agent 没有 inject 方法' }
 
-  // ── ① 读占用（拿不到 ⇒ 静默跳过；`tokenMeter` 可能压根没挂）──
-  const usage = readContextUsage(ctx, agent.session)
+  // ── ① 读占用 ──
+  // ⭐ 走 `readContextUsageWithWindow`：投影不给窗口时，**再向 `ctx.llm.resolveModelInfo`
+  //    问一次**（本机实测投影的 `contextWindow` 恒为 null ⇒ 只走投影会永久失效）。
+  const opts = (agent.options ?? {}) as { provider?: unknown; model?: unknown }
+  const provider = typeof opts.provider === 'string' ? opts.provider : ''
+  const model = typeof opts.model === 'string' ? opts.model : ''
+  const usage = await readContextUsageWithWindow(ctx, agent.session, provider, model)
   if (usage === undefined) {
-    return { injected: false, reason: '拿不到上下文测量（tokenMeter 未挂载或无 usage）' }
+    return { injected: false, reason: '拿不到上下文测量（sessionProjections / contextPressure 不可用）' }
   }
 
   // ── ② 阈值门 ──
-  // 🔴 **无 `window` ⇒ 算不出百分比** ⇒ 按"带阈值"的本意**不报**。
-  //    （只报绝对值对模型没有判断价值：它不知道那是多是少。）
-  if (usage.percent === undefined) {
-    return { injected: false, reason: '本路由未上报窗口大小 ⇒ 无百分比，不报' }
-  }
-  if (usage.percent < config.contextReportMinPercent) {
+  // 🔴🔴 **2026-10-12 修正一处设计缺陷**：原来"无窗口 ⇒ 整条不报"，
+  //    而实测**本路由就是不上报窗口**（`/api/hot` 的 `contextWindow` 恒为 null）
+  //    ⇒ 那条规则等于**永久关闭这个功能**，且不报错（用户看到的就是"什么都没发生"）。
+  //    ✅ 改成：**有窗口就用百分比判阈值；没有窗口就退回"只看绝对值"** ——
+  //       绝对值对"到 X% 就做事"没判断价值，但**如实报出来**总比**什么都不说**好，
+  //       而且它能让用户看出"这个路由不给窗口"这件事。
+  //    ⚠️ 阈值门此时**无法生效**（没有分母）⇒ 直接放行，并在文本里说明。
+  if (usage.percent !== undefined && usage.percent < config.contextReportMinPercent) {
     return { injected: false, reason: `占用 ${usage.percent}% < 阈值 ${config.contextReportMinPercent}%` }
   }
 
@@ -139,6 +149,13 @@ export function reportContextUsage(
     },
   })
   agent.inject(message)
-  log(`injected: ${usage.percent}%（source=${usage.source}，used=${usage.used}，window=${usage.window ?? '—'}）`)
-  return { injected: true, reason: `占用 ${usage.percent}%`, percent: usage.percent }
+  // ⚠️ `percent` 可能是 `undefined`（本路由不给窗口）⇒ 那句日志要如实写成 `—`，
+  //    不能拼成 "undefined%"（那看着像 bug，而其实是数据源的已知边界）。
+  const pct = usage.percent === undefined ? '（无窗口）' : `${usage.percent}%`
+  log(`injected: ${pct}（source=${usage.source}，used=${usage.used}，window=${usage.window ?? '—'}）`)
+  return {
+    injected: true,
+    reason: usage.percent === undefined ? `占用 ${usage.used}（无窗口）` : `占用 ${usage.percent}%`,
+    ...(usage.percent === undefined ? {} : { percent: usage.percent }),
+  }
 }
