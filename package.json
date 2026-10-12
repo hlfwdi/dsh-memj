@@ -2,7 +2,7 @@
   "name": "dsh-memj",
   "displayName": "DSH 记忆系统 memj",
   "description": "以「封面 + 正文」组织知识的 DSH 记忆插件：封面只写在项目级 handoff 文档里（唯一源头），正文独立落盘成文档；封面按项目 → 主题 → 全局三层聚合。库在 ~/.dsh-memj/，拷一个目录即迁移。",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "author": "jojoman2024",
   "keywords": [
     "dsh-plugin",

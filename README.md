@@ -616,7 +616,7 @@ dsh plugin --profile web add dsh-memj
 #### ⚠️ 升级时：请带上版本号
 
 ```bash
-dsh plugin --profile web add dsh-memj@0.1.1     # ✅ 显式要这个版本
+dsh plugin --profile web add dsh-memj@0.1.2     # ✅ 显式要这个版本
 ```
 
 🔴 **只写包名（`add dsh-memj`）可能把你留在旧版本**：pnpm 会优先复用 profile 里
