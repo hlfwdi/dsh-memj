@@ -257,11 +257,36 @@ export interface ScanOptions {
    *       而"归档"是另一个正交维度（历史条目也可以是归档的）。
    */
   includeHistory?: boolean
+  /**
+   * ⭐⭐ **是否把「问答」条目（`kind: 'chat'`）也纳入快照**。默认 `true`。
+   *
+   * 🔴 **与 `includeHistory` 的方向相反，这是刻意的**：
+   *   · `history` 默认排除（它是被取代的旧正文，进检索会污染结果）；
+   *   · `chat` **默认纳入**（用户裁定「chat 出现在知识库列表里」）⇒ 读侧**不用**传这个。
+   *
+   * ⚠️🔴 **但"进列表"≠"进检索"** —— 两者是**两条路**，别混：
+   *   · `scanLibrary()`（列表/读侧）⇒ **含 `chat`**（所以本项默认 `true`）；
+   *   · `memj_search` / 热知识注入（模型侧）⇒ **必须排除 `chat`**
+   *     （它是会话流水，不是可供复用的知识；用户裁定"只同步提问入口产生的会话"）。
+   *   ⇒ ⭐ 判据：**要改的是"模型侧"那两处，不要顺手改 `scanLibrary`** ——
+   *     否则列表会丢（用户就点不开那些 chat 条目了）。
+   */
+  includeChat?: boolean
 }
 
 /** 判断一张封面是否是「历史归档」条目。 */
 export function isHistoryCover(cover: { kind: string }): boolean {
   return cover.kind === 'history'
+}
+
+/**
+ * ⭐ **判断一张封面是否是「问答」条目**（`kind: 'chat'`，「文档内提问」功能生成）。
+ *
+ * ⚠️ **它是保留项**（`reserved: true`）⇒ 模型选不到、也不能手选，
+ *    只能由插件在"阅读某条知识时节选提问"时自动创建。
+ */
+export function isChatCover(cover: { kind: string }): boolean {
+  return cover.kind === 'chat'
 }
 
 /**
@@ -375,14 +400,33 @@ export async function scanLibrary(options: ScanOptions = {}): Promise<LibrarySna
 function applyScanOptions(full: UnfilteredSnapshot, options: ScanOptions): LibrarySnapshot {
   const includeArchived = options.includeArchived === true
   const includeHistory = options.includeHistory === true
+  // ⭐ **`chat` 默认纳入**（与 `includeHistory` 的方向相反，见 `ScanOptions.includeChat`）：
+  //    列表要它 ⇒ 这里不排除；模型侧的排除另做在 `memj_search` / `collectHotItems` 两处。
+  const includeChat = options.includeChat !== false
   // ⭐ 先过滤、再排序（与旧实现一致）。
   const projects = includeArchived
     ? [...full.projects]
     : full.projects.filter((p) => p.frontmatter.archivedAt === '')
   projects.sort(byUpdatedDesc)
+  /**
+   * ⭐⭐ **2026-10-13（「文档内提问」）：`chat` 刻意【不】在这里排除** ——
+   *    用户裁定「chat 出现在知识库列表里」⇒ 它必须过 `scanLibrary`。
+   *
+   *    🔴 **"进列表" ≠ "进检索"，两者是两条路，别混**：
+   *      · `scanLibrary()`（列表 / 读侧）⇒ **含 `chat`**（所以默认纳入）；
+   *      · `memj_search` / 热知识注入（模型侧）⇒ **另有两处排除**
+   *        （它是会话流水，不是可供复用的知识）。
+   *    ⇒ ⭐ 判据：**要改模型侧那两处，不要顺手改这里** ——
+   *      改这里 ⇒ 列表里点不开那些 chat 条目（而用户明确要能点开、要看问答）。
+   *
+   *    ⚠️ `includeChat` 默认 `true` ⇒ **读侧无需传参**；它只是给
+   *      "某个调用方想排除 chat"留口子（当前没有这种调用方）。
+   */
   const covers = full.covers.filter(
     (c) =>
-      (includeArchived || c.cover.archivedAt === '') && (includeHistory || c.cover.kind !== 'history'),
+      (includeArchived || c.cover.archivedAt === '') &&
+      (includeHistory || c.cover.kind !== 'history') &&
+      (includeChat !== false || c.cover.kind !== 'chat'),
   )
   const themeIdSet = new Set<string>()
   for (const c of covers) for (const t of c.cover.theme) themeIdSet.add(t)

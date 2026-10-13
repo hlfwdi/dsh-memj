@@ -515,9 +515,16 @@ export function registerTools(deps: ToolDeps): void {
             project?: string; theme?: string; kind?: string; query?: string[]; limit?: number
           }
           const terms = normalizeQuery(query)
+          // ⭐⭐ **2026-10-13（「文档内提问」）：检索侧排除 `chat`**。
+          //
+          //    🔴 **为什么不能用"改 scanLibrary 的默认排除"来实现**：
+          //       `chat` **要出现在知识库列表里**（用户裁定：点节选文字能开新标签页看它）
+          //       ⇒ 它必须过 `scanLibrary`。所以排除只能做在**模型侧**——
+          //       这正是本条：**列表/读侧含它，检索/注入侧排除它**。
+          //    ⚠️ 同理，`history` 的排除仍由 `scanLibrary()` 的默认值承担（不变）。
           const snapshot = await scanLibrary()
           let candidates = filterByContext(
-            snapshot.covers.map((c) => c.cover),
+            snapshot.covers.map((c) => c.cover).filter((c) => c.kind !== 'chat'),
             project,
             theme,
           )

@@ -38,7 +38,10 @@ console.log('\n【1】唯一词表的形状')
 {
   const defs = mod.ENTRY_KIND_DEFS
   check(Array.isArray(defs), 'ENTRY_KIND_DEFS 是数组')
-  check(defs.length === 5, `5 项（实得 ${defs.length}）`)
+  // ⭐ **6 项**（2026-10-13 起）：fact / trap / howto / decision / history / **chat**。
+  //    ⚠️ 这个数字**是设计快照、不是永恒真理** —— 加类型就要改它；
+  //       本项目已有"文档里引用了某个会变的数"的前车之鉴（README 的套件数）。
+  check(defs.length === 6, `6 项（实得 ${defs.length}）`)
   check(defs.every((d) => d.id && d.label && d.when), '每项都有 id / label / when')
   check(
     JSON.stringify(mod.ENTRY_KINDS) === JSON.stringify(defs.map((d) => d.id)),
@@ -65,12 +68,29 @@ console.log('\n【2】⭐⭐ 决策 223：`history` **已开放给模型**（不
     JSON.stringify(mod.SELECTABLE_ENTRY_KINDS) === JSON.stringify(['fact', 'trap', 'howto', 'decision', 'history']),
     `可选的恰好 5 个（实得 ${mod.SELECTABLE_ENTRY_KINDS.join(',')}）`,
   )
-  // ⭐ 内置类型里**不再有保留项**（机制仍在，但当前无人使用）
+  // ⭐⭐ **2026-10-13（「文档内提问」）：保留项不再是空的 —— `chat` 启用了它。**
+  //
+  //    🔴 **这一组断言在决策 223 当时是"没有保留项"**，那是**当时的设计快照**，
+  //       不是永恒真理 —— `chat` 让 `reserved` 这条防线**重新有作用对象**：
+  //       它由插件自动生成（阅读知识时节选提问 ⇒ 会话问答同步成条目），
+  //       **不能给模型选、也不能让人手选**（否则普通对话也能造它 ⇒ 库被会话记录淹没）。
+  //    ⚠️ 判据（本项目一贯）：**"空转的防线 ≠ 多余的防线"** ——
+  //       触发条件是数据不是代码，所以字段与机制都必须留着。
+  //    ⭐ `history` 那条**保持不变**（它仍开放给模型，决策 223 的裁定没被推翻）。
   check(
-    mod.ENTRY_KIND_DEFS.filter((d) => d.reserved === true).length === 0,
-    '⭐ 内置类型里**没有**保留项了',
+    mod.ENTRY_KIND_DEFS.filter((d) => d.reserved === true).map((d) => d.id).join(',') === 'chat',
+    '⭐ 保留项恰好是 `chat`（2026-10-13 起；`history` 仍开放给模型）',
+    mod.ENTRY_KIND_DEFS.filter((d) => d.reserved === true).map((d) => d.id).join(','),
   )
-  check(mod.currentReservedKinds().length === 0, '  ⇒ `currentReservedKinds()` 返回空数组')
+  check(
+    mod.currentReservedKinds().join(',') === 'chat',
+    '  ⇒ `currentReservedKinds()` 返回 ["chat"]',
+    mod.currentReservedKinds().join(','),
+  )
+  // ⭐ `chat` 必须**能落库、能读回**（合法 kind）但**不进模型可选项**。
+  check(mod.isEntryKind('chat') === true, 'chat 是合法 kind（读侧认它 ⇒ 列表/详情页能显示）')
+  check(mod.SELECTABLE_ENTRY_KINDS.includes('chat') === false,
+    '⭐⭐ chat **不在可给模型选的列表里**（保留项 ⇒ 模型无法手造它）')
   // 🔴 **但"它不参与检索"这件事必须被讲清楚** —— 那正是 `reserved` 曾经挡着的东西。
   const h = mod.ENTRY_KIND_DEFS.find((d) => d.id === 'history')
   check((h?.guide ?? '').includes('不参与检索'),

@@ -41,11 +41,20 @@ const call = (method, path, body) =>
 console.log('\n【1】内置默认表（与决策 214 的唯一词表同源）')
 {
   const b = mod.builtinKindDefs()
-  check(b.length === 5, `5 条（实得 ${b.length}）`)
+  check(b.length === 6, `6 条（实得 ${b.length}）`)
   check(b.every((d) => d.builtin === true), '全部标 builtin')
-  // 🔴 **决策 223（2026-10-12 用户裁定）：`history` 已不再是保留项** ——
-  //    归档从"工具自动做"改成"模型按各节规范做" ⇒ 它**必须给模型选**。
-  check(b.filter((d) => d.reserved).length === 0, '⭐ 内置类型里**没有**保留项了（history 已开放）')
+  // ⭐⭐ **2026-10-13（「文档内提问」）：保留项从"没有"变成"恰好 chat 一个"**。
+  //
+  //    · 决策 223（2026-10-12）当时：`history` 开放给模型 ⇒ 保留项**为空**；
+  //    · 现在：`chat` 启用它（插件自动生成，不给模型选也不给人手选）。
+  //    ⚠️ `history` 的裁定**没被推翻** —— 它仍开放给模型（见下面那条）。
+  check(
+    b.filter((d) => d.reserved).map((d) => d.id).join(',') === 'chat',
+    '⭐ 内置保留项恰好是 `chat`（2026-10-13 起）',
+    b.filter((d) => d.reserved).map((d) => d.id).join(','),
+  )
+  check(b.find((d) => d.id === 'history')?.reserved === false,
+    '⭐ `history` 仍【不是】保留项（决策 223 的裁定保持不变）')
   check(
     JSON.stringify(b.map((d) => d.id)) === JSON.stringify(mod.ENTRY_KINDS),
     'id 与 ENTRY_KINDS 逐字一致（没抄第二份）',
@@ -87,18 +96,20 @@ console.log('\n【4】三条内置保护')
   check(mod.validateKinds(defs).length === 0, '完整表 ⇒ 无错误')
   check(mod.validateKinds(defs.filter((d) => d.id !== 'trap')).some((e) => e.includes('不能删除')), '删内置 ⇒ 报"不能删除"')
   check(mod.validateKinds(mk('fact', { label: '事实' })).some((e) => e.includes('显示名**不能改')), '改内置显示名 ⇒ 报错')
-  // 🔴 **决策 223：内置类型里已没有保留项** ⇒ 原来那条"摘掉 history 的保留标记 ⇒ 报错"
-  //    **没有作用对象了**（`b.reserved` 恒为 false ⇒ 那一支走不到）。
-  //
-  // ⭐ 那怎么证"防线还在"？—— **运行期造不出来**（`builtinKindDefs()` 直接读编译期
-  //    常量 `ENTRY_KIND_DEFS`，`setCurrentKindDefs` 改的是另一份 `currentDefs`）。
-  //    ⇒ 改用**静态反证**（本项目对"不许出现的第二份实现"就是这么验的）：
-  //      那条校验必须**仍在源码里**，只是当前走不到。
-  //    🔴 判据：**空转的防线 ≠ 多余的防线** —— 它的触发条件是数据，不是代码。
+  // ⭐⭐ **2026-10-13：这一支从"空转"变成"真跑"了** —— `chat` 是保留项，
+  //    所以"摘掉它的保留标记 ⇒ 报错"现在**有作用对象**（决策 223 之后它一度空转）。
+  //    ⚠️ 同时保留下面的静态反证：那是防"有人把整段校验删掉"，
+  //      而上面这条只证明"当前数据下它会报"—— 两者互补，不是重复。
+  check(mod.validateKinds(mk('chat', { reserved: false })).some((e) => e.includes('保留')),
+    '⭐⭐ 摘掉 `chat` 的保留标记 ⇒ 报错（保留项防线重新有作用对象）')
+  // 🔴 **决策 223 之后它曾空转**（内置无保留项）⇒ 当时改用静态反证证明"防线还在"。
+  //    ⭐ 判据（本项目一贯）：**空转的防线 ≠ 多余的防线** —— 触发条件是数据，不是代码。
+  //    ⭐ 现在虽然真跑了，这条静态反证**仍留着**：它防的是"整段校验被删掉"，
+  //      而那正是空转期最常见的动手方式（"反正走不到"）。
   {
     const src = readFileSync(join(process.cwd(), 'src', 'kinds.ts'), 'utf8')
     check(src.includes('不能把它的"保留"标记去掉'),
-      '⭐⭐ 保留项的校验**仍在源码里**（当前空转，但机制没被删掉）')
+      '⭐⭐ 保留项的校验**仍在源码里**（防的是"整段被删掉"）')
     check(src.includes('if (b.reserved && !mine.reserved)'),
       '  ⇒ 触发条件那句也在')
   }
@@ -122,7 +133,8 @@ console.log('\n【6】端点：读 / 存 / 删 + 读侧立即生效')
   let r = await call('GET', '/kinds')
   check(r.status === 200 && r.body.ok === true, 'GET /kinds 200')
   const items = r.body.items
-  check(items.length === 5, `初始 5 条（实得 ${items.length}）`)
+  // ⭐ **6 条**（2026-10-13 起加了 `chat`）—— 与 `test-kinds.mjs` 的【1】同源。
+  check(items.length === 6, `初始 6 条（实得 ${items.length}）`)
   check(items.every((x) => x.builtin === true), '初始全部 builtin')
   check(items.every((x) => typeof x.count === 'number'), '每条都带 count')
 

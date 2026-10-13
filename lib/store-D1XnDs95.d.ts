@@ -1564,11 +1564,12 @@ interface EntryKindDef {
   /**
    * 🔴 **保留项**：不可删、不可改名、**不作为模型的可选项**。
    *
-   * ⚠️ **决策 223（2026-10-12）起，内置类型里【没有】保留项了** ——
-   *    `history` 已开放给模型（归档改成由模型按规范做）。
-   * ⭐ 本字段**保留**（机制仍在、用户自定义的类型将来可能用到），
-   *    但当前 `currentReservedKinds()` **返回空数组**，相关防线处于"空转"状态
-   *    （`kinds.ts` 的"保留标记不可摘"因此没有作用对象）。
+   * ⚠️ **决策 223（2026-10-12）时它一度"没有作用对象"** ——
+   *    `history` 开放给模型后，内置类型里只剩它一个候选，当时是空转的。
+   * ⭐ **2026-10-13：`chat` 重新用它**（「文档内提问」功能）——
+   *    该条目由插件自动生成，**不开放给模型选、也不让人手选**
+   *    （否则普通对话也能造出它 ⇒ 库被会话记录淹没）。
+   *    ⇒ ⭐ `currentReservedKinds()` 现在返回 `['chat']`，防线重新有作用对象。
    * @default false
    */
   reserved?: boolean;
@@ -1589,8 +1590,9 @@ declare const ENTRY_KINDS: readonly string[];
  * 🔴 **为什么与 `ENTRY_KINDS` 分开**：两者**不一定相等** ——
  *    保留项（`reserved: true`）不进这里，因为它们"不给模型选"。
  *
- * ⚠️ **决策 223（2026-10-12）起，内置类型里没有保留项了** ⇒ 当前两者**恰好相等**
- *    （`history` 已开放，见 `ENTRY_KIND_DEFS` 里那条的说明）。
+ * ⚠️ 2026-10-12（决策 223）曾一度"两者恰好相等"（`history` 开放后无保留项）；
+ *    ⭐ **2026-10-13 起又不等了**：`chat` 是保留项（插件自动生成，不给人选）
+ *    ⇒ `ENTRY_KINDS` 6 项、`SELECTABLE_ENTRY_KINDS` 5 项。
  * ⭐ 但**这个区分必须留着**：用户自定义的类型将来可能设保留项，
  *    而且"过滤"这个动作本身就是那条语义的实现。
  */
@@ -3529,9 +3531,33 @@ interface ScanOptions {
    *       而"归档"是另一个正交维度（历史条目也可以是归档的）。
    */
   includeHistory?: boolean;
+  /**
+   * ⭐⭐ **是否把「问答」条目（`kind: 'chat'`）也纳入快照**。默认 `true`。
+   *
+   * 🔴 **与 `includeHistory` 的方向相反，这是刻意的**：
+   *   · `history` 默认排除（它是被取代的旧正文，进检索会污染结果）；
+   *   · `chat` **默认纳入**（用户裁定「chat 出现在知识库列表里」）⇒ 读侧**不用**传这个。
+   *
+   * ⚠️🔴 **但"进列表"≠"进检索"** —— 两者是**两条路**，别混：
+   *   · `scanLibrary()`（列表/读侧）⇒ **含 `chat`**（所以本项默认 `true`）；
+   *   · `memj_search` / 热知识注入（模型侧）⇒ **必须排除 `chat`**
+   *     （它是会话流水，不是可供复用的知识；用户裁定"只同步提问入口产生的会话"）。
+   *   ⇒ ⭐ 判据：**要改的是"模型侧"那两处，不要顺手改 `scanLibrary`** ——
+   *     否则列表会丢（用户就点不开那些 chat 条目了）。
+   */
+  includeChat?: boolean;
 }
 /** 判断一张封面是否是「历史归档」条目。 */
 declare function isHistoryCover(cover: {
+  kind: string;
+}): boolean;
+/**
+ * ⭐ **判断一张封面是否是「问答」条目**（`kind: 'chat'`，「文档内提问」功能生成）。
+ *
+ * ⚠️ **它是保留项**（`reserved: true`）⇒ 模型选不到、也不能手选，
+ *    只能由插件在"阅读某条知识时节选提问"时自动创建。
+ */
+declare function isChatCover(cover: {
   kind: string;
 }): boolean;
 /**
@@ -3917,4 +3943,4 @@ declare function readDocReads(sessionId: string): Promise<DocReadRecord[]>;
  */
 declare function findDocRead(sessionId: string, projectId: string, turn: number): Promise<DocReadRecord | undefined>;
 //#endregion
-export { renderSpecBlockLines as $, EntryFrontmatter as $n, pluginRoot as $t, scanLibrary as A, extractTitle as An, currentReservedKinds as Ar, findSectionRange as At, NARRATIVE_TITLES as B, replaceBlockAtLines as Bn, Config as Br, entriesDir as Bt, readDocReads as C, DESC_MAX_CHARS as Cn, ParsedCover as Cr, renderSectionSpecs as Ct, rebuildDerivedLayers as D, charCount as Dn, ThemeFrontmatter as Dr, SectionGroup as Dt, readUnconsumedSnapshots as E, TITLE_MIN_CHARS as En, SELECTABLE_ENTRY_KINDS as Er, ReadDecision as Et, writeProjectDoc as F, parseCovers as Fn, kindsInline as Fr, backupDir as Ft, buildSkeleton as G, yamlScalar as Gn, decisionProvidersOf as Gr, hotEntriesPath as Gt, SPEC_BLOCK_FENCE as H, stripCovers as Hn, DecisionProvider as Hr, entryRelPath as Ht, writeThemeDoc as I, rawKindFromYaml as In, selectableKindList as Ir, backupNarrativePath as It, docSectionsOf as J, CoverIssue as Jn, maxInjectionsPerTurn as Jr, hotSessionsPath as Jt, cutKnowledgeSection as K, ContextItem as Kn, deriveDecisionKeyRef as Kr, hotPersonaPath as Kt, KNOWLEDGE_SECTION as L, renderCover as Ln, setCurrentKindDefs as Lr, defaultTemplatePath as Lt, writeEntryDoc as M, isAbsolutePath as Mn, fillKindMarkers as Mr, parseSections as Mt, writeGlobalDoc as N, isSimilarId as Nn, isEntryKind as Nr, preview as Nt, rejectNomination as O, coverFromYaml as On, currentKindDefsOf as Or, decideRead as Ot, writeNominations as P, narrativeFromProjectText as Pn, kindCatalogText as Pr, sectionTitles as Pt, isKnowledgeHeading as Q, EntryDoc as Qn, nominationsPath as Qt, KNOWLEDGE_TITLE as R, renderFrontmatter as Rn, ACTIVE_BAND_DEFAULT as Rr, docReadLogPath as Rt, projectIdFromFile as S, themesDir as Sn, NominationsFile as Sr, recordRead as St, readSnapshots as T, TITLE_MAX_CHARS as Tn, ReadSnapshot as Tr, DocSection as Tt, SPEC_SECTION as U, toStringArray as Un, MemjConfig as Ur, globalDocPath as Ut, PROGRESS_TITLE as V, splitFrontmatter as Vn, DEFAULT_CONFIG as Vr, entryFileName as Vt, SPEC_TITLE as W, validateCoverShape as Wn, activeDecisionOf as Wr, hotDir as Wt, extractSpecBlockLines as X, ENTRY_KINDS as Xn, resolveDecisionPick as Xr, legacyTemplatePath as Xt, extractSpecBlock as Y, DocReadRecord as Yn, needMinOf as Yr, kindsFilePath as Yt, extractSpecSection as Z, ENTRY_KIND_DEFS as Zn, scoreDecisionOf as Zr, libraryRoot as Zt, fixExternalRef as _, tagVocabularyPath as _n, HotShape as _r, SECTION_SPEC_CLOSING as _t, addNomination as a, readLogPath as an, HOT_SHAPES as ar, stripAllSpecBlocks as at, loadProjectDoc as b, templatesDir as bn, LiveKindDef as br, groupBySourceProject as bt, approveNomination as c, recallLogPath as cn, HotEntriesFile as cr, SearchHit as ct, deleteEntryFile as d, resolveRef as dn, HotPersonaItem as dr, filterContextByTerms as dt, projectDocPath as en, EntryKind as er, sectionSpecsOf as et, deleteProjectDoc as f, safeName as fn, HotProjectEntry as fr, normalizeQuery as ft, fixCoverBlock as g, tagAutoStatePath as gn, HotSessionsFile as gr, HANDOFF_UNTOUCHED_SECTIONS as gt, findDocRead as h, scoreLogPath as hn, HotSessionBinding as hr, HANDOFF_UNTOUCHED_CLOSING as ht, ScanOptions as i, promptsDir as in, HOT_PROJECT_UNKNOWN as ir, specBlockRange as it, syncEntryFrontmatter as j, findSimilarIds as jn, entryKindWhen as jr, groupSections as jt, removeNomination as k, editDistance as kn, currentKindsOf as kr, extractSection as kt, byUpdatedDesc as l, requiredDirs as ln, HotEntrySetting as lr, bodySize as lt, ensureLibraryDirs as m, scoreLogDir as mn, HotSelectionFile as mr, sortHits as mt, LibrarySnapshot as n, promptHistoryDir as nn, HOT_BIND_SOURCES as nr, setSectionSpecBlock as nt, appendDocRead as o, readsDir as on, HotBindSource as or, stripSpecBlock as ot, deleteThemeDoc as p, scoreFilePath as pn, HotProjectSelection as pr, scoreCover as pt, cutSpecSection as q, Cover as qn, itemMinOf as qr, hotSelectionPath as qt, ProjectRecord as r, promptOverridesPath as rn, HOT_CHANNELS as rr, specBlockFenceInfo as rt, appendReadSnapshot as s, recallLogDir as sn, HotChannel as sr, HIT_WEIGHTS as st, FixResult as t, projectsDir as tn, EntryKindDef as tr, sectionsFromNarrative as tt, consumeSnapshots as u, resolveInsideLibrary as un, HotPersonaFile as ur, filterByContext as ut, isHistoryCover as v, tagsDir as vn, KIND_CATALOG_MARKER as vr, SECTION_SPEC_HEAD as vt, readNominations as w, SLUG_RE as wn, ProjectFrontmatter as wr, renderSnapshotList as wt, loadThemeFrontmatter as x, themeDocPath as xn, Nomination as xr, pendingSnapshots as xt, loadEntryDoc as y, templatePath as yn, KIND_LIST_MARKER as yr, SNAPSHOT_CLOSING as yt, NARRATIVE_SECTIONS as z, renderYamlArray as zn, ACTIVE_MAX_INJECTIONS_DEFAULT as zr, docReadsDir as zt };
+export { isKnowledgeHeading as $, EntryDoc as $n, nominationsPath as $t, removeNomination as A, editDistance as An, currentKindsOf as Ar, extractSection as At, NARRATIVE_SECTIONS as B, renderYamlArray as Bn, ACTIVE_MAX_INJECTIONS_DEFAULT as Br, docReadsDir as Bt, projectIdFromFile as C, themesDir as Cn, NominationsFile as Cr, recordRead as Ct, readUnconsumedSnapshots as D, TITLE_MIN_CHARS as Dn, SELECTABLE_ENTRY_KINDS as Dr, ReadDecision as Dt, readSnapshots as E, TITLE_MAX_CHARS as En, ReadSnapshot as Er, DocSection as Et, writeNominations as F, narrativeFromProjectText as Fn, kindCatalogText as Fr, sectionTitles as Ft, SPEC_TITLE as G, validateCoverShape as Gn, activeDecisionOf as Gr, hotDir as Gt, PROGRESS_TITLE as H, splitFrontmatter as Hn, DEFAULT_CONFIG as Hr, entryFileName as Ht, writeProjectDoc as I, parseCovers as In, kindsInline as Ir, backupDir as It, cutSpecSection as J, Cover as Jn, itemMinOf as Jr, hotSelectionPath as Jt, buildSkeleton as K, yamlScalar as Kn, decisionProvidersOf as Kr, hotEntriesPath as Kt, writeThemeDoc as L, rawKindFromYaml as Ln, selectableKindList as Lr, backupNarrativePath as Lt, syncEntryFrontmatter as M, findSimilarIds as Mn, entryKindWhen as Mr, groupSections as Mt, writeEntryDoc as N, isAbsolutePath as Nn, fillKindMarkers as Nr, parseSections as Nt, rebuildDerivedLayers as O, charCount as On, ThemeFrontmatter as Or, SectionGroup as Ot, writeGlobalDoc as P, isSimilarId as Pn, isEntryKind as Pr, preview as Pt, extractSpecSection as Q, ENTRY_KIND_DEFS as Qn, scoreDecisionOf as Qr, libraryRoot as Qt, KNOWLEDGE_SECTION as R, renderCover as Rn, setCurrentKindDefs as Rr, defaultTemplatePath as Rt, loadThemeFrontmatter as S, themeDocPath as Sn, Nomination as Sr, pendingSnapshots as St, readNominations as T, SLUG_RE as Tn, ProjectFrontmatter as Tr, renderSnapshotList as Tt, SPEC_BLOCK_FENCE as U, stripCovers as Un, DecisionProvider as Ur, entryRelPath as Ut, NARRATIVE_TITLES as V, replaceBlockAtLines as Vn, Config as Vr, entriesDir as Vt, SPEC_SECTION as W, toStringArray as Wn, MemjConfig as Wr, globalDocPath as Wt, extractSpecBlock as X, DocReadRecord as Xn, needMinOf as Xr, kindsFilePath as Xt, docSectionsOf as Y, CoverIssue as Yn, maxInjectionsPerTurn as Yr, hotSessionsPath as Yt, extractSpecBlockLines as Z, ENTRY_KINDS as Zn, resolveDecisionPick as Zr, legacyTemplatePath as Zt, fixExternalRef as _, tagAutoStatePath as _n, HotSessionsFile as _r, HANDOFF_UNTOUCHED_SECTIONS as _t, addNomination as a, promptsDir as an, HOT_PROJECT_UNKNOWN as ar, specBlockRange as at, loadEntryDoc as b, templatePath as bn, KIND_LIST_MARKER as br, SNAPSHOT_CLOSING as bt, approveNomination as c, recallLogDir as cn, HotChannel as cr, HIT_WEIGHTS as ct, deleteEntryFile as d, resolveInsideLibrary as dn, HotPersonaFile as dr, filterByContext as dt, pluginRoot as en, EntryFrontmatter as er, renderSpecBlockLines as et, deleteProjectDoc as f, resolveRef as fn, HotPersonaItem as fr, filterContextByTerms as ft, fixCoverBlock as g, scoreLogPath as gn, HotSessionBinding as gr, HANDOFF_UNTOUCHED_CLOSING as gt, findDocRead as h, scoreLogDir as hn, HotSelectionFile as hr, sortHits as ht, ScanOptions as i, promptOverridesPath as in, HOT_CHANNELS as ir, specBlockFenceInfo as it, scanLibrary as j, extractTitle as jn, currentReservedKinds as jr, findSectionRange as jt, rejectNomination as k, coverFromYaml as kn, currentKindDefsOf as kr, decideRead as kt, byUpdatedDesc as l, recallLogPath as ln, HotEntriesFile as lr, SearchHit as lt, ensureLibraryDirs as m, scoreFilePath as mn, HotProjectSelection as mr, scoreCover as mt, LibrarySnapshot as n, projectsDir as nn, EntryKindDef as nr, sectionsFromNarrative as nt, appendDocRead as o, readLogPath as on, HOT_SHAPES as or, stripAllSpecBlocks as ot, deleteThemeDoc as p, safeName as pn, HotProjectEntry as pr, normalizeQuery as pt, cutKnowledgeSection as q, ContextItem as qn, deriveDecisionKeyRef as qr, hotPersonaPath as qt, ProjectRecord as r, promptHistoryDir as rn, HOT_BIND_SOURCES as rr, setSectionSpecBlock as rt, appendReadSnapshot as s, readsDir as sn, HotBindSource as sr, stripSpecBlock as st, FixResult as t, projectDocPath as tn, EntryKind as tr, sectionSpecsOf as tt, consumeSnapshots as u, requiredDirs as un, HotEntrySetting as ur, bodySize as ut, isChatCover as v, tagVocabularyPath as vn, HotShape as vr, SECTION_SPEC_CLOSING as vt, readDocReads as w, DESC_MAX_CHARS as wn, ParsedCover as wr, renderSectionSpecs as wt, loadProjectDoc as x, templatesDir as xn, LiveKindDef as xr, groupBySourceProject as xt, isHistoryCover as y, tagsDir as yn, KIND_CATALOG_MARKER as yr, SECTION_SPEC_HEAD as yt, KNOWLEDGE_TITLE as z, renderFrontmatter as zn, ACTIVE_BAND_DEFAULT as zr, docReadLogPath as zt };

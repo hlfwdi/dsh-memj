@@ -417,8 +417,17 @@ function firstLine(text: string): string {
  * 且 `on` 的入口在**另一个子页**（「全局热知识」）还叫"纳入" ⇒ 用户**无从察觉**。
  * ⇒ 现在"在清单里 = 会注入"，**界面上所见即所得**。
  *
- * ⚠️ **还有一道过滤保留**：必须**不是** `kind: 'history'`
+ * ⚠️ **还有一道过滤**：必须**不是** `kind: 'history'`
  * （它不参与任何面向模型的展示）—— `scanLibrary()` 默认已排除，天然成立。
+ *
+ * ⚠️⚠️ **2026-10-13 起多第二道：不是 `kind: 'chat'`** —— ⭐ 但它与 `history`
+ * **走的路不同，别混**：
+ *   · `history` ⇒ `scanLibrary()` 默认排除（**列表也不要它**）；
+ *   · `chat`   ⇒ **列表要它**（用户裁定「chat 出现在知识库列表里」）
+ *     ⇒ `scanLibrary()` **不能**排除 ⇒ 只能由**本函数在入口过滤**（`snapshotForModel`）。
+ * 🔴 判据：**"进列表"与"进模型上下文"是两条路** ——
+ *    想排除某类条目时，先问"列表要不要它"，再决定改哪一处；
+ *    改错一处 ⇒ 要么列表点不开（改 `scanLibrary`），要么模型看到会话流水（不改这里）。
  *
  * ⚠️ **排序**：置顶优先（按 `pinnedAt` 倒序），其余保持清单原顺序。
  * @param projectId - 该会话判定的项目（`未知` 时只收全局层）。
@@ -476,7 +485,21 @@ export async function collectHotItems(
   scoreOpts?: ScoreReadOpts,
 ): Promise<HotItem[]> {
   // ⚠️ `scanLibrary()` 默认**不含 history、不含归档** ⇒ 正合要求。
+  //
+  // ⭐⭐ **2026-10-13（「文档内提问」）：注入侧排除 `chat`。**
+  //
+  //    🔴 **为什么在这里做、而不是改 `scanLibrary` 的默认值**：
+  //       `chat` **要出现在知识库列表里**（用户裁定）⇒ 它必须过 `scanLibrary`；
+  //       而它是**会话流水**，不是可供复用的知识 ⇒ **不能进模型上下文**。
+  //       ⇒ ⭐ 判据：**列表/读侧含它，检索/注入侧排除它** ——
+  //         两条路各改一处，别互相下手（改 `scanLibrary` 会让列表点不开那些条目）。
+  //    ⚠️ 在**入口**一次过滤 ⇒ 全局层 / 项目层 / 主题层 / 评分层**四条路径全覆盖**，
+  //       不会漏掉评分模式那条（它另有一个 `byId` 查表路径）。
   const snapshot = await scanLibrary()
+  const snapshotForModel = {
+    ...snapshot,
+    covers: snapshot.covers.filter((c) => c.cover.kind !== 'chat'),
+  }
   const settings = await loadEntrySettings()
   const selections = await loadSelections()
   const known = projectId !== HOT_PROJECT_UNKNOWN && projectId !== ''
@@ -492,7 +515,7 @@ export async function collectHotItems(
 
   // ── 全局层（**不需要被选中**：它天然对所有会话生效）──
   //    ⚠️ **缺省纳入**（用户原话："global 为 true 的知识条目，应该是所有主题都会注入的"）。
-  for (const { cover } of snapshot.covers) {
+  for (const { cover } of snapshotForModel.covers) {
     if (!cover.global) continue
     const st = settingOf(settings, cover.id, 'global')
     if (!st.on) continue
@@ -536,7 +559,8 @@ export async function collectHotItems(
       )
       // ⭐ 用 `id → cover` 查表（`rankings` 已按分数降序 ⇒ 注入顺序也可读）。
       const shownScored = new Set(out.map((it) => it.cover.id))
-      const byId = new Map(snapshot.covers.map((c) => [c.cover.id, c.cover]))
+      // ⚠️ 查表也用**已排除 chat 的那份**——否则"chat 条目分数很高"时会被这里收进去。
+      const byId = new Map(snapshotForModel.covers.map((c) => [c.cover.id, c.cover]))
       // ⭐ 本项目主题（用于归属校验；为空时不必查）。
       const themeAllows = await projectThemeSet(projectId)
       for (const r of rankings) {
@@ -585,7 +609,7 @@ export async function collectHotItems(
     //    ⚠️ **顺序很重要**：`shown` 必须在**全局层收完之后**建 —— 全局层优先，
     //      项目/主题层让位（全局的形态由 `entries.json` 决定，那是它对全局层的正当来源）。
     const shown = new Set(out.map((it) => it.cover.id))
-    for (const { cover } of snapshot.covers) {
+    for (const { cover } of snapshotForModel.covers) {
       if (cover.project !== projectId) continue
       if (shown.has(cover.id)) continue
       const sel = selEntries.get(cover.id)
@@ -608,7 +632,7 @@ export async function collectHotItems(
     if (themeIds.length > 0) {
       // ⚠️ 重建 `shown`：它要包含**前两层**已收的全部（全局 + 项目）。
       const shown2 = new Set(out.map((it) => it.cover.id))
-      for (const { cover } of snapshot.covers) {
+      for (const { cover } of snapshotForModel.covers) {
         if (cover.theme.some((t) => themeIds.includes(t)) && !shown2.has(cover.id)) {
           const sel = selEntries.get(cover.id)
           if (sel === undefined) continue
