@@ -45,6 +45,11 @@ import {
   type Template,
 } from './templates.ts'
 import { templatesDir } from './paths.ts'
+// ⭐⭐⭐ 「文档内提问」（2026-10-14）：`/reading/ask` 的入口与依赖类型。
+//    ⚠️ **必须静态 import**（与 `api.ts` 其余模块同规）：动态 import 会被打包器
+//       拆出带哈希的 chunk，而"动态 import 的哈希 chunk"正是让运行中的实例
+//       API 全部 500 的已知坑（memj 库条目 `c9bcc110`）。
+import { askAboutSelection, type AskDeps } from './reading-ask.ts'
 import { fileExistsStat, readTextIfExists } from './files.ts'
 import {
   fixCoverBlock,
@@ -182,6 +187,18 @@ export interface ApiDeps {
    * ⚠️ **可选**：拿不到时那条判据**自动降级为"判不出"**（其余判据不受影响）。
    */
   getService?: (name: string) => unknown
+  /**
+   * ⭐⭐ **「文档内提问」的依赖**（2026-10-14 新增，**可选**）。
+   *
+   * 🔴 **为什么不走 `getService('agents')`**：`ApiDeps` 一直是"窄投影"，
+   *    而 `reading/ask` 需要的是**装配好的 `AskDeps`**（含 `ctx`）——
+   *    那要在 `apply()` 里用真的 `ctx` 才能建（`createReadingSession` 要
+   *    `workspaceRegistry` / `agents` / `agentPresets` / `agentDefaultModel`
+   *    四样服务）。⇒ 由 `apply()` 装配好塞进来，`handleApi` 只负责调。
+   * ⚠️ **可选**：没装配（测试里常常如此）⇒ `/reading/ask` 回 500 并说清原因，
+   *    而**不影响其他路由**。
+   */
+  readingAsk?: AskDeps
 }
 
 /** 一次 API 结果。 */
@@ -3608,6 +3625,54 @@ export async function handleApi(
       // ⚠️ 同上：`result` 自带 `ok`。
       if (!result.ok) return { status: 400, body: { ...result } }
       return { status: 200, body: { ok: true } }
+    }
+
+    // ── POST /reading/ask：「文档内提问」的入口（2026-10-14）──
+    //    ⭐ 前端在阅读页选中一段、点「就此提问」⇒ 调这里。
+    //    ⚠️ 它**开真实 DSH 会话**（`agents.create` + `followup`）⇒
+    //       是整个功能唯一"碰运行时"的入口，错误必须如实回给前端。
+    if (route === '/reading/ask') {
+      if (method !== 'POST') return { status: 405, body: { ok: false, error: '该接口只接受 POST' } }
+      let p: { entryId?: unknown; anchor?: unknown; question?: unknown }
+      try { p = JSON.parse(rawBody) as typeof p } catch {
+        return { status: 400, body: { ok: false, error: '请求体不是合法 JSON' } }
+      }
+      const entryId = typeof p.entryId === 'string' ? p.entryId.trim() : ''
+      const question = typeof p.question === 'string' ? p.question.trim() : ''
+      if (entryId === '' || question === '') {
+        return { status: 400, body: { ok: false, error: '缺少 entryId 或 question' } }
+      }
+      // ⭐ 锚点四元组：缺字段 ⇒ 400（前端构造不完整，别让后端猜）。
+      const a = (p.anchor ?? {}) as Record<string, unknown>
+      const anchor = {
+        blockId: typeof a['blockId'] === 'string' ? a['blockId'] : '',
+        index: typeof a['index'] === 'number' ? a['index'] : 0,
+        exact: typeof a['exact'] === 'string' ? a['exact'] : '',
+        prefix: typeof a['prefix'] === 'string' ? a['prefix'] : '',
+        suffix: typeof a['suffix'] === 'string' ? a['suffix'] : '',
+      }
+      if (anchor.blockId === '' || anchor.exact === '') {
+        return { status: 400, body: { ok: false, error: 'anchor 不完整（缺 blockId 或 exact）' } }
+      }
+      // ⚠️ `readingAskDeps` 需要 ctx ⇒ 由 `index.ts` 通过 deps 传进来
+      //    （`handleApi` 的既有签名不带 ctx，见该函数的 `deps` 形状）。
+      const ask = deps.readingAsk
+      if (ask === undefined) {
+        return { status: 500, body: { ok: false, error: 'reading/ask 未装配（插件缺 readingAsk 依赖）' } }
+      }
+      const r = await askAboutSelection({ entryId, anchor, question }, ask)
+      if (!r.ok) return { status: 400, body: { ok: false, error: r.error } }
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          sessionId: r.sessionId,
+          chatEntryId: r.chatEntryId,
+          // ⭐ 复用与否要回给前端：复用时**不该**再跳一次会话（用户已经在看别的了），
+          //    前端可以据此决定"跳过去"还是"只提示已加入"。
+          reused: r.reused,
+        },
+      }
     }
 
     return { status: 404, body: { ok: false, error: `未知的 API 路径：${route}` } }

@@ -1173,6 +1173,314 @@ declare function syncSession(sessionId: string, deps: SyncDeps): Promise<{
  */
 declare function attachReadingSync(ctx: Context, deps: SyncDeps): () => void;
 //#endregion
+//#region src/reading-ask.d.ts
+/** 「就此提问」的入参。 */
+interface ReadingAskRequest {
+  /** 被提问的那条知识 id。 */
+  entryId: string;
+  /** 段落锚点四元组。 */
+  anchor: ReadingAnchor;
+  /** 用户的问题。 */
+  question: string;
+}
+/** 「就此提问」的结果。 */
+type ReadingAskResult = {
+  ok: true;
+  /** 会话 id（复用或新建）。 */
+  sessionId: string;
+  /** chat 条目 id。 */
+  chatEntryId: string;
+  /** ⭐ `true` = 复用了已有会话（没开新的）。 */
+  reused: boolean;
+} | {
+  ok: false;
+  error: string;
+};
+/** 依赖（注入以便测试）。 */
+interface AskDeps {
+  /** 建/复用会话。 */
+  ensureSession(input: {
+    entryId: string;
+    entryTitle: string;
+    anchor: ReadingAnchor;
+    question: string;
+  }): Promise<{
+    sessionId: string;
+    chatEntryId: string;
+    created: boolean;
+  }>;
+  /** 取被提问条目的标题（首轮消息与 chat 条目都要用）。 */
+  entryTitle(entryId: string): Promise<string>;
+  /**
+   * ⭐ **绑定写入后的回调**（刷新 `context()` 的同步缓存）。
+   *
+   * 🔴 **为什么必须有它**：`systemPrompt.context()` 的 `text()` 查的是内存 Map，
+   *    而绑定刚写进 `bindings.jsonl` ⇒ 不刷新的话，同一会话的**下一轮**
+   *    注入会查不到 ⇒ **文档上下文静默丢失**（不报错，只是模型突然"看不到全文"）。
+   * ⚠️ 可选（测试里可以不给）；调用处用 `void` 触发，不 await。
+   */
+  onBound?: () => void;
+}
+/**
+ * ⭐ **渲染首轮消息**（`followup` 提交给模型的那条）。
+ *
+ * 🔴 **刻意不含全文** —— 全文由 `context()` 注入（见红线 2）。
+ *    这里只放三样：**出处**（哪条知识）、**锚点段落**（问题针对哪里）、
+ *    **问题本身**。
+ *
+ * ⭐ 「出处 + 锚点」是用户说的「方便 AI 锁定我读到哪里、到底要问什么」的落点：
+ *    没有它，模型只知道"有人问了个问题"；有了它，模型知道
+ *    "问题针对《某知识》里的这一小段"。
+ *
+ * @param entryTitle - 被提问条目的标题。
+ * @param anchor - 段落锚点。
+ * @param question - 用户的问题。
+ * @returns 消息文本。
+ */
+declare function renderAskPrompt(entryTitle: string, anchor: ReadingAnchor, question: string): string;
+/**
+ * ⭐⭐ **「就此提问」的主流程**。
+ *
+ * @param req - 入参。
+ * @param deps - 依赖。
+ * @returns 结果（含复用与否）。
+ */
+declare function askAboutSelection(req: ReadingAskRequest, deps: AskDeps): Promise<ReadingAskResult>;
+/** 阅读会话专用工作区的目录名（相对库根）。 */
+declare const READING_WORKSPACE_DIR = "reading-sessions";
+/**
+ * ⭐⭐ **建一个阅读会话**（真实 DSH 会话）。
+ *
+ * 🔴🔴 **这一步是整个功能唯一"碰运行时"的地方**，顺序照 `dsh-webhook`
+ *    （官方从外部请求建会话的先例，`lib/index.js:148-198`）：
+ *
+ *    1. `workspaceRegistry.create(path)` —— 建/取工作区；
+ *    2. `agents.create({sessionId, meta:{cwd, agentPreset}, agentOptions})`；
+ *    3. `workspace.attachSession(sessionId)` —— 挂到工作区（否则会话列表里看不到）；
+ *    4. `sessionTitle.rename(...)` + `agent.followup(...)` —— 设标题、提交首轮
+ *       （`followup` **会唤醒驱动器**）。
+ *
+ * ⭐⭐ **为什么"建会话"排在"建 chat 条目"之前**（本批特意调的次序）：
+ *    chat 条目的 frontmatter 要写 `source.sessionId`（「去会话」按钮的数据来源），
+ *    · 先建条目 ⇒ 那时候还没有 sessionId ⇒ 要么留空、要么事后补写；
+ *    · 🔴 而 `EntryFieldChange`（`edit.ts` 的字段修改通道）**没有 `source`**，
+ *      为它单独加一个口子会把那条"给人用的"通道弄胖；
+ *    · ⇒ **先建会话、再建条目** ⇒ `source.sessionId` **一次写对**，没有后补动作。
+ *    ⚠️ 代价：若建条目失败，会话已经开了（孤儿）。但那比"按钮永远失效"好——
+ *      而且失败会**如实报错**（`ok:false`），用户看得到。
+ *
+ * ⚠️ **为什么要独立工作区**（`READING_WORKSPACE_DIR`）：一段一会话 ⇒
+ *    会话条数会很多。混在日常工作区里会把**用户的会话列表淹掉**
+ *    （这正是 v2 反对"真实会话"的主要理由，用工作区隔离来解决）。
+ *
+ * ⚠️ **`agentOptions` 必须显式给 `{provider, model}`** ——
+ *    不传会继承 parent 的 requestHeader（memj 库条目 `d8bf9b47`：
+ *    实测继承到 `hy3` 后 maxTokens 被烧光、输出 0 字符）。
+ *
+ * @param ctx - 插件上下文（untraced，由调用方从 `scoped` 转来）。
+ * @param input - 出处 + 锚点 + 问题。
+ * @returns 会话 id 与 chat 条目 id。
+ */
+declare function createReadingSession(ctx: Context, input: {
+  entryId: string;
+  entryTitle: string;
+  anchor: ReadingAnchor;
+  question: string;
+}): Promise<{
+  sessionId: string;
+  chatEntryId: string;
+  created: boolean;
+}>;
+/**
+ * ⭐ **把本模块的依赖装配好**（供 `api.ts` 的路由调用）。
+ *
+ * ⚠️ **`onBound` 必须由调用方给**（刷新 `context()` 的同步缓存）：
+ *    绑定写进 `bindings.jsonl` 之后，`text()` 查的那张内存 Map 还是旧的
+ *    ⇒ 同一会话的**下一轮**注入会查不到 ⇒ 文档上下文静默丢失。
+ *    ⚠️ 它是 `void` 调用（fire-and-forget）⇒ 刷新失败不影响本次提问的成功回执。
+ *
+ * @param ctx - 插件上下文。
+ * @param onBound - 绑定写入后的回调（刷新缓存）。
+ * @returns `AskDeps`。
+ */
+declare function readingAskDeps(ctx: Context, onBound?: () => void): AskDeps;
+//#endregion
+//#region src/reading-context.d.ts
+/**
+ * dsh-memj —— **「文档内提问」的上下文注入**（2026-10-14，第 4 期）
+ *
+ * ── 它做什么 ──────────────────────────────────────────────────────────────
+ * 用户裁定的核心诉求：**「把文档本身作为上下文通过 context 注入的方式注入」**。
+ * 本模块把「被提问的那条知识的全文」注入进**那个阅读会话**的模型上下文。
+ *
+ * ── 🔴 三条设计红线 ────────────────────────────────────────────────────────
+ * 1. **必须按 sessionId 过滤** —— `systemPrompt.context()` 是**全局注册**的，
+ *    它的 `text(ctx)` 对**所有 agent** 返回同一份内容。不在里面判
+ *    「这个会话绑定了哪条知识」⇒ **所有会话都被塞进同一条文档**。
+ *    ⚠️ 空字符串是安全值：`project()` 里 `current.length === 0` 走 CLEARED 分支，
+ *    不会给无关会话塞东西。
+ * 2. **内容完整性自检** —— 框架保证「同值不发 / 丢了补发」，
+ *    **不保证「发出去的确实是完整全文」**。渲染前后校验首尾片段在不在；
+ *    ⚠️ **宁可不注入，也别注入半篇**（模型会拿着半篇自信回答，
+ *    而用户以为它看着全文 —— 这个失败模式是静默的）。
+ * 3. **`text()` 必须快** —— 它**每轮都调用** ⇒ 查库要带**同步内存缓存**
+ *    （缓存失效：bindings 变更时清）。
+ *
+ * @module dsh-memj/reading-context
+ */
+/** 依赖（注入以便测试）。 */
+interface DocContextDeps {
+  /**
+   * 查「这个会话绑定了哪条知识」。
+   * ⚠️ **必须同步**（`text()` 要同步返回）⇒ 背后是内存 Map。
+   */
+  docOf(sessionId: string): {
+    entryId: string;
+    blockId: string;
+  } | undefined;
+  /** 读某条知识的正文（同步，走缓存）。 */
+  entryBody(entryId: string): string | undefined;
+  /** 读某条知识的标题（同步，走缓存）。 */
+  entryTitle(entryId: string): string | undefined;
+}
+/**
+ * ⭐⭐ **装配「正在阅读的知识条目」注入**（供 `apply()` 在 `ctx.inject` 回调里调用）。
+ *
+ * 🔴🔴 **为什么需要"同步缓存"这一层**：
+ *    `systemPrompt.context()` 的 `text()` 必须**同步返回**（签名就是 `(ctx) => string`），
+ *    而 bindings 与条目正文都是**异步读盘**的。
+ *    · 直接在 `text()` 里 `await` ⇒ 不可能（签名不允许）；
+ *    · 用 `fs.readFileSync` ⇒ 每轮一次磁盘 IO，且项目已有 `readTextIfExists` 那套
+ *      异步封装，另起一套会漂移；
+ *    · ⇒ **预热进内存 Map**，`text()` 只查 Map（红线 3「必须快」）。
+ *
+ * ⭐ **缓存什么时候刷新**：
+ *    · 启动时预热一次（异步，不阻塞 apply；失败由 catch 兜住）；
+ *    · `askAboutSelection` 建完绑定后调返回的 `refresh()`（否则同一会话的**下一轮**
+ *      注入会查不到刚建的绑定 ⇒ 文档上下文丢了 —— 而那是静默的）；
+ *    · ⚠️ **不做定时刷新**：库文件可能在别处被改，但「阅读会话」的生命周期很短
+ *      （一次阅读几分钟），重启即刷新，收益不足以换取每轮读盘。
+ *
+ * ⚠️ **它不自己注册**（不像第一版那样内部 `ctx.inject`）：
+ *    调用方**已经在** `ctx.inject(['systemPrompt'], cb)` 回调里了 ⇒
+ *    那里拿到的 `scoped` 没有 `.inject` 方法（`probe-host.mjs` 抓到过
+ *    `ctx.inject is not a function`）⇒ 注册那一步由调用方用 `scoped` 直接做。
+ *
+ * @returns 缓存三件套 + `refresh`（建绑定后调用 `refresh`）。
+ */
+declare function installDocContext(): DocContextCache;
+/**
+ * ⭐ **渲染「正在阅读的知识条目」上下文块**。
+ *
+ * ⭐ **形态照 memj 已有的 `context()` 用法**（`order=125` 那一类）：
+ *    状态类内容、cache-safe（尾部 append，不破前缀缓存）、
+ *    同值不发、压缩后自动补 —— 这三条是框架给的（`RuntimeContextProjection`）。
+ *
+ * ⚠️ **刻意不把「被讨论的段落」单独复制一遍到 `<doc>` 外面** ——
+ *    那会把那段文本发两次。用标记（❖）指向即可（`markAnchor`）。
+ *
+ * @param entryTitle - 条目标题。
+ * @param body - 条目正文（全文）。
+ * @param anchorExact - 用户选中的原文（用于在正文里打标记）。
+ * @returns 注入文本；正文为空 ⇒ 空串（调用方据此跳过注入）。
+ */
+declare function renderDocContext(entryTitle: string, body: string, anchorExact: string): string;
+/**
+ * ⭐ **在正文里给锚点段落打标记**（❖ 包裹）。
+ *
+ * ⚠️ **找不到就原样返回**（不抛错）：锚点可能因为条目被编辑而位移，
+ *    但全文仍然有效 ⇒ 打不上标记不该让整个注入失败。
+ * @param body - 条目正文。
+ * @param exact - 选中的原文。
+ * @returns 打过标记的正文。
+ */
+declare function markAnchor(body: string, exact: string): string;
+/**
+ * ⭐⭐ **内容完整性自检**（红线 2）。
+ *
+ * 🔴 **为什么需要它**：框架的 `project()` 只判「与上次是否同值」，
+ *     不判「这次渲染出来的是不是完整的」。若 `entryBody` 因为某种原因
+ *     只读到一半（文件被截断、读盘中断、缓存污染），
+ *     ⇒ 注入半篇 ⇒ 模型拿着半篇**自信地回答**，用户以为它看着全文。
+ *     ⭐ **宁可不注入**：用户会看到"AI 好像不知道后面内容"，
+ *     而那至少是可察觉的；注入半篇则是**静默的错**。
+ *
+ * ⚠️⚠️ **必须先剥掉锚点标记再比** —— 第一批实现就在这里错：
+ *     `markAnchor` 会把 `exact` 替换成 `❖ exact ❖`（**插入了 4 个字符**）
+ *     ⇒ 含 `exact` 的头/尾片段在渲染文本里**不再逐字存在** ⇒ 自检恒不过关
+ *     ⇒ 表现是"永远不注入"（而现象看起来像"完整性校验太严"，很容易误判）。
+ *     ⭐ 判据：**"比对原文"与"原文被装饰过"是两件事** ——
+ *        装饰（打标记）只服务于人/模型的**阅读**，不该参与完整性判据。
+ *
+ * @param rendered - 渲染后的注入文本（**可能带 ❖ 标记**）。
+ * @param body - 原始正文（未打标记）。
+ * @returns 是否完整（首尾片段都在）。
+ */
+declare function isCompleteContext(rendered: string, body: string): boolean;
+/**
+ * ⭐ **剥掉锚点标记**（`❖ x ❖` ⇒ `x`）。
+ *
+ * ⚠️ **只剥这一种模式**：`markAnchor` 是唯一写入方，模式固定
+ *    ⇒ 用同一个字面量反向替换即可，不需要通用 markdown 解析。
+ * @param text - 可能带标记的文本。
+ * @returns 剥掉标记的文本。
+ */
+declare function stripAnchorMarks(text: string): string;
+/**
+ * ⭐⭐ **注册「正在阅读的知识条目」上下文**（供 `apply()` 调用）。
+ *
+ * 🔴 **`scoped` 是 `ctx.inject([...])` 回调里的那个对象**，不是 `ctx` 本身 ——
+ *    `ctx.inject` 在回调里**不存在**（第一版在这里写了 `ctx.inject(['systemPrompt'], …)`，
+ *    被 `probe-host.mjs` 当场抓到 `ctx.inject is not a function`）。
+ *    ⭐ 直接用它注册（照 `index.ts` 既有的 `scoped.systemPrompt.context({...})` 写法）。
+ *
+ * 🔴 **`text()` 的三条纪律**（见文件头红线）：
+ *    1. 按 sessionId 过滤（无关会话返回 `''`）；
+ *    2. 完整性自检（不过关返回 `''`）；
+ *    3. **同步、快**（依赖全是内存缓存）。
+ *
+ * @param scoped - `ctx.inject(['systemPrompt'], cb)` 回调里的作用域对象。
+ * @param deps - 依赖。
+ * @param order - 插入顺序（照 memj 既有 `context()` 的取值往后排）。
+ */
+declare function registerDocContext(scoped: SystemPromptScope, deps: DocContextDeps, order?: number): void;
+/** `ctx.inject(['systemPrompt'], cb)` 回调里那个作用域的**最小面**。 */
+interface SystemPromptScope {
+  systemPrompt: {
+    context(spec: {
+      name: string;
+      order: number;
+      text: (ctx: {
+        agent?: {
+          session?: {
+            id?: string;
+          };
+        };
+      }) => string;
+    }): unknown;
+  };
+}
+/**
+ * ⭐ **`installDocContext()` 的返回值**：三张同步表 + 刷新函数。
+ *
+ * ⚠️ **刻意把三张表直接暴露**（而不是包成 getter）：
+ *    调用方（`index.ts`）要把它们接进 `registerDocContext` 的 `deps`，
+ *    而 `deps` 的三个方法就是同步查表 ⇒ 直接给表最直白，少一层间接。
+ */
+interface DocContextCache {
+  /** `refresh()` —— 重新预热（建绑定后必须调）。 */
+  refresh(): Promise<void>;
+  /** sessionId → 绑定。 */
+  index: Map<string, {
+    entryId: string;
+    blockId: string;
+  }>;
+  /** entryId → 正文。 */
+  bodies: Map<string, string>;
+  /** entryId → 标题。 */
+  titles: Map<string, string>;
+}
+//#endregion
 //#region src/templates.d.ts
 /** @deprecated 决策 209 退役（不再有消费者）。保留常量是为了**不删台账里的 key**。 */
 declare const TPL_GUIDANCE_HEAD: string;
@@ -5676,6 +5984,18 @@ interface ApiDeps {
    * ⚠️ **可选**：拿不到时那条判据**自动降级为"判不出"**（其余判据不受影响）。
    */
   getService?: (name: string) => unknown;
+  /**
+   * ⭐⭐ **「文档内提问」的依赖**（2026-10-14 新增，**可选**）。
+   *
+   * 🔴 **为什么不走 `getService('agents')`**：`ApiDeps` 一直是"窄投影"，
+   *    而 `reading/ask` 需要的是**装配好的 `AskDeps`**（含 `ctx`）——
+   *    那要在 `apply()` 里用真的 `ctx` 才能建（`createReadingSession` 要
+   *    `workspaceRegistry` / `agents` / `agentPresets` / `agentDefaultModel`
+   *    四样服务）。⇒ 由 `apply()` 装配好塞进来，`handleApi` 只负责调。
+   * ⚠️ **可选**：没装配（测试里常常如此）⇒ `/reading/ask` 回 500 并说清原因，
+   *    而**不影响其他路由**。
+   */
+  readingAsk?: AskDeps;
 }
 /** 一次 API 结果。 */
 interface ApiResult {
@@ -5994,4 +6314,4 @@ declare const inject: string[];
  */
 declare function apply(ctx: Context, config?: MemjConfig): void;
 //#endregion
-export { ACTIVE_BAND_MAX, ACTIVE_BAND_MIN, ACTIVE_BODY_HINT, ACTIVE_CALLS_PER_TURN_MAX, ACTIVE_CALLS_PER_TURN_MIN, ACTIVE_CHANNEL_VALUES, ACTIVE_CLOSING_INSTRUCTION, ACTIVE_CONTEXT_ROUNDS_MAX, ACTIVE_CONTEXT_ROUNDS_MIN, ACTIVE_HEADER, ACTIVE_POOL_MAX_MAX, ACTIVE_POOL_MAX_MIN, ACTIVE_REASONING_MAX_CHARS_MAX, ACTIVE_REASONING_MAX_CHARS_MIN, ACTIVE_SCOPE_VALUES, ACTIVE_TIMEOUT_MAX, ACTIVE_TIMEOUT_MIN, ACTIVE_TOP_K_MAX, ACTIVE_TOP_K_MIN, ActiveLastRecall, ActiveRuntimeState, type AdoptRequest, AffectedEntry, AutoContextOutcome, AutoNormalizeOutcome, AutoScoreOutcome, CHAT_ENTRY_KIND, CLOSING_INSTRUCTION, Candidate, CanonicalTag, ChatDiag, ChatScoreOutcome, Config, ContextAssembly, ContextItem, ContextUsage, Cover, CoverIssue, DEFAULT_CONFIG, DEFAULT_LEVEL, DEFAULT_SECTION_NAMES, DESC_MAX_CHARS, DESC_SOFT_WARN, type DocOp, DocReadRecord, DocSection, ENTRY_KINDS, ENTRY_KIND_DEFS, EditResult, EnIndex, EnIndexEntry, EntryDoc, EntryFieldChange, EntryFrontmatter, EntryKind, EntryKindDef, EntryScore, FixResult, GateDeps, HANDOFF_LEVELS, HANDOFF_STEP_ORDER, HANDOFF_UNTOUCHED_CLOSING, HANDOFF_UNTOUCHED_SECTIONS, HIT_WEIGHTS, HOT_BIND_SOURCES, HOT_BODY_CLOSING_INSTRUCTION, HOT_BUDGET_MAX, HOT_BUDGET_MIN, HOT_CHANNELS, HOT_CHARS_PER_TOKEN_MAX, HOT_CHARS_PER_TOKEN_MIN, HOT_CLOSING_INSTRUCTION, HOT_DIRECT_SECTION, HOT_FILE_VERSION, HOT_FULL_WARN_MAX, HOT_FULL_WARN_MIN, HOT_HEAD_FIRST, HOT_HEAD_SUPPLEMENT, HOT_META_HINT, HOT_PROJECT_UNKNOWN, HOT_RATIO_MAX, HOT_RATIO_MIN, HOT_SESSION_KEEP, HOT_SESSION_KEEP_MAX, HOT_SESSION_KEEP_MIN, HOT_SHAPES, type HandoffEntry, HandoffLevel, type HandoffRequest, type HandoffResult, type HandoffStep, HotBindSource, HotChannel, HotEntriesFile, HotEntrySetting, HotItem, HotLayer, HotPersonaFile, HotPersonaItem, HotPreviewItem, HotProjectEntry, HotProjectSelection, HotReload, HotRenderResult, HotRuntimeState, HotSelectionFile, HotSessionBinding, HotSessionsFile, HotShape, IndexHealth, InjectionDecision, InjectionPlan, JEV_CANDIDATE_INSTRUCTION, JEV_NEED_INSTRUCTION, JEV_SCORE_INSTRUCTION, JEV_SEARCH_INTENT_INSTRUCTION, JEV_SUFFICIENT_INSTRUCTION, JUDGE_HEAD, JevCallResult, KIND_CATALOG_MARKER, KIND_ID_RE, KIND_LIST_MARKER, KNOWLEDGE_SECTION, KNOWLEDGE_TITLE, KeptMessage, KindDef, LEVEL_LABELS, LibrarySnapshot, LiveKindDef, MIN_QUOTE_CHARS, NARRATIVE_SECTIONS, NARRATIVE_TITLES, type NewThemeRequest, Nomination, NominationsFile, NormalizeOptions, NormalizeResult, PROGRESS_TITLE, PROGRESS_WARN_MAX, PROGRESS_WARN_MIN, PROJECT_KNOWLEDGE_HINT, PROMPT_CATALOG, PROMPT_GROUPS, PROMPT_OVERRIDES_VERSION, PROMPT_SPECS, PROTOCOL_SECTION_ORDER, PROTOCOL_TEXT, ParsedCover, ParsedJudge, PatchReload, PendingTag, ProjectFrontmatter, ProjectRecord, ProjectScore, PromptCatalogEntry, PromptCheck, PromptGroup, PromptGroupInfo, PromptOverrides, PromptSpec, PromptZone, ReadDecision, ReadSnapshot, ReadingAnchor, ReadingBinding, ReadingState, RebuildResult, RecallOutcome, SCORE_FILE_VERSION, SCORE_INDEX_RANGE, SCORE_PICK_PRINCIPLE, SCORE_POOL_HEADER, SCORE_QUOTE_RULE, SCORE_USER_TASK, SECTION_SPEC_CLOSING, SECTION_SPEC_HEAD, SELECTABLE_ENTRY_KINDS, SLUG_RE, SNAPSHOT_CLOSING, SPEC_BLOCK_FENCE, SPEC_SECTION, SPEC_TITLE, SavePromptResult, ScanOptions, ScoreEvent, ScoreFile, ScoreReadOpts, ScoreRunRecord, ScoreTurnResult, ScoredCandidateLog, ScoredEntry, SearchHit, SectionGroup, type SectionOpResult, SettingsReadResult, SettingsWriteResult, SyncDeps, SyncTurn, TARGET_PROJECT_LINE, TARGET_THEME_LINE, TEMPLATE_ID_RE, TEMPLATE_VERSION, THEME_COVERS_HINT, THEME_CREATION_VALUES, THEME_KNOWLEDGE_HINT, TITLE_MAX_CHARS, TITLE_MIN_CHARS, TOKEN_COEF, TPL_GUIDANCE_FOOT, TPL_GUIDANCE_HEAD, TPL_GUIDANCE_NO_TRUNC, TPL_GUIDANCE_ROW, TPL_GUIDANCE_TRUNC_MARK, TagAutoState, TagVocabulary, Template, TemplateAction, TemplateSection, TemplateToolDecision, TemplateToolRequest, ThemeFrontmatter, TopScoredOpts, Turn, UUID_SCAN, WindowSnapshot, WriteBackItem, WriteBackResult, activeInjectionsUsed, activeSnapshot, activeState, addNomination, aggregate, aliasIndex, allCandidates, appendBinding, appendChatTurn, appendDocRead, appendReadSnapshot, appendScoreLog, apply, applyAdds, applyMerges, applySectionOp, approveNomination, archiveEntry, archiveProject, assembleContext, attachReadingSync, backupDir, backupNarrativePath, bindingsForEntry, bodySize, budgetTokensFor, buildChatScoreSystem, buildChatScoreUser, buildHotInjection, buildSkeleton, buildSystemPrompt, buildUserPrompt, builtinKindDefs, byUpdatedDesc, callJev, candidatesForScope, catalogOf, charCount, checkAdoptShape, checkAndRepair, checkEntryShape, checkIndex, checkKnowledgeShape, checkNoDshVariables, checkQuote, clearPluginSpawnedForTest, clearPromptHistory, collectHotItems, confirmMessage, consumeSnapshots, countChatTurns, coverFromYaml, createChatEntry, currentKindDefsOf, currentKindsOf, currentReservedKinds, cutKnowledgeSection, cutSpecSection, decideAutoScore, decideInjection, decideRead, decideTagAuto, decideTemplateTool, defaultEntrySetting, defaultTemplate, defaultTemplatePath, deleteEntry, deleteEntryFile, deleteKindBlockReason, deleteProject, deleteProjectDoc, deleteTemplate, deleteTheme, deleteThemeDoc, deltaFor, deltaTextOf, descHashOf, detectProjectByDocReads, detectProjectBySessionLog, docReadLogPath, docReadsDir, docSectionsOf, editDistance, editEntryThemes, effectiveChannel, effectiveConfig, effectiveScope, effectiveScore, emptyOverrides, emptyScoreFile, emptyTagAutoState, emptyVocabulary, enIndexPath, ensureDefaultTemplateFile, ensureLibraryDirs, entriesDir, entryFileName, entryKindWhen, entryRelPath, estimateCandidateTokens, estimatePoolOutputTokens, estimatePoolTokens, estimateTokens, extractJson, extractSection, extractSpecBlock, extractSpecBlockLines, extractSpecSection, extractTitle, extractTurn, extractUserSubmit, fillKindMarkers, fillSlots, filterByContext, filterContextByTerms, findAliasConflicts, findBinding, findBindingBySession, findDocRead, findEmptySections, findSectionRange, findSimilarIds, fingerprintsFromInjectionEvents, fingerprintsInText, fixCoverBlock, fixExternalRef, gateHandoffArgs, getSessionBinding, globalDocPath, groupBySourceProject, groupOrder, groupSections, handleApi, hasOverride, hashText, hotDir, hotEntriesPath, hotPersonaPath, hotSelectionPath, hotSessionsPath, hotState, idsInWindow, inWindow, inject, injectTotalsOf, insertSpecBlocks, isAbsolutePath, isChatCover, isEntryKind, isHistoryCover, isKnowledgeHeading, isMtModel, isPluginSpawned, isSectionShape, isSimilarId, isThoughtEnd, kindCatalogText, kindsFilePath, kindsInline, lastBudgetDiagnostic, lastChatDiagnostic, lastInjectionOf, lastRunTurn, leakedHan, legacyTemplatePath, libraryRoot, listPromptHistory, listTemplates, loadBindings, loadCursors, loadDefaultTemplate, loadEnIndex, loadEntryDoc, loadEntrySettings, loadKinds, loadPersona, loadProjectDoc, loadPromptOverrides, loadReadingState, loadScoreFile, loadSelections, loadSessionsFile, loadTagAutoState, loadTemplate, loadThemeFrontmatter, loadVocabulary, locateTemplateBody, makeAnchor, markNormalized, markPluginSpawned, maybeAutoNormalize, maybeAutoScore, measureSections, mergeNarrative, moveEntry, name, narrativeFromProjectText, newPersonaId, nominationsPath, normalizeNarrative, normalizeQuery, normalizeTags, normalizeTemplate, noteKnowledgeWritten, overriddenKeys, overrideUpdatedAt, pairingError, parseChatScore, parseCovers, parseGetHandoffFromEvents, parseHandoffFromEvents, parseJudgeOutput, parseKindsDoc, parseLevel, parseSections, parseStepRequest, parseTemplateDoc, patchPathFrom, pendingSnapshots, personaFingerprint, pickCandidates, planInjection, planSteps, pluginRoot, preview, previewForSession, probeCoverState, profileDirFrom, projectDocPath, projectIdFromFile, projectsDir, promptCurrent, promptDefault, promptHistoryDir, promptOverridesPath, promptText, promptsDir, protocolText, pruneEvents, pruneSessions, quoteAppearsIn, rawKindFromYaml, readContextUsage, readContextUsageWithWindow, readDocReads, readLogPath, readNominations, readProjectScore, readPromptHistory, readScoreLog, readSettings, readSnapshots, readTurnContent, readUnconsumedSnapshots, readingBindingsPath, readingCursorsPath, readingDir, readingStatePath, readsDir, reasoningTextOf, rebuildDerivedLayers, rebuildEnIndex, rebuildWindowFromSessionLog, recall, recallLogDir, recallLogPath, recordRead, refreshPromptCache, refreshPromptCacheSync, registerActiveInjection, registerAutoScore, registerContextReport, registerEnIndex, registerGate, registerHotInjection, registerPromptDefault, registerReadingSync, registerTagAutoNormalize, registeredPromptKeys, rejectNomination, relocateAnchor, removeNomination, renameProject, renameTheme, renderActiveInjection, renderChatEntryBody, renderChatTurn, renderContextUsage, renderCover, renderFrontmatter, renderHotText, renderJudgeRules, renderKindsDoc, renderManifest, renderMetaLine, renderOutputSpec, renderOutputText, renderParametersText, renderProjectHandoff, renderSectionSpecs, renderSnapshotList, renderSpecBlockLines, renderSpecBlocksSkeleton, renderTemplateDoc, renderThemeHandoff, renderYamlArray, replaceBlockAtLines, reportContextUsage, requiredDirs, resetActiveState, resetHotState, resetPromptCache, resetPromptOverride, resolveContextWindow, resolveInsideLibrary, resolveJevKey, resolveMerges, resolveProject, resolveRef, resolveTag, restorePromptHistory, runHandoff, safeName, saveCursor, saveEnIndex, saveEntrySettings, saveKinds, savePersona, savePromptOverride, savePromptOverrides, saveReadingPosition, saveScoreFile, saveSelections, saveSessionsFile, saveTagAutoState, saveTemplate, saveVocabulary, scanLibrary, scoreCover, scoreFilePath, scoreLogDir, scoreLogPath, scoreTurn, scoreViaChat, scoredEntryIds, sectionSpecsOf, sectionTitles, sectionsFromNarrative, seedVocabulary, selectableKindList, selfCheckHandoffResult, setCurrentKindDefs, setEntryFields, setEntryGlobal, setProjectDesc, setProjectFields, setPromptCacheForTest, setSectionSpec, setSectionSpecBlock, setSessionBinding, setThemeDesc, setThemeFields, settingOf, slotNames, snapshotWindow, sortHits, specBlockFenceInfo, specBlockRange, specOf, splitFrontmatter, splitRoute, splitTurns, startNormalizeSubagent, startScoreSubagent, stripAllSpecBlocks, stripCovers, stripSpecBlock, syncEntryFrontmatter, syncSession, tagAutoStatePath, tagVocabularyPath, tagsDir, templateDeclaresArchiving, templatePath, templateSectionNames, templateWarnings, templatesDir, textOfContent, themeDocPath, themesDir, toStringArray, topScored, touchSession, triggerEnIndexRebuild, unarchiveEntry, unarchiveProject, unescapeFromTemplate, updateEntry, updateProjectScore, validateAllCovers, validateCoverShape, validateKinds, validatePrompt, validateTemplate, withScoreLock, writeBackState, writeBackToSource, writeEntryDoc, writeGlobalDoc, writeNominations, writeProjectDoc, writeSetting, writeThemeDoc, yamlScalar };
+export { ACTIVE_BAND_MAX, ACTIVE_BAND_MIN, ACTIVE_BODY_HINT, ACTIVE_CALLS_PER_TURN_MAX, ACTIVE_CALLS_PER_TURN_MIN, ACTIVE_CHANNEL_VALUES, ACTIVE_CLOSING_INSTRUCTION, ACTIVE_CONTEXT_ROUNDS_MAX, ACTIVE_CONTEXT_ROUNDS_MIN, ACTIVE_HEADER, ACTIVE_POOL_MAX_MAX, ACTIVE_POOL_MAX_MIN, ACTIVE_REASONING_MAX_CHARS_MAX, ACTIVE_REASONING_MAX_CHARS_MIN, ACTIVE_SCOPE_VALUES, ACTIVE_TIMEOUT_MAX, ACTIVE_TIMEOUT_MIN, ACTIVE_TOP_K_MAX, ACTIVE_TOP_K_MIN, ActiveLastRecall, ActiveRuntimeState, type AdoptRequest, AffectedEntry, AskDeps, AutoContextOutcome, AutoNormalizeOutcome, AutoScoreOutcome, CHAT_ENTRY_KIND, CLOSING_INSTRUCTION, Candidate, CanonicalTag, ChatDiag, ChatScoreOutcome, Config, ContextAssembly, ContextItem, ContextUsage, Cover, CoverIssue, DEFAULT_CONFIG, DEFAULT_LEVEL, DEFAULT_SECTION_NAMES, DESC_MAX_CHARS, DESC_SOFT_WARN, DocContextCache, DocContextDeps, type DocOp, DocReadRecord, DocSection, ENTRY_KINDS, ENTRY_KIND_DEFS, EditResult, EnIndex, EnIndexEntry, EntryDoc, EntryFieldChange, EntryFrontmatter, EntryKind, EntryKindDef, EntryScore, FixResult, GateDeps, HANDOFF_LEVELS, HANDOFF_STEP_ORDER, HANDOFF_UNTOUCHED_CLOSING, HANDOFF_UNTOUCHED_SECTIONS, HIT_WEIGHTS, HOT_BIND_SOURCES, HOT_BODY_CLOSING_INSTRUCTION, HOT_BUDGET_MAX, HOT_BUDGET_MIN, HOT_CHANNELS, HOT_CHARS_PER_TOKEN_MAX, HOT_CHARS_PER_TOKEN_MIN, HOT_CLOSING_INSTRUCTION, HOT_DIRECT_SECTION, HOT_FILE_VERSION, HOT_FULL_WARN_MAX, HOT_FULL_WARN_MIN, HOT_HEAD_FIRST, HOT_HEAD_SUPPLEMENT, HOT_META_HINT, HOT_PROJECT_UNKNOWN, HOT_RATIO_MAX, HOT_RATIO_MIN, HOT_SESSION_KEEP, HOT_SESSION_KEEP_MAX, HOT_SESSION_KEEP_MIN, HOT_SHAPES, type HandoffEntry, HandoffLevel, type HandoffRequest, type HandoffResult, type HandoffStep, HotBindSource, HotChannel, HotEntriesFile, HotEntrySetting, HotItem, HotLayer, HotPersonaFile, HotPersonaItem, HotPreviewItem, HotProjectEntry, HotProjectSelection, HotReload, HotRenderResult, HotRuntimeState, HotSelectionFile, HotSessionBinding, HotSessionsFile, HotShape, IndexHealth, InjectionDecision, InjectionPlan, JEV_CANDIDATE_INSTRUCTION, JEV_NEED_INSTRUCTION, JEV_SCORE_INSTRUCTION, JEV_SEARCH_INTENT_INSTRUCTION, JEV_SUFFICIENT_INSTRUCTION, JUDGE_HEAD, JevCallResult, KIND_CATALOG_MARKER, KIND_ID_RE, KIND_LIST_MARKER, KNOWLEDGE_SECTION, KNOWLEDGE_TITLE, KeptMessage, KindDef, LEVEL_LABELS, LibrarySnapshot, LiveKindDef, MIN_QUOTE_CHARS, NARRATIVE_SECTIONS, NARRATIVE_TITLES, type NewThemeRequest, Nomination, NominationsFile, NormalizeOptions, NormalizeResult, PROGRESS_TITLE, PROGRESS_WARN_MAX, PROGRESS_WARN_MIN, PROJECT_KNOWLEDGE_HINT, PROMPT_CATALOG, PROMPT_GROUPS, PROMPT_OVERRIDES_VERSION, PROMPT_SPECS, PROTOCOL_SECTION_ORDER, PROTOCOL_TEXT, ParsedCover, ParsedJudge, PatchReload, PendingTag, ProjectFrontmatter, ProjectRecord, ProjectScore, PromptCatalogEntry, PromptCheck, PromptGroup, PromptGroupInfo, PromptOverrides, PromptSpec, PromptZone, READING_WORKSPACE_DIR, ReadDecision, ReadSnapshot, ReadingAnchor, ReadingAskRequest, ReadingAskResult, ReadingBinding, ReadingState, RebuildResult, RecallOutcome, SCORE_FILE_VERSION, SCORE_INDEX_RANGE, SCORE_PICK_PRINCIPLE, SCORE_POOL_HEADER, SCORE_QUOTE_RULE, SCORE_USER_TASK, SECTION_SPEC_CLOSING, SECTION_SPEC_HEAD, SELECTABLE_ENTRY_KINDS, SLUG_RE, SNAPSHOT_CLOSING, SPEC_BLOCK_FENCE, SPEC_SECTION, SPEC_TITLE, SavePromptResult, ScanOptions, ScoreEvent, ScoreFile, ScoreReadOpts, ScoreRunRecord, ScoreTurnResult, ScoredCandidateLog, ScoredEntry, SearchHit, SectionGroup, type SectionOpResult, SettingsReadResult, SettingsWriteResult, SyncDeps, SyncTurn, TARGET_PROJECT_LINE, TARGET_THEME_LINE, TEMPLATE_ID_RE, TEMPLATE_VERSION, THEME_COVERS_HINT, THEME_CREATION_VALUES, THEME_KNOWLEDGE_HINT, TITLE_MAX_CHARS, TITLE_MIN_CHARS, TOKEN_COEF, TPL_GUIDANCE_FOOT, TPL_GUIDANCE_HEAD, TPL_GUIDANCE_NO_TRUNC, TPL_GUIDANCE_ROW, TPL_GUIDANCE_TRUNC_MARK, TagAutoState, TagVocabulary, Template, TemplateAction, TemplateSection, TemplateToolDecision, TemplateToolRequest, ThemeFrontmatter, TopScoredOpts, Turn, UUID_SCAN, WindowSnapshot, WriteBackItem, WriteBackResult, activeInjectionsUsed, activeSnapshot, activeState, addNomination, aggregate, aliasIndex, allCandidates, appendBinding, appendChatTurn, appendDocRead, appendReadSnapshot, appendScoreLog, apply, applyAdds, applyMerges, applySectionOp, approveNomination, archiveEntry, archiveProject, askAboutSelection, assembleContext, attachReadingSync, backupDir, backupNarrativePath, bindingsForEntry, bodySize, budgetTokensFor, buildChatScoreSystem, buildChatScoreUser, buildHotInjection, buildSkeleton, buildSystemPrompt, buildUserPrompt, builtinKindDefs, byUpdatedDesc, callJev, candidatesForScope, catalogOf, charCount, checkAdoptShape, checkAndRepair, checkEntryShape, checkIndex, checkKnowledgeShape, checkNoDshVariables, checkQuote, clearPluginSpawnedForTest, clearPromptHistory, collectHotItems, confirmMessage, consumeSnapshots, countChatTurns, coverFromYaml, createChatEntry, createReadingSession, currentKindDefsOf, currentKindsOf, currentReservedKinds, cutKnowledgeSection, cutSpecSection, decideAutoScore, decideInjection, decideRead, decideTagAuto, decideTemplateTool, defaultEntrySetting, defaultTemplate, defaultTemplatePath, deleteEntry, deleteEntryFile, deleteKindBlockReason, deleteProject, deleteProjectDoc, deleteTemplate, deleteTheme, deleteThemeDoc, deltaFor, deltaTextOf, descHashOf, detectProjectByDocReads, detectProjectBySessionLog, docReadLogPath, docReadsDir, docSectionsOf, editDistance, editEntryThemes, effectiveChannel, effectiveConfig, effectiveScope, effectiveScore, emptyOverrides, emptyScoreFile, emptyTagAutoState, emptyVocabulary, enIndexPath, ensureDefaultTemplateFile, ensureLibraryDirs, entriesDir, entryFileName, entryKindWhen, entryRelPath, estimateCandidateTokens, estimatePoolOutputTokens, estimatePoolTokens, estimateTokens, extractJson, extractSection, extractSpecBlock, extractSpecBlockLines, extractSpecSection, extractTitle, extractTurn, extractUserSubmit, fillKindMarkers, fillSlots, filterByContext, filterContextByTerms, findAliasConflicts, findBinding, findBindingBySession, findDocRead, findEmptySections, findSectionRange, findSimilarIds, fingerprintsFromInjectionEvents, fingerprintsInText, fixCoverBlock, fixExternalRef, gateHandoffArgs, getSessionBinding, globalDocPath, groupBySourceProject, groupOrder, groupSections, handleApi, hasOverride, hashText, hotDir, hotEntriesPath, hotPersonaPath, hotSelectionPath, hotSessionsPath, hotState, idsInWindow, inWindow, inject, injectTotalsOf, insertSpecBlocks, installDocContext, isAbsolutePath, isChatCover, isCompleteContext, isEntryKind, isHistoryCover, isKnowledgeHeading, isMtModel, isPluginSpawned, isSectionShape, isSimilarId, isThoughtEnd, kindCatalogText, kindsFilePath, kindsInline, lastBudgetDiagnostic, lastChatDiagnostic, lastInjectionOf, lastRunTurn, leakedHan, legacyTemplatePath, libraryRoot, listPromptHistory, listTemplates, loadBindings, loadCursors, loadDefaultTemplate, loadEnIndex, loadEntryDoc, loadEntrySettings, loadKinds, loadPersona, loadProjectDoc, loadPromptOverrides, loadReadingState, loadScoreFile, loadSelections, loadSessionsFile, loadTagAutoState, loadTemplate, loadThemeFrontmatter, loadVocabulary, locateTemplateBody, makeAnchor, markAnchor, markNormalized, markPluginSpawned, maybeAutoNormalize, maybeAutoScore, measureSections, mergeNarrative, moveEntry, name, narrativeFromProjectText, newPersonaId, nominationsPath, normalizeNarrative, normalizeQuery, normalizeTags, normalizeTemplate, noteKnowledgeWritten, overriddenKeys, overrideUpdatedAt, pairingError, parseChatScore, parseCovers, parseGetHandoffFromEvents, parseHandoffFromEvents, parseJudgeOutput, parseKindsDoc, parseLevel, parseSections, parseStepRequest, parseTemplateDoc, patchPathFrom, pendingSnapshots, personaFingerprint, pickCandidates, planInjection, planSteps, pluginRoot, preview, previewForSession, probeCoverState, profileDirFrom, projectDocPath, projectIdFromFile, projectsDir, promptCurrent, promptDefault, promptHistoryDir, promptOverridesPath, promptText, promptsDir, protocolText, pruneEvents, pruneSessions, quoteAppearsIn, rawKindFromYaml, readContextUsage, readContextUsageWithWindow, readDocReads, readLogPath, readNominations, readProjectScore, readPromptHistory, readScoreLog, readSettings, readSnapshots, readTurnContent, readUnconsumedSnapshots, readingAskDeps, readingBindingsPath, readingCursorsPath, readingDir, readingStatePath, readsDir, reasoningTextOf, rebuildDerivedLayers, rebuildEnIndex, rebuildWindowFromSessionLog, recall, recallLogDir, recallLogPath, recordRead, refreshPromptCache, refreshPromptCacheSync, registerActiveInjection, registerAutoScore, registerContextReport, registerDocContext, registerEnIndex, registerGate, registerHotInjection, registerPromptDefault, registerReadingSync, registerTagAutoNormalize, registeredPromptKeys, rejectNomination, relocateAnchor, removeNomination, renameProject, renameTheme, renderActiveInjection, renderAskPrompt, renderChatEntryBody, renderChatTurn, renderContextUsage, renderCover, renderDocContext, renderFrontmatter, renderHotText, renderJudgeRules, renderKindsDoc, renderManifest, renderMetaLine, renderOutputSpec, renderOutputText, renderParametersText, renderProjectHandoff, renderSectionSpecs, renderSnapshotList, renderSpecBlockLines, renderSpecBlocksSkeleton, renderTemplateDoc, renderThemeHandoff, renderYamlArray, replaceBlockAtLines, reportContextUsage, requiredDirs, resetActiveState, resetHotState, resetPromptCache, resetPromptOverride, resolveContextWindow, resolveInsideLibrary, resolveJevKey, resolveMerges, resolveProject, resolveRef, resolveTag, restorePromptHistory, runHandoff, safeName, saveCursor, saveEnIndex, saveEntrySettings, saveKinds, savePersona, savePromptOverride, savePromptOverrides, saveReadingPosition, saveScoreFile, saveSelections, saveSessionsFile, saveTagAutoState, saveTemplate, saveVocabulary, scanLibrary, scoreCover, scoreFilePath, scoreLogDir, scoreLogPath, scoreTurn, scoreViaChat, scoredEntryIds, sectionSpecsOf, sectionTitles, sectionsFromNarrative, seedVocabulary, selectableKindList, selfCheckHandoffResult, setCurrentKindDefs, setEntryFields, setEntryGlobal, setProjectDesc, setProjectFields, setPromptCacheForTest, setSectionSpec, setSectionSpecBlock, setSessionBinding, setThemeDesc, setThemeFields, settingOf, slotNames, snapshotWindow, sortHits, specBlockFenceInfo, specBlockRange, specOf, splitFrontmatter, splitRoute, splitTurns, startNormalizeSubagent, startScoreSubagent, stripAllSpecBlocks, stripAnchorMarks, stripCovers, stripSpecBlock, syncEntryFrontmatter, syncSession, tagAutoStatePath, tagVocabularyPath, tagsDir, templateDeclaresArchiving, templatePath, templateSectionNames, templateWarnings, templatesDir, textOfContent, themeDocPath, themesDir, toStringArray, topScored, touchSession, triggerEnIndexRebuild, unarchiveEntry, unarchiveProject, unescapeFromTemplate, updateEntry, updateProjectScore, validateAllCovers, validateCoverShape, validateKinds, validatePrompt, validateTemplate, withScoreLock, writeBackState, writeBackToSource, writeEntryDoc, writeGlobalDoc, writeNominations, writeProjectDoc, writeSetting, writeThemeDoc, yamlScalar };

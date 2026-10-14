@@ -62,6 +62,9 @@ import { registerAutoScore } from './score-auto.ts'
 import { registerContextReport } from './context-auto.ts'
 // ⭐⭐⭐ 「文档内提问」的轮末同步（2026-10-14）——把阅读会话的问答追加进 chat 条目。
 import { registerReadingSync } from './reading-sync.ts'
+// ⭐⭐⭐ 「文档内提问」的入口（2026-10-14）与上下文注入。
+import { readingAskDeps, type AskDeps } from './reading-ask.ts'
+import { installDocContext, registerDocContext } from './reading-context.ts'
 // ⭐⭐ 英文召回索引（设计文档 §9；B 方案：召回只读它）
 import { registerEnIndex } from './en-index.ts'
 // ⭐⭐ 主动注入（设计文档 §5/§7）：触发 + 注入两个钩子。
@@ -224,6 +227,17 @@ function diag(stage: string, config: MemjConfig): void {
 export function apply(ctx: Context, config: MemjConfig = DEFAULT_CONFIG): void {
   const version = pluginVersion()
   diag(`apply-start v${version} root=${libraryRoot()}`, config)
+
+  // ⭐⭐⭐ 「文档内提问」的两个跨作用域句柄（2026-10-14）。
+  //
+  //  · `readingAsk` —— `/reading/ask` 的依赖（要开真会话 ⇒ 必须在这里装配）。
+  //    ⚠️ 它定义在 `ctx.inject([...])` 回调里，而 `apiHandler` 在**外层**要用 ⇒
+  //       用闭包变量传递（装配失败时保持 `undefined`，那条路由回 500，其余不受影响）。
+  //  · `docContextRefresh` —— 刷新 `context()` 的同步缓存。
+  //    🔴 **建完绑定后必须调它**：否则同一会话的下一轮注入会查不到刚建的绑定
+  //       ⇒ 文档上下文静默丢失（`text()` 查 Map 查不到 ⇒ 返回空串 ⇒ 不注入）。
+  let readingAsk: AskDeps | undefined
+  let docContextRefresh: (() => Promise<void>) | undefined
 
   // 库目录在启动时就建好——首次使用时不必再判存在性。
   void ensureLibraryDirs().catch(() => {})
@@ -399,7 +413,35 @@ export function apply(ctx: Context, config: MemjConfig = DEFAULT_CONFIG): void {
       diag(`reading-sync-THREW ${err instanceof Error ? err.message : String(err)}`, config)
     }
 
-    // ── 3i. ⭐⭐⭐ 轮末上报上下文占用率（决策 226；2026-10-12 用户裁定）──
+    // ── 3i. ⭐⭐⭐ 「文档内提问」的入口与上下文注入（2026-10-14）──
+    //    两件事：① 给 `/reading/ask` 装配依赖（要开真会话）；
+    //          ② 注册 `context()` 把「被提问条目的全文」注入那个会话。
+    //    ⚠️ ② 的 `text()` **必须按 sessionId 过滤**（`context()` 是全局注册的，
+    //       不过滤会让所有会话都被塞进同一条文档）⇒ `installDocContext`
+    //       自管同步缓存（bindings + 条目正文预热进内存 Map）。
+    try {
+      // ⚠️ 分两步（顺序有依赖）：
+      //   ① `installDocContext()` 只建**同步缓存**并返回 `refresh`（它不自己注册）；
+      //   ② 用**同一个 `scoped`** 注册 `context()` ——
+      //      🔴 不能在里面再 `ctx.inject([...])`：回调里拿到的 `scoped`
+      //         没有 `.inject` 方法（`probe-host.mjs` 抓到过
+      //         `ctx.inject is not a function`）⇒ 直接 `scoped.systemPrompt.context(...)`。
+      const doc = installDocContext()
+      docContextRefresh = doc.refresh
+      registerDocContext(scoped, {
+        docOf: (id) => doc.index.get(id),
+        entryBody: (id) => doc.bodies.get(id),
+        entryTitle: (id) => doc.titles.get(id),
+      })
+      readingAsk = readingAskDeps(scoped as unknown as Context, () => {
+        if (docContextRefresh !== undefined) void docContextRefresh()
+      })
+      diag('reading-ask-registered', config)
+    } catch (err) {
+      diag(`reading-ask-THREW ${err instanceof Error ? err.message : String(err)}`, config)
+    }
+
+    // ── 3j. ⭐⭐⭐ 轮末上报上下文占用率（决策 226；2026-10-12 用户裁定）──
     //     ⭐ **它把"占用率"这个事实交给模型** ⇒ 「到 60% 就异步沉淀」这类规则
     //        从此**可以写在提示词里**（此前做不到：模型拿不到那个数）。
     //     🔴 **只用 `agent.inject()`**（不唤醒、不额外烧一轮）；
@@ -467,6 +509,13 @@ export function apply(ctx: Context, config: MemjConfig = DEFAULT_CONFIG): void {
             //     （`ctx.get('sessionQuery')`）。⚠️ 只传一个**取值函数**，
             //     不把整个 `ctx` 漏进 API 层（那条边界见 `ApiDeps.getService` 的注释）。
             getService: (n: string) => ctx.get(n as never),
+            // ⭐⭐⭐ 「文档内提问」（2026-10-14）：`/reading/ask` 要**开真实会话**，
+            //    而那需要 `workspaceRegistry` / `agents` / `agentPresets` /
+            //     `agentDefaultModel` 四样服务 ⇒ 只能在有 `ctx` 的地方装配好塞进来。
+            //    ⚠️ 装配失败**不影响其他路由**（`handleApi` 里 `readingAsk === undefined`
+            //       时只让 `/reading/ask` 回 500）。
+            //    ⚠️ 条件展开：`exactOptionalPropertyTypes` 下不能显式传 undefined。
+            ...(readingAsk !== undefined ? { readingAsk } : {}),
           },
           method,
           url.pathname,
@@ -589,6 +638,14 @@ export function apply(ctx: Context, config: MemjConfig = DEFAULT_CONFIG): void {
       //      （`test-web-api` 的"路由注册一致性"会当场抓到）。
       `${API_BASE}/kind/upsert`,
       `${API_BASE}/kind/delete`,
+      // ⭐⭐⭐「文档内提问」（2026-10-14）——**同一个坑第四次**：
+      //    我加了 `api.ts` 的分支却漏了这里 ⇒ `test-web-api` 当场抓住
+      //    （"未注册：/reading/ask —— 会落 SPA 兜底、返回 HTML 而不是 JSON"）。
+      //    🔴 **它比前几次更毒**：前端拿不到 JSON 会报"提问失败"，
+      //       而服务端其实**已经建好了会话和 chat 条目**（分支执行了、只是响应丢了）
+      //       ⇒ 用户会重复点，每点一次就多开一个会话。
+      //    ⭐ 这条断言**每次都跑** ⇒ "两份清单"不会静默漂开。
+      `${API_BASE}/reading/ask`,
       // ⚠️ 探针路由**不在这里**注册——它有自己的 handler，见下面单独的
       //    `webServer.register`。🔴 我第一版**两处都注册了** ⇒
       //    `duplicate exact route` ⇒ **整个插件 apply 抛错、实例起不来**
@@ -658,6 +715,11 @@ export * from './reading.ts'
 //    ⚠️ 它被 `index.ts` 的 `apply()` 静态 import（挂 session/event 监听）
 //    ⇒ 同上，必须与 `reading.ts` 同批导出。
 export * from './reading-sync.ts'
+// ⭐⭐⭐ 「文档内提问」的**入口与上下文注入**（2026-10-14，第 4 期）。
+//    ⚠️ 它被 `api.ts` 静态 import（`/reading/ask`）与 `apply()` 静态 import
+//    ⇒ 同上必须导出（测试脚本也直接从 `lib/index.js` 取这几个函数）。
+export * from './reading-ask.ts'
+export * from './reading-context.ts'
 // ⭐⭐⭐ 决策 204/205：交接文档模板（存储 + 校验）与工具决策（两段式确认）。
 export * from './templates.ts'
 export * from './template-tool.ts'
