@@ -302,6 +302,105 @@ export async function countChatTurns(chatEntryId: string): Promise<number> {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
+// 可讨论的块（`/reading/blocks` —— 段落标记的数据源）
+// ══════════════════════════════════════════════════════════════════════════
+
+/** 一个「可讨论的块」：内容哈希 + 供前端匹配 DOM 的纯文本。 */
+export interface ReadingBlock {
+  /** 内容哈希（锚点主键）。 */
+  blockId: string
+  /**
+   * ⭐ **去掉 markdown 行内标记后的纯文本** —— 前端拿它与 DOM 的
+   * `textContent` 比对（浏览器渲染后 `**` 就没了）。
+   */
+  plain: string
+  /** 该块在正文里的序号（0 起）。 */
+  index: number
+}
+
+/**
+ * ⭐⭐ **从 markdown 正文抽出「可讨论的块」**（`/reading/blocks` 的数据源）。
+ *
+ * 🔴🔴 **为什么这件事必须由服务端做**（真机探针抓到的设计缺陷）：
+ *    前端只有**渲染后**的 DOM，`textContent` 里 `**粗体**` 的星号已经没了
+ *    ⇒ 它按 `textContent` 算哈希，与后端按 **markdown 原文**算的**永远对不上**
+ *    ⇒ 段落标记永远不显示，而且**不报任何错**。
+ *    ⭐ 实测：`三科均满分 100、**70 分（含）以上合格**，闭卷机考。` 两边算出
+ *      `1mpx8by`（原文）vs `191ccmm`（渲染后）—— 差的就是那两个 `**`。
+ *
+ * ⇒ ⭐ **判据：内容哈希必须由「拥有原文的那一侧」算**。
+ *    前端拿到这份清单后，按 `plain` 去 DOM 里找对应元素（见
+ *    `app.js` 的 `markReadingBlocks`），**自己不哈希**。
+ *
+ * ⚠️ **粒度**：按**空行切段**（与 `marked` 的块级输出大体一致）；
+ *    段内若全是列表行，则**每行一块**（浏览器里那是多个 `<li>`）。
+ * @param body - markdown 正文。
+ * @returns 块清单（保持正文顺序）。
+ */
+export function extractReadingBlocks(body: string): ReadingBlock[] {
+  const out: ReadingBlock[] = []
+  const paras = body.split(/\n{2,}/)
+  let index = 0
+  for (const para of paras) {
+    const trimmed = para.trim()
+    if (trimmed === '') continue
+    // ⚠️ 代码围栏整块跳过（那是示例，不是可讨论的正文）——
+    //    与前端 `markReadingBlocks` 里 `closest('pre')` 的排除对齐。
+    if (trimmed.startsWith('```')) continue
+    const lines = trimmed.split('\n')
+    const isList = lines.length > 1 && lines.every((l) => /^\s*(?:[-*+]|\d+\.)\s+/.test(l))
+    const chunks = isList ? lines : [trimmed]
+    for (const c of chunks) {
+      // ⚠️ 表格行（`| a | b |`）也当一块：浏览器里是 `<tr>`/`<td>`。
+      const plain = stripInlineMarkdown(c)
+      if (plain === '') continue
+      // 🔴🔴 **`blockId` 必须用【原文】算，不能用 `plain`** ——
+      //    锚点的写入侧（`makeAnchor(blockText, …)`，`blockText` 是 markdown 原文）
+      //    用的就是原文哈希 ⇒ 这里若用剥掉 `**` 的 `plain` 算，两边又对不上
+      //    （实测：原文 `1mpx8by` vs 剥标记 `191ccmm`），段落标记照样不显示。
+      //    ⭐ **`plain` 只服务一件事：给前端匹配 DOM**（浏览器里没有 `**`）。
+      //    两个字段各司其职，别拿错。
+      out.push({ blockId: hashText(c), plain, index })
+      index += 1
+    }
+  }
+  return out
+}
+
+/**
+ * ⭐ **去掉 markdown 行内标记**（粗体/斜体/行内代码/链接/列表前缀）。
+ *
+ * ⚠️ **只处理"影响 `textContent`"的那几种** —— 多剥一种就多一处
+ *    与浏览器实际行为的漂移风险，而漂移的后果是**静默的**（标记不显示）。
+ *
+ * 🔴 **必须与 `hashText` 的规范化口径一致**：`hashText` 内部会
+ *    `trim + 压缩连续空白`，所以本函数返回值里保留的空白形态**不影响哈希**；
+ *    但**前端拿 `plain` 与 `textContent` 比对时是字面比较**
+ *    ⇒ 这里两端必须 trim（否则"看起来一样"的两串不相等）。
+ * @param s - 一段 markdown 文本。
+ * @returns 纯文本（**与浏览器 `textContent` 对齐**）。
+ */
+export function stripInlineMarkdown(s: string): string {
+  let t = s.trim()
+  // 块级前缀（标题 / 列表 / 引用）
+  t = t.replace(/^#{1,6}\s+/, '')
+  t = t.replace(/^(?:[-*+]|\d+\.)\s+/, '')
+  t = t.replace(/^>\s*/, '')
+  // 行内代码
+  t = t.replace(/`([^`]*)`/g, '$1')
+  // 粗体 / 斜体（先长后短，否则 `***x***` 会被拆错）
+  t = t.replace(/\*\*\*([^*]+)\*\*\*/g, '$1')
+  t = t.replace(/\*\*([^*]+)\*\*/g, '$1')
+  t = t.replace(/__([^_]+)__/g, '$1')
+  // ⚠️ 单个 `*x*` 放最后：前面两步已把 `**`/`***` 处理掉，
+  //    这里只管剩下的单星号（用非贪婪 + 前后不留星号避免误吞）。
+  t = t.replace(/\*([^*]+)\*/g, '$1')
+  // 链接 [文本](地址) ⇒ 文本
+  t = t.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+  return t.trim()
+}
+
+// ══════════════════════════════════════════════════════════════════════════
 // cursors（增量游标）
 // ══════════════════════════════════════════════════════════════════════════
 
@@ -454,7 +553,15 @@ export async function createChatEntry(
 
   const id = randomUUID()
   const nowIso = new Date().toISOString()
-  const title = `《${sourceTitle}》问答`.slice(0, 48)
+  /**
+   * ⭐⭐ **标题必须带段落摘录** —— 真机验收时发现的可用性缺陷：
+   *    写死成 `《标题》问答` 的话，同一篇知识的**每一条**问答条目
+   *    标题**完全一样**（实测列表里连着 5 条一模一样，只有时间不同）
+   *    ⇒ 用户**分不清哪条是哪段** ⇒ 那个列表就没法用。
+   *    ⚠️ 上限 48 字符（`Cover.title` 的硬校验）⇒ 先给书名留位置再截段落。
+   */
+  const snippet = stripInlineMarkdown(anchor.exact).slice(0, 16)
+  const title = (snippet === '' ? `《${sourceTitle}》问答` : `《${sourceTitle}》· ${snippet}…`).slice(0, 48)
   const cover: Cover = {
     id,
     project,
@@ -464,8 +571,13 @@ export async function createChatEntry(
     tags: ['reading-chat'],
     title,
     // ⭐ desc 是**检索键**；chat 不参与检索，但它仍会出现在列表里
-    //    ⇒ 写清楚"这是什么 + 该去哪儿看"，别让人以为是普通知识。
-    desc: `阅读《${sourceTitle}》时就某段落的问答记录（随会话追加）；原文见正文，会话见 frontmatter source.sessionId。`.slice(0, 200),
+    //    ⇒ 写清楚"这是什么 + **哪一段** + 该去哪儿看"。
+    //    ⚠️ **带上段落摘录**（同 `title` 的理由：同篇知识的多个问答要能分清）。
+    desc: (
+      snippet === ''
+        ? `阅读《${sourceTitle}》时就某段落的问答记录（随会话追加）。`
+        : `阅读《${sourceTitle}》时就「${snippet}…」一段的问答记录（随会话追加）。`
+    ).slice(0, 200),
     ref: entryRelPath(`chat-${anchor.blockId}`, id),
     ext: false,
     createdAt: nowIso,

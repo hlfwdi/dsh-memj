@@ -653,6 +653,16 @@ export function apply(ctx: Context, config: MemjConfig = DEFAULT_CONFIG): void {
       //       ⇒ 用户会重复点，每点一次就多开一个会话。
       //    ⭐ 这条断言**每次都跑** ⇒ "两份清单"不会静默漂开。
       `${API_BASE}/reading/ask`,
+      // ⭐⭐「文档内提问」第 6 期：阅读页画**段落标记**的数据源（一次回全部绑定）。
+      //    🔴 **同一个坑的第五次**：漏注册 ⇒ 段落标记全部不显示
+      //      （前端拿到 HTML ⇒ JSON.parse 失败 ⇒ 静默无标记），而服务端毫无异常。
+      `${API_BASE}/reading/bindings`,
+      // ⭐⭐「文档内提问」第 6 期：**服务端算好的块清单**（含 blockId + 纯文本）。
+      //    🔴 **它存在的唯一理由**：前端只有渲染后的 DOM（`**` 已被吃掉）⇒
+      //      自己算哈希与后端对不上 ⇒ 段落标记永远不显示（库内实测：
+      //      原文 `1mpx8by` vs 渲染后 `191ccmm`）。
+      //    ⚠️ 同样是"两份清单"的坑：漏注册 ⇒ 块清单拿不到 ⇒ **标记与工具条全废**。
+      `${API_BASE}/reading/blocks`,
       // ⚠️ 探针路由**不在这里**注册——它有自己的 handler，见下面单独的
       //    `webServer.register`。🔴 我第一版**两处都注册了** ⇒
       //    `duplicate exact route` ⇒ **整个插件 apply 抛错、实例起不来**

@@ -1350,6 +1350,130 @@ footer {
 .toast.show { opacity: 1; }
 .toast.error, .toast.err { background: var(--danger); }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+ * ⭐⭐⭐ 「文档内提问」的样式（2026-10-14，第 6 期）
+ *
+ * 三块：被讨论段落的标记（`.reading-mark`）、选中工具条（`.reading-ask-bar`）、
+ * 以及正文之前的会话清单（`.reading-thread-list`）。
+ * ⚠️ 全部用既有 CSS 变量（`--fg` / `--hover` / `--border` / `--accent`…）
+ *    —— 这样明暗两套主题自动跟随，不需要额外写 `@media (prefers-color-scheme)`。
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/* 被讨论过的段落：左侧一条竖线，hover 时更明显。 */
+.reading-discussed {
+  border-left: 3px solid var(--accent, #3b82f6);
+  padding-left: 8px;
+  margin-left: -11px;   /* 抵消 padding，让正文左缘看起来没动 */
+  position: relative;
+}
+
+.reading-mark {
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  /* ⚠️ 不能 `position:absolute` 到行外 —— 那会压住正文（本项目有前车之鉴：
+   *    `.toc-btn` 的注释详述了"按钮压住正文"的两次返工）。 */
+  margin-left: 6px;
+  padding: 1px 3px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  opacity: .75;
+  vertical-align: baseline;
+}
+
+.reading-mark:hover {
+  background: var(--hover);
+  opacity: 1;
+}
+
+/* 选中工具条（「就此提问」）：fixed 定位 + 视口坐标（窄屏宽屏同一套）。 */
+.reading-ask-bar {
+  position: fixed;
+  z-index: 60;              /* ⚠️ 必须高于 `.toast`(50)，否则会被提示盖住 */
+  background: #111827;
+  color: #fff;
+  border-radius: 8px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .28);
+  padding: 2px;
+}
+
+.reading-ask-bar.hidden { display: none; }
+
+.reading-ask-btn {
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.reading-ask-btn:hover { background: rgba(255, 255, 255, .14); }
+.reading-ask-btn:disabled { opacity: .6; cursor: default; }
+
+/* 正文之前的「本篇有 N 处段落讨论」清单。 */
+.reading-thread-list {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin: 10px 0;
+  background: var(--hover);
+}
+
+.reading-thread-head {
+  font-size: 12.5px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.reading-thread-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  padding: 5px 6px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.reading-thread-item:hover { background: var(--border); }
+
+.reading-thread-exact {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* chat 条目详情页的「去会话」行。 */
+.reading-goto-row {
+  margin-top: 8px;
+}
+
+.reading-goto-btn {
+  font: inherit;
+  font-size: 12.5px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel, transparent);
+  color: inherit;
+  cursor: pointer;
+}
+
+.reading-goto-btn:hover { background: var(--hover); }
+
 /* ── 窄屏退化：两栏改上下堆叠（§12-75 的【我默认】）────────────────── */
 
 @media (max-width: 900px) {

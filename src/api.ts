@@ -50,6 +50,8 @@ import { templatesDir } from './paths.ts'
 //       拆出带哈希的 chunk，而"动态 import 的哈希 chunk"正是让运行中的实例
 //       API 全部 500 的已知坑（memj 库条目 `c9bcc110`）。
 import { askAboutSelection, type AskDeps } from './reading-ask.ts'
+// ⭐ 段落 ⇄ 会话绑定（阅读页画段落标记的数据源）+ 服务端算好的块清单。
+import { bindingsForEntry, extractReadingBlocks } from './reading.ts'
 import { fileExistsStat, readTextIfExists } from './files.ts'
 import {
   fixCoverBlock,
@@ -3673,6 +3675,59 @@ export async function handleApi(
           reused: r.reused,
         },
       }
+    }
+
+    // ── GET /reading/bindings：某条目下已讨论过的段落（2026-10-14 第 6 期）──
+    //    ⭐ 阅读页靠它画**段落标记**：哪些段落已经有会话、点它能跳到哪条 chat 条目。
+    //    🔴 **一次回全部**（不是逐段查）—— 页面渲染时要对每个块判"有没有标记"，
+    //       逐段请求会打出几十个 HTTP。
+    if (route === '/reading/bindings') {
+      if (method !== 'GET') return { status: 405, body: { ok: false, error: '该接口只接受 GET' } }
+      const entryId = params.get('entryId') ?? ''
+      if (entryId === '') return { status: 400, body: { ok: false, error: '缺少 entryId' } }
+      const all = await bindingsForEntry(entryId)
+      // ⭐ **回结构化条目**（本项目铁律：能给人看的列表必须由服务端回结构化条目，
+      //    不要让前端拿 id 再去拼 —— 那样判据会有第二份实现）。
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          entryId,
+          bindings: all.map((b) => ({
+            blockId: b.anchor.blockId,
+            exact: b.anchor.exact,
+            chatEntryId: b.chatEntryId,
+            sessionId: b.sessionId,
+            createdAt: b.createdAt,
+          })),
+        },
+      }
+    }
+
+    // ── GET /reading/blocks：**服务端算好的块 id**（2026-10-14 第 6 期）──
+    //
+    // 🔴🔴 **为什么必须有这个接口**（真机探针抓到的设计缺陷）：
+    //    前端要从 DOM 反推块 id 才能画段落标记，而 DOM 里的文本是**渲染后**的
+    //    （markdown 的 `**粗体**` 已经变成了 `<strong>`，`textContent` 里**没有 `**`**）
+    //    ⇒ 前端按 `textContent` 算哈希，与后端按 **markdown 原文**算的**永远对不上**
+    //    ⇒ 段落标记永远不显示（而**不报任何错**）。
+    //    ⭐ 实例：`三科均满分 100、**70 分（含）以上合格**` 两边算出
+    //      `1mpx8by` vs `191ccmm` —— 差的就是那两个 `**`。
+    //
+    //    ⇒ ⭐ **判据：内容哈希必须由【拥有原文的那一侧】算** ——
+    //      前端没有原文（只有渲染结果），就不该自己算。
+    //      前端拿到这份清单后**按渲染后的文本匹配 DOM**（见 `markReadingBlocks`）。
+    if (route === '/reading/blocks') {
+      if (method !== 'GET') return { status: 405, body: { ok: false, error: '该接口只接受 GET' } }
+      const entryId = params.get('entryId') ?? ''
+      if (entryId === '') return { status: 400, body: { ok: false, error: '缺少 entryId' } }
+      const snap = await scanLibrary({ includeArchived: true, includeHistory: true })
+      const found = snap.covers.find((c) => c.cover.id === entryId)
+      if (found === undefined) return { status: 404, body: { ok: false, error: '库里没有这张封面' } }
+      const doc = await loadEntryDoc(found.cover.ref, found.cover.ext)
+      if (doc === undefined) return { status: 200, body: { ok: true, entryId, blocks: [] } }
+      const blocks = extractReadingBlocks(doc.body)
+      return { status: 200, body: { ok: true, entryId, blocks } }
     }
 
     return { status: 404, body: { ok: false, error: `未知的 API 路径：${route}` } }

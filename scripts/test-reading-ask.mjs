@@ -370,5 +370,39 @@ console.log('\n【8】🔴 注入消息的 source.kind 必须是【产出者标�
     "⭐⭐ reading-ask.ts 用了正确取值 kind:'plugin:dsh-memj'")
 }
 
+console.log('\n【9】🔴 块 id 必须由【服务端】算（前端不得自己哈希）')
+// ══════════════════════════════════════════════════════════════════════════
+{
+  // 🔴🔴 **这条守的是一个真机探针抓到的设计缺陷**：
+  //    前端要从 DOM 反推块 id，而 DOM 里 `**粗体**` 的星号**已被浏览器吃掉**
+  //    ⇒ 前端按 `textContent` 算哈希，与后端按 **markdown 原文**算的**永远对不上**
+  //    ⇒ 段落标记永远不显示，且**不报任何错**。
+  //    ⭐ 实测同一个块：原文 `1mpx8by` vs 渲染后 `191ccmm`。
+  //    ⇒ ⭐ **判据：内容哈希必须由「拥有原文的那一侧」算** ——
+  //      所以块清单由 `/reading/blocks` 给（含 `plain`），前端只做文本匹配。
+  //
+  //    ⚠️ 反证：`app.js` 里若出现**调用** `readingHashText`（不带 Unused 后缀）
+  //       就说明有人又把它接回调用链了 ⇒ 报红。
+  const { readFileSync } = await import('node:fs')
+  const { join: j } = await import('node:path')
+  const appSrc = readFileSync(j(process.cwd(), 'src', 'web', 'app.js'), 'utf8')
+  const code = appSrc.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+  // ⭐ 只允许那个"留作说明"的 `function readingHashTextUnused(`，不允许多余调用。
+  check(!/\breadingHashText\s*\(/.test(code),
+    '⭐⭐ app.js 里没有调用 readingHashText（前端不该自己算块哈希）')
+  check(/function readingHashTextUnused\s*\(/.test(code),
+    '　⇒ 且那份"为什么不能用"的说明还在（不是被删掉了）')
+  // ⭐ 正面断言：块 id 从 DOM 属性取（服务端写上的那个）。
+  check(code.includes('block.dataset.blockId'),
+    "⭐⭐ 锚点的 blockId 取自 DOM 的 data-block-id（服务端算好写上的）")
+  // ⭐ 后端侧：blocks 接口必须回 plain（前端匹配 DOM 要用）。
+  const readSrc = readFileSync(j(process.cwd(), 'src', 'reading.ts'), 'utf8')
+  check(readSrc.includes('export function extractReadingBlocks'),
+    '　⇒ 服务端有 extractReadingBlocks（块清单的产出方）')
+  // ⚠️ 判据要**宽松但方向明确**：只要源码里出现 `hashText(c)` 就说明用的是原文变量。
+  check(readSrc.includes('hashText(c)'),
+    '⭐⭐ blockId 用【原文】(c) 算，不是用剥了标记的 plain')
+}
+
 console.log(`\n═══ 文档内提问·入口与注入：${pass} 通过 / ${fail} 失败 ═══`)
 process.exit(fail === 0 ? 0 : 1)
