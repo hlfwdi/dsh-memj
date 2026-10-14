@@ -482,6 +482,23 @@ export interface Cover {
    * @see updatedAt
    */
   archivedAt: string
+  /**
+   * ⭐⭐ **溯源**（2026-10-14 起 `Cover` 也有它 —— 不再只是 `EntryFrontmatter` 的字段）。
+   *
+   * 🔴 **为什么必须加到 `Cover` 上**：前端「去会话」按钮的数据来自**封面侧**
+   *    （`api.ts` 那两个接口都只扫封面、**不读正文 frontmatter**——那是为了不读文件）
+   *    ⇒ 若只有 `EntryFrontmatter.source`，按钮永远拿不到 sessionId。
+   *
+   * ⚠️ **加字段必须同时改三处**：本类型 / `coverFromYaml`（解析）/
+   *    `renderCover`（渲染）。漏了**不报错、只是运行时变 undefined**
+   *    —— 本项目在这个坑上栽过（见 `EntryFrontmatter` 里 `archivedAt` 那段注释）。
+   *
+   * ⭐ **只记会话 id 与出处**，不记绝对路径（§2.5）。
+   */
+  source?: {
+    sessionId?: string
+    from?: string
+  }
 }
 
 /**

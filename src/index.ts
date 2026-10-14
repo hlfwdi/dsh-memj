@@ -633,6 +633,10 @@ export * from './schema.ts'
 export * from './kinds.ts'
 export * from './search.ts'
 export * from './store.ts'
+// ⭐⭐⭐ 「文档内提问」（2026-10-14）：锚点四元组 + 段落⇄会话绑定 + 同步游标。
+//    ⚠️ 它被 `api.ts`（`/api/reading/*`）与后续的 `sync.ts` 静态 import
+//    ⇒ 与 `store.ts`/`edit.ts` 同批导出（那两条也是这个理由）。
+export * from './reading.ts'
 // ⭐⭐⭐ 决策 204/205：交接文档模板（存储 + 校验）与工具决策（两段式确认）。
 export * from './templates.ts'
 export * from './template-tool.ts'

@@ -149,6 +149,7 @@ export function coverFromYaml(yamlText: string): Cover {
   // ⭐ `kind` 是受控词表（决策 81）：**非法值落成空串**，
   //    由 `validateCoverShape` 拿原值报错——解析层不抛，保持两层职责分离。
   const rawKind = str(data['kind']).trim()
+  const source = readSourceField(data['source'])
   return {
     id: str(data['id']),
     project: str(data['project']),
@@ -167,6 +168,32 @@ export function coverFromYaml(yamlText: string): Cover {
     // ⭐ 归档时间（决策 133）：**老封面没这行 ⇒ 空串 = 活跃**（有意选的失败方向，
     //    理由见 `Cover.archivedAt` 的注释）。
     archivedAt: str(data['archivedAt']),
+    // ⭐⭐ 溯源（2026-10-14）：「文档内提问」的 chat 条目靠它跳回会话。
+    //    ⚠️ **用条件展开而不是 `source`** —— 本项目开了
+    //    `exactOptionalPropertyTypes`，给可选属性显式赋 `undefined` 会编译不过；
+    //    而"键缺席"与"键在但值为 undefined"对下游是两件事
+    //    （前端靠"键在不在"决定渲不渲染「去会话」按钮）。
+    ...(source !== undefined ? { source } : {}),
+  }
+}
+
+/**
+ * ⭐ **读 `source` 字段**（封面 YAML 的嵌套块）。
+ *
+ * ⚠️ **宽容读**：块不存在 / 不是对象 / 两个子字段都空 ⇒ 返回 `undefined`
+ *    （而不是空对象）—— 调用方与前端都靠"有没有这个字段"做判断。
+ * @param raw - YAML 解析出来的原值。
+ * @returns 规范化后的 source；没有 ⇒ `undefined`。
+ */
+function readSourceField(raw: unknown): Cover['source'] {
+  if (typeof raw !== 'object' || raw === null) return undefined
+  const s = raw as Record<string, unknown>
+  const sessionId = str(s['sessionId'])
+  const from = str(s['from'])
+  if (sessionId === '' && from === '') return undefined
+  return {
+    ...(sessionId !== '' ? { sessionId } : {}),
+    ...(from !== '' ? { from } : {}),
   }
 }
 
@@ -223,6 +250,16 @@ export function renderCover(cover: Cover): string {
   if ((cover.updatedAt ?? '') !== '') lines.push(`updatedAt: ${yamlScalar(cover.updatedAt)}`)
   // ⭐ 归档时间（决策 133）：**空值不写行**（= 活跃；与 `kind`/时间同处理）。
   if ((cover.archivedAt ?? '') !== '') lines.push(`archivedAt: ${yamlScalar(cover.archivedAt)}`)
+  // ⭐⭐ 溯源（2026-10-14）：**只在真有子字段时才写这个块**。
+  //    ⚠️ 写空块（`source:` 下面什么都没有）会让 `coverFromYaml` 读出空对象，
+  //       而前端靠"source 在不在"决定渲不渲染「去会话」按钮 ⇒ 会误判。
+  //    ⚠️ 与 `store.writeEntryDoc` 的写法（`['source:', '']` 块头 + 缩进两空格）
+  //       **必须一致** —— 两处渲染同一份 frontmatter，漂移就会让封面与正文不一致。
+  if (cover.source !== undefined && (cover.source.sessionId !== undefined || cover.source.from !== undefined)) {
+    lines.push('source:')
+    if (cover.source.sessionId !== undefined) lines.push(`  sessionId: ${yamlScalar(cover.source.sessionId)}`)
+    if (cover.source.from !== undefined) lines.push(`  from: ${yamlScalar(cover.source.from)}`)
+  }
   lines.push('-->', FENCE_CLOSE)
   return lines.join('\n')
 }

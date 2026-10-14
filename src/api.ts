@@ -558,6 +558,21 @@ async function listCoversWithLinkCheck(
        *    外链条目根本没有正文（`doc === undefined`）⇒ 从正文取会让外链的归档时间恒为空。
        */
       archivedAt: cover.archivedAt ?? '',
+      /**
+       * ⭐⭐ **溯源**（2026-10-14「文档内提问」透出到前端）。
+       *
+       * 🔴 **为什么必须在这里透出**：`chat` 条目详情页要有一个「去会话」按钮，
+       *    而它靠的正是封面上的 `source.sessionId` —— 这个字段**早就在库里**
+       *    （`schema.ts` 的 `EntryFrontmatter.source`、`writeEntryDoc` 会写），
+       *    但**从来没有任何读取方** ⇒ 前端拿不到，按钮就无从做起。
+       *
+       * ⚠️ **只透 `sessionId`，不透 `from`**：`from` 是内部标记
+       *    （`'reading-ask'` / `'history-archive'` 之类），对用户没有意义，
+       *    透出去只会让 DTO 变胖。
+       * ⚠️ **外链条目的 `source` 恒为空**（ext 文件没有 frontmatter）
+       *    ⇒ 前端必须做空值处理（没有就不渲染那个按钮）。
+       */
+      source: cover.source?.sessionId !== undefined ? { sessionId: cover.source.sessionId } : {},
       // ⭐ 块位置：断链的「重新填路径」要靠它定位到具体那一块（§8.5 / §8.6）。
       sourceFile,
       line,
@@ -1381,6 +1396,15 @@ export async function handleApi(
             //    封面本来就存着这两个字段 ⇒ 这里一并返回，前端优先从封面读。
             createdAt: cover.createdAt,
             updatedAt: cover.updatedAt,
+            /**
+             * ⭐⭐ **溯源**（2026-10-14「文档内提问」）——`chat` 条目的「去会话」按钮靠它。
+             *
+             * 🔴 **这个接口才是按钮真正的数据来源**（列表接口那一份是顺带透出）：
+             *    用户在知识库点开一条 `chat` 条目 ⇒ 走这里 ⇒ 要能拿到
+             *    `source.sessionId` 才能跳回产生它的那个会话。
+             * ⚠️ 没有 `source` 的条目（绝大多数）返回空对象 ⇒ 前端据此**不渲染**那个按钮。
+             */
+            source: cover.source?.sessionId !== undefined ? { sessionId: cover.source.sessionId } : {},
             /**
              * ⭐ **归档时间**（决策 133）——空串 = 活跃。
              *

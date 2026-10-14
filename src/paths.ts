@@ -498,6 +498,38 @@ export function safeName(name: string): string {
   return cleaned === '' ? '_' : cleaned
 }
 
+/**
+ * ⭐⭐⭐ **「文档内提问」的数据目录**：`<库根>/reading/`（2026-10-14）。
+ *
+ * 放三样东西（都是**本功能的 source data**，不是 derived）：
+ *   · `bindings.jsonl` —— 「源条目的某段落」⇄ 「chat 条目」的绑定；
+ *   · `cursors.json`   —— 每个会话同步到哪个 seq（增量游标）；
+ *   · `state.json`     —— 阅读位置等轻量状态。
+ *
+ * 🔴 **为什么不复用 `reads/` / `docReads/`**（同 `recallLogDir` 的理由）：
+ *    那两个的语义是"**读过什么**"（跨项目证据 / 写叙事前置），
+ *    而这里是"**哪段对话绑哪条知识**"——结构（anchor 四元组）与用途都不同，
+ *    混在一起会让"读过"与"讨论过"互相污染。
+ */
+export function readingDir(): string {
+  return join(libraryRoot(), 'reading')
+}
+
+/** 段落 ⇄ 会话绑定表：`reading/bindings.jsonl`（一行一条，可追加）。 */
+export function readingBindingsPath(): string {
+  return join(readingDir(), 'bindings.jsonl')
+}
+
+/** 同步游标：`reading/cursors.json`（`sessionId → capturedThroughSeq`）。 */
+export function readingCursorsPath(): string {
+  return join(readingDir(), 'cursors.json')
+}
+
+/** 阅读状态：`reading/state.json`。 */
+export function readingStatePath(): string {
+  return join(readingDir(), 'state.json')
+}
+
 /** 需要保证存在的目录全集（首次写入时创建）。 */
 export function requiredDirs(): readonly string[] {
   return [
@@ -523,5 +555,9 @@ export function requiredDirs(): readonly string[] {
     // ⭐⭐⭐ 提示词覆盖目录（本次新增）：同上——空目录无副作用，
     //    且让首次保存少一次竞态。⚠️ **历史子目录不在这里预建**（首次保存时建）。
     promptsDir(),
+    // ⭐⭐⭐ 「文档内提问」目录（2026-10-14）：同上。
+    //    ⚠️ **bindings/cursors 是真数据**（不是日志）⇒ 丢了不可再生
+    //    （游标丢了只会"重跑一遍"、绑定丢了就再也指不回那段）⇒ 更要尽早建目录。
+    readingDir(),
   ]
 }
