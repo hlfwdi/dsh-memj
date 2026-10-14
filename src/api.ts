@@ -51,7 +51,7 @@ import { templatesDir } from './paths.ts'
 //       API 全部 500 的已知坑（memj 库条目 `c9bcc110`）。
 import { askAboutSelection, type AskDeps } from './reading-ask.ts'
 // ⭐ 段落 ⇄ 会话绑定（阅读页画段落标记的数据源）+ 服务端算好的块清单。
-import { bindingsForEntry, extractReadingBlocks } from './reading.ts'
+import { bindingsForEntry, extractReadingBlocks, findBindingByChatEntry } from './reading.ts'
 import { fileExistsStat, readTextIfExists } from './files.ts'
 import {
   fixCoverBlock,
@@ -1393,10 +1393,35 @@ export async function handleApi(
       const cover = found.cover
       const abs = resolveRef(cover.ref, cover.ext)
       const doc = abs === undefined ? undefined : await loadEntryDoc(cover.ref, cover.ext)
+      /**
+       * ⭐⭐ **「返回源知识」的判据**（2026-10-14 第 9 期）——
+       * 只有 `kind: chat` 的条目才有意义（其余条目没有"源"）。
+       *
+       * 🔴 **为什么由服务端算，而不是让前端查 `/reading/bindings`**：
+       *    · 前端要的是"**这条 chat 条目**的源"，而 bindings 那个接口是**按源条目**查的
+       *      ⇒ 前端拿不到反向映射；
+       *    · 更重要的是本项目铁律：**能给人看的列表必须由服务端回结构化条目**
+       *      （免得"候选集合"的判据有第二份实现，迟早与后端不一致）。
+       *
+       * ⚠️ 查不到绑定（数据被清、或条目是手工建的）⇒ 返回 `null`
+       *    ⇒ 前端**不渲染那个按钮**（不撒谎：没有源就不给入口）。
+       */
+      const readingSource = cover.kind === 'chat'
+        ? await findBindingByChatEntry(cover.id).then((b) =>
+            b === undefined
+              ? null
+              : { entryId: b.entryId, blockId: b.anchor.blockId, exact: b.anchor.exact },
+          )
+        : null
       return {
         status: 200,
         body: {
           ok: true,
+          /**
+           * ⭐ **源知识指针**：`{ entryId, blockId, exact }` 或 `null`。
+           * 前端据此渲染「↩ 返回源知识」并在源条目里**滚到那一段**。
+           */
+          readingSource,
           cover: {
             id: cover.id,
             project: cover.project,

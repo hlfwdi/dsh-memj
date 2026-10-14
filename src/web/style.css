@@ -1474,6 +1474,29 @@ footer {
 
 .reading-goto-btn:hover { background: var(--hover); }
 
+/* ── 「返回源知识」落地时的高亮（第 9 期，2026-10-14）──────────────────────
+ * 🔴 **为什么必须有**：跳过去 + 滚到那一段之后，**页面看起来只是"停住了"**
+ *   ⇒ 用户不知道哪一段才是目标。高亮一下才让"到了"这件事**可见**。
+ * ⚠️ 只动 `background`（不改尺寸/位置 ⇒ 不引起布局抖动，也不会把滚动位置带偏）。
+ * ⚠️ 由 `consumePendingScroll` 里的定时器移除类 ⇒ 不是永久样式。
+ */
+.reading-target-flash {
+  animation: reading-flash 2.4s ease-out 1;
+  border-radius: 4px;
+}
+
+@keyframes reading-flash {
+  0%, 55% { background: color-mix(in srgb, var(--accent, #3b82f6) 22%, transparent); }
+  100% { background: transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reading-target-flash {
+    animation: none;
+    background: color-mix(in srgb, var(--accent, #3b82f6) 18%, transparent);
+  }
+}
+
 /* ── 带步骤的进度面板（第 8 期，2026-10-14）──────────────────────────────
  * 🔴 **为什么不能用 toast**：`/reading/ask` 要跑 2~10 秒，而 toast 是一闪而过的单行
  *   ⇒ 用户不知道在等什么（用户原话："应该有动态的进度显示（比如正在新建会话）"）。

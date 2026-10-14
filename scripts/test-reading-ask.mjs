@@ -430,5 +430,46 @@ console.log('\n【10】🔴 提问前必须【锁下锚点快照】（真机抓�
     '⭐⭐ 提交那一行用的是快照 anchor，不是活的 pending', askLine.trim().slice(0, 120))
 }
 
+console.log('\n【11】🔴 「返回源知识」：源指针由服务端给，且滚动不能靠 scrollIntoView')
+// ══════════════════════════════════════════════════════════════════════════
+{
+  const { readFileSync } = await import('node:fs')
+  const { join: j } = await import('node:path')
+  const apiSrc = readFileSync(j(process.cwd(), 'src', 'api.ts'), 'utf8')
+  const readSrc = readFileSync(j(process.cwd(), 'src', 'reading.ts'), 'utf8')
+  const appSrc = readFileSync(j(process.cwd(), 'src', 'web', 'app.js'), 'utf8')
+  const code = appSrc.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+
+  // ① 后端要有反查（chat 条目 → 源条目/块）。
+  check(readSrc.includes('export async function findBindingByChatEntry'),
+    '⭐⭐ 服务端有 findBindingByChatEntry（chat 条目 → 源条目/块）')
+  // ② `/entry` DTO 要透出 readingSource（前端据此渲染按钮，不自己反查 bindings）。
+  check(apiSrc.includes('readingSource'),
+    '⭐⭐ /entry DTO 透出 readingSource（服务端算好给前端）')
+  // ③ 前端用返回的字段渲染。
+  check(code.includes('data.readingSource') || code.includes('readingSource'),
+    '⭐⭐ 前端消费 readingSource 渲染「返回源知识」')
+  check(code.includes('gotoSourceEntry'),
+    '⭐⭐ 有 gotoSourceEntry（跳源条目 + 滚到那段）')
+  // ④ 🔴 **滚动不能用 `scrollIntoView`** —— 🔴🔴 **这是本项目第三次踩同一个坑**：
+  //    项目里已经写过三遍这条教训（`app.js` 的目录跳转 1126 行、滚动记忆 1559 行、
+  //    9168 行），原话是"`scrollIntoView` 会**滚动所有可滚祖先**——包括那些
+  //    `overflow: hidden` 的容器 …… 不要用会自动沿祖先链找目标的 `scrollIntoView`"。
+  //    ⚠️ 而我实现「返回源知识」时**又用了它** ⇒ 真机实测目标块没进视口、
+  //      容器 `scrollTop` 仍是 0，**且不报任何错**（页面看起来只是"停住了"）。
+  //    ⭐ 判据：**定位到某元素要用「已知容器 + 手动 scrollTop」**，不用自动找祖先的那个 API。
+  //    ⚠️ 项目里只剩一处合法用法（`first?.scrollIntoView({block:'nearest'})`，
+  //      那是焦点管理、不要求精确定位）⇒ 断言写成"**不得新增**"：
+  //      统计出现次数，不得超过那 1 处。
+  const siw = (code.match(/\.scrollIntoView\s*\(/g) ?? []).length
+  check(siw <= 1,
+    '⭐⭐ 没有新增 scrollIntoView 用法（本页布局下它滚不到位且不报错）', `实际 ${siw} 处`)
+  check(code.includes('scrollHostOf(detail)'),
+    '⭐⭐ 滚动容器由 scrollHostOf 判定（与分页用的同一个判据）')
+  // ⑤ 高亮（否则用户不知道"到了哪一段"）。
+  check(code.includes('reading-target-flash'),
+    '⭐⭐ 目标块会高亮一下（让"到了"这件事可见）')
+}
+
 console.log(`\n═══ 文档内提问·入口与注入：${pass} 通过 / ${fail} 失败 ═══`)
 process.exit(fail === 0 ? 0 : 1)

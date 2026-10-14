@@ -285,6 +285,29 @@ export async function findBindingBySession(
 }
 
 /**
+ * ⭐⭐ **按 chat 条目 id 反查绑定**（「返回源知识」按钮的判据）。
+ *
+ * 🔴 **为什么需要它**：`chat` 条目的详情页要能显示「↩ 返回源知识」，
+ *    而它需要知道**源条目 id + 那段节选是哪个块** —— 这两样只在 `bindings` 里。
+ *    ⚠️ 封面上的 `source` 只有 `sessionId`（那是给「去会话」用的），
+ *      **不含源条目信息** ⇒ 必须查这里。
+ *
+ * ⚠️ **一对一吗**：一条 chat 条目对应一个 `(entryId, blockId)` 绑定
+ *    （用户裁定"同一段节选开一个会话"）⇒ 取第一条即可。
+ *    但**仍写成 `find` 而不是假定唯一**（数据是外部可改的文本文件，
+ *    万一被手工编辑出重复，这里不该崩）。
+ *
+ * @param chatEntryId - `kind: chat` 条目 id。
+ * @returns 绑定；不是问答条目 ⇒ `undefined`。
+ */
+export async function findBindingByChatEntry(
+  chatEntryId: string,
+): Promise<ReadingBinding | undefined> {
+  const all = await loadBindings()
+  return all.find((b) => b.chatEntryId === chatEntryId)
+}
+
+/**
  * ⭐ **数某条 chat 条目已有几轮问答**（决定下一轮的 `Q几` 编号）。
  *
  * ⚠️ **按 `#### Q` 标题数**，不按 `---` 数：分隔线在首轮占位尾注里也有一个，
