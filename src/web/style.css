@@ -1474,6 +1474,68 @@ footer {
 
 .reading-goto-btn:hover { background: var(--hover); }
 
+/* ── 带步骤的进度面板（第 8 期，2026-10-14）──────────────────────────────
+ * 🔴 **为什么不能用 toast**：`/reading/ask` 要跑 2~10 秒，而 toast 是一闪而过的单行
+ *   ⇒ 用户不知道在等什么（用户原话："应该有动态的进度显示（比如正在新建会话）"）。
+ * ⚠️ **不做模态遮罩**：那会挡住正文，而用户往往想顺手选下一段
+ *   ⇒ 做成右下角浮层（与 `.toast` 同区），可停留、可显示多步。
+ * ⚠️ 层级要比 `.toast`(50) 与 `.reading-ask-bar`(60) 都高，否则会被压住。
+ */
+.progress-panel {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 70;
+  min-width: 260px;
+  max-width: 380px;
+  background: #111827;
+  color: #fff;
+  border-radius: 10px;
+  padding: 12px 14px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .32);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.progress-panel.is-err { background: var(--danger, #b3261e); }
+
+.prog-head {
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.prog-step {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  opacity: .45;                /* 未到的步骤压暗 */
+}
+
+.prog-step[data-state="run"] { opacity: 1; }
+.prog-step[data-state="done"] { opacity: .8; }
+.prog-step[data-state="err"] { opacity: 1; }
+
+.prog-icon {
+  flex: 0 0 auto;
+  width: 1em;
+  text-align: center;
+}
+
+/* 正在跑的那一步：图标缓慢明暗，表达"在动"（只改透明度 ⇒ 不引起布局抖动）。 */
+.prog-step[data-state="run"] .prog-icon {
+  animation: prog-pulse 1s ease-in-out infinite;
+}
+
+@keyframes prog-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .25; }
+}
+
+/* ⚠️ 尊重"减少动态效果"的系统设置（照本项目既有约定）。 */
+@media (prefers-reduced-motion: reduce) {
+  .prog-step[data-state="run"] .prog-icon { animation: none; }
+}
+
 /* ── 窄屏退化：两栏改上下堆叠（§12-75 的【我默认】）────────────────── */
 
 @media (max-width: 900px) {
@@ -2238,6 +2300,92 @@ footer {
    会把那套机制废掉。 */
 dialog.prompt-dlg:not([open]) { display: none; }
 .prompt-dlg::backdrop { background: rgb(0 0 0 / 45%); }
+
+/* ── 「就这段提问」的输入弹窗（第 8 期，2026-10-14）─────────────────────────
+ * ⭐ 取代 `window.prompt`（那个原生白框与本站风格完全脱节，且**阻塞主线程**
+ *   ⇒ 进度面板在它弹着时根本画不出来）。
+ * 🔴 照 `.prompt-dlg` 的模式写 —— 尤其**那条 `:not([open])` 规则不能漏**：
+ *   我给 `display: flex` 会盖掉原生 `<dialog>` 的 `display: none`
+ *   ⇒ `close()` 之后元素**仍然可见**且关不掉（本项目真踩过，见上面那段注释）。
+ */
+.ask-dlg {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px 18px;
+  background: var(--bg-0, Canvas);
+  color: var(--fg, CanvasText);
+  width: min(560px, 92vw);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+dialog.ask-dlg:not([open]) { display: none; }
+.ask-dlg::backdrop { background: rgb(0 0 0 / 45%); }
+
+.ask-head { font-weight: 600; font-size: 14px; }
+
+/* 被问的那一段：让用户确认"我问的是这段"（选完文字后往往已经忘了选的哪句）。 */
+.ask-excerpt {
+  margin: 0;
+  padding: 6px 10px;
+  border-left: 3px solid var(--accent, #3b82f6);
+  background: var(--hover);
+  border-radius: 0 6px 6px 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  max-height: 7.5em;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+.ask-input {
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-1, transparent);
+  color: inherit;
+  resize: vertical;
+  min-height: 4.5em;
+}
+
+.ask-input:focus {
+  outline: 2px solid var(--accent, #3b82f6);
+  outline-offset: -1px;
+}
+
+.ask-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.ask-ok, .ask-cancel {
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.ask-ok {
+  border: 1px solid transparent;
+  background: var(--accent, #3b82f6);
+  color: #fff;
+}
+
+.ask-ok:hover { filter: brightness(1.08); }
+
+.ask-cancel {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: inherit;
+}
+
+.ask-cancel:hover { background: var(--hover); }
 .prompt-dlg-head {
   flex: 0 0 auto;
   display: flex;

@@ -404,5 +404,31 @@ console.log('\n【9】🔴 块 id 必须由【服务端】算（前端不得自�
     '⭐⭐ blockId 用【原文】(c) 算，不是用剥了标记的 plain')
 }
 
+console.log('\n【10】🔴 提问前必须【锁下锚点快照】（真机抓到的真 bug）')
+// ══════════════════════════════════════════════════════════════════════════
+{
+  // 🔴🔴 **这条守的是一个只在真实操作路径上出现的真 bug**：
+  //    `pending` 是一个会被 `selectionchange` 改写的闭包变量，而 `onAsk` 里
+  //    `await askQuestionDialog(...)` 期间**用户一点输入框，选区就没了**
+  //    ⇒ `selectionchange` 触发 `hide()` ⇒ **`pending` 被清成 `null`**
+  //    ⇒ 提交时发出去的是 `anchor: null` ⇒ 后端 400「anchor 不完整」。
+  //    ⭐ 实测抓到的请求体：`{"entryId":"…","anchor":null,"question":"…"}`。
+  //
+  //    ⚠️ **它为什么值一条静态反证**：探针**不点输入框就碰不到**
+  //      ⇒ 属于"功能测试全绿、用户一用就坏"那一类；
+  //      而重犯的发现成本极高（要在真机上点一遍，且症状"提问失败"看着像后端问题）。
+  const { readFileSync } = await import('node:fs')
+  const { join: j } = await import('node:path')
+  const appSrc = readFileSync(j(process.cwd(), 'src', 'web', 'app.js'), 'utf8')
+  const code = appSrc.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+  // ⭐ 正面断言：提交前先把 pending 锁成快照。
+  check(/anchor\s*=\s*pending/.test(code),
+    '⭐⭐ onAsk 里先把 pending 锁成快照（const anchor = pending）')
+  // 🔴 反面：提交那一行里**不得**出现活的 `pending`。
+  const askLine = code.split('\n').find((l) => l.includes("postJson('/reading/ask'")) ?? ''
+  check(askLine !== '' && !/\bpending\b/.test(askLine),
+    '⭐⭐ 提交那一行用的是快照 anchor，不是活的 pending', askLine.trim().slice(0, 120))
+}
+
 console.log(`\n═══ 文档内提问·入口与注入：${pass} 通过 / ${fail} 失败 ═══`)
 process.exit(fail === 0 ? 0 : 1)
