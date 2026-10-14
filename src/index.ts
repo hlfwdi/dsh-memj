@@ -60,6 +60,8 @@ import { registerTagAutoNormalize } from './tag-auto.ts'
 import { registerAutoScore } from './score-auto.ts'
 // ⭐⭐⭐ 轮末上报上下文占用率（决策 226）—— 让模型能知道"上下文用了多少"。
 import { registerContextReport } from './context-auto.ts'
+// ⭐⭐⭐ 「文档内提问」的轮末同步（2026-10-14）——把阅读会话的问答追加进 chat 条目。
+import { registerReadingSync } from './reading-sync.ts'
 // ⭐⭐ 英文召回索引（设计文档 §9；B 方案：召回只读它）
 import { registerEnIndex } from './en-index.ts'
 // ⭐⭐ 主动注入（设计文档 §5/§7）：触发 + 注入两个钩子。
@@ -383,7 +385,21 @@ export function apply(ctx: Context, config: MemjConfig = DEFAULT_CONFIG): void {
       diag(`score-auto-THREW ${err instanceof Error ? err.message : String(err)}`, config)
     }
 
-    // ── 3g. ⭐⭐⭐ 轮末上报上下文占用率（决策 226；2026-10-12 用户裁定）──
+    // ── 3h. ⭐⭐⭐ 「文档内提问」的轮末同步（2026-10-14）──
+    //    🔴 **没有总开关**（刻意）：它不是"可选增强"，而是「阅读提问」这条链路的
+    //       **必要一半**——不挂的话 chat 条目建出来永远是空的。
+    //    ⚠️ 但**零成本**：第一道门（`findBySession`）对非阅读会话直接返回，
+    //       而 `bindings.jsonl` 在没人用过阅读功能时根本不存在（读一次 undefined）。
+    //    ⚠️ 它挂 `agent/turn-stopping`（与本项目其他 5 处同一事件）⇒
+    //       **钩子只发起、绝不 await**（serial 钩子，见 `reading-sync.ts` 的纪律）。
+    try {
+      const hooked = registerReadingSync(scoped as unknown as Context)
+      diag(hooked ? 'reading-sync-registered' : 'reading-sync-skipped(no-session-query)', config)
+    } catch (err) {
+      diag(`reading-sync-THREW ${err instanceof Error ? err.message : String(err)}`, config)
+    }
+
+    // ── 3i. ⭐⭐⭐ 轮末上报上下文占用率（决策 226；2026-10-12 用户裁定）──
     //     ⭐ **它把"占用率"这个事实交给模型** ⇒ 「到 60% 就异步沉淀」这类规则
     //        从此**可以写在提示词里**（此前做不到：模型拿不到那个数）。
     //     🔴 **只用 `agent.inject()`**（不唤醒、不额外烧一轮）；
@@ -637,6 +653,11 @@ export * from './store.ts'
 //    ⚠️ 它被 `api.ts`（`/api/reading/*`）与后续的 `sync.ts` 静态 import
 //    ⇒ 与 `store.ts`/`edit.ts` 同批导出（那两条也是这个理由）。
 export * from './reading.ts'
+// ⭐⭐⭐ 「文档内提问」的**轮末同步**（2026-10-14）：turn/end ⇒ readSurface ⇒ 按游标取增量
+//    ⇒ 只取 text block ⇒ 追加进 chat 条目。
+//    ⚠️ 它被 `index.ts` 的 `apply()` 静态 import（挂 session/event 监听）
+//    ⇒ 同上，必须与 `reading.ts` 同批导出。
+export * from './reading-sync.ts'
 // ⭐⭐⭐ 决策 204/205：交接文档模板（存储 + 校验）与工具决策（两段式确认）。
 export * from './templates.ts'
 export * from './template-tool.ts'

@@ -266,6 +266,41 @@ export async function bindingsForEntry(entryId: string): Promise<ReadingBinding[
   return all.filter((b) => b.entryId === entryId)
 }
 
+/**
+ * ⭐⭐ **按会话 id 反查绑定**（轮末同步的**第一道门**）。
+ *
+ * 🔴 **为什么这是第一道门**：用户明确裁定「只同步**从提问入口产生的会话**」。
+ *    ⇒ 判据就是"这个 sessionId 在不在 `bindings` 里"。
+ *    ⚠️ 绝不能退化成"所有会话都同步"——那会让**每一次普通对话**都往库里
+ *    写一条 chat 条目，库被会话流水淹没（而用户要的是"问答沉淀成知识"）。
+ *
+ * @param sessionId - DSH 会话 id。
+ * @returns 绑定；不是提问入口 ⇒ `undefined`。
+ */
+export async function findBindingBySession(
+  sessionId: string,
+): Promise<ReadingBinding | undefined> {
+  const all = await loadBindings()
+  return all.find((b) => b.sessionId === sessionId)
+}
+
+/**
+ * ⭐ **数某条 chat 条目已有几轮问答**（决定下一轮的 `Q几` 编号）。
+ *
+ * ⚠️ **按 `#### Q` 标题数**，不按 `---` 数：分隔线在首轮占位尾注里也有一个，
+ *    数它会多数一个。
+ * @param chatEntryId - chat 条目 id。
+ * @returns 轮数（条目不存在 ⇒ 0）。
+ */
+export async function countChatTurns(chatEntryId: string): Promise<number> {
+  const found = (await scanLibrary()).covers.find((c) => c.cover.id === chatEntryId)
+  if (found === undefined) return 0
+  const doc = await loadEntryDoc(found.cover.ref, false)
+  if (doc === undefined) return 0
+  const m = doc.body.match(/^#### Q\d+：/gm)
+  return m === null ? 0 : m.length
+}
+
 // ══════════════════════════════════════════════════════════════════════════
 // cursors（增量游标）
 // ══════════════════════════════════════════════════════════════════════════
