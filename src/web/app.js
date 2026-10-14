@@ -533,7 +533,59 @@ function readingHashTextUnused(text) {
 }
 
 /**
- * ⭐⭐ **给正文的块打上 `data-block-id`**（段落标记与锚点采集都靠它）。
+ * ⭐⭐⭐ **跳到一个会话**（阅读页 → 主应用，2026-10-14 第 7 期）。
+ *
+ * ── 机制（两半，缺一不可）────────────────────────────────────────────────
+ * 阅读页是**独立页面**，碰不到主应用的视图状态；而"切到某个会话"必须主应用做。
+ *
+ * 🔴🔴 **为什么不能用 URL 参数**（实测推翻）：
+ *    DSH 的 `authorizeIndex` 在 token 校验后**无条件 303 到 `./`**
+ *    （`dsh-client-connection/lib/index.js:403-410`）⇒ **任何 query 都进不来**。
+ *    实测：`/?session=abc&token=…` 与 `/?token=…` **都** 303 → `./`。
+ *
+ * ⇒ 用 **`BroadcastChannel`**（同源跨页通信）：
+ *    本函数**发**，`src/client/index.tsx` 的 `installSessionJumpReceiver` **收**，
+ *    收到后调 `uiWorkspace.openSession(sessionId)` —— 与手工点会话**同一条路**。
+ *
+ * ⚠️ **边界（如实说，不假装）**：`BroadcastChannel` 只在**同源、同浏览器、同 profile**
+ *    下有效。不同浏览器/无痕窗口之间**不通** ⇒ 那时点了不会有反应。
+ *    这是**已验证的边界**，不是 bug。
+ * @param {string} sessionId - 目标会话 id。
+ */
+function gotoSession(sessionId) {
+  try {
+    if (typeof BroadcastChannel !== 'function') {
+      // ⚠️ 旧浏览器没有它 ⇒ 退化成"复制 id"，并如实告知。
+      void copySessionId(sessionId, '浏览器不支持跨页跳转')
+      return
+    }
+    // ⚠️ 频道名**必须与 client 半边一致**（`SESSION_JUMP_CHANNEL`）。
+    const ch = new BroadcastChannel('dsh-memj')
+    ch.postMessage({ type: 'memj:open-session', sessionId })
+    // ⚠️ 用完就关（本页只发不收）—— 留着会占一份资源。
+    setTimeout(() => { try { ch.close() } catch { /* 忽略 */ } }, 0)
+    toast('正在切换会话…（若没反应，说明主应用不在这个浏览器里）')
+  } catch (e) {
+    toast(`跳转失败：${e.message}`, true)
+  }
+}
+
+/**
+ * ⭐ **退路：复制会话 id**（跳转不可用时）。
+ * @param {string} sessionId - 会话 id。
+ * @param {string} why - 为什么要退化成复制（会显示给用户）。
+ */
+async function copySessionId(sessionId, why) {
+  try {
+    await navigator.clipboard.writeText(sessionId)
+    toast(`${why} ⇒ 已复制会话 id，可在左侧会话列表里按标题找到它`)
+  } catch {
+    toast(`${why}，会话 id：${sessionId}`, true)
+  }
+}
+
+/**
+ * ⭐ **给正文的块打上 `data-block-id`**（段落标记与锚点采集都靠它）。
  *
  * 🔴🔴 **块 id 由服务端给，前端【绝不自己算】** —— 这是真机探针抓到的设计缺陷：
  *    浏览器里 `**粗体**` 已渲染成 `<strong>`，`textContent` 里**没有 `**`**
@@ -1523,33 +1575,17 @@ async function renderEntryDetail(id, opts = {}) {
           h('button', {
             class: 'reading-goto-btn',
             type: 'button',
-            text: '📋 复制会话 id',
-            onclick: async () => {
+            text: '↗ 去会话',
+            onclick: () => {
               if (sid === '') {
                 // ⚠️ 老条目可能没写 source（本功能上线前建的）⇒ 如实说。
                 toast('这条问答没有记录来源会话（可能是早于本功能创建的）', true)
                 return
               }
-              try {
-                await navigator.clipboard.writeText(sid)
-                toast('会话 id 已复制 ✓ 可在左侧会话列表里按标题找到它')
-              } catch {
-                // ⚠️ 剪贴板可能被浏览器拒绝（非 HTTPS / 无手势）⇒ 退化成显示出来让用户手抄。
-                toast(`复制失败，会话 id：${sid}`, true)
-              }
+              gotoSession(sid)
             },
           }),
         ),
-        // 🔴🔴 **为什么不放「去会话」按钮**（真机验证后的结论，2026-08-14）：
-        //    我原本写的是 `location.href = '/?session=<id>'`，**那条路不存在**：
-        //    DSH 的 `authorizeIndex` 在 token 校验后**无条件 303 到 `./`**
-        //    （`dsh-client-connection/lib/index.js:403-410`）⇒ **任何 query 参数都被丢掉**。
-        //    实测：`/?session=abc&token=…` 与 `/?token=…` 都回 303 → `./`。
-        //    ⇒ 那个按钮**点了不会到任何地方**（正是本项目最忌的"界面撒谎"）。
-        //    ⭐ 真正可行的机制是 **client 插件侧调 `ctx.get('uiWorkspace').openSession()`**，
-        //      而"从阅读页跨页通知 client 半边"要新加一条 BroadcastChannel 通路
-        //      ⇒ 那是**另一批工作**，已记进方案文档的待办，不在这里假装它已可用。
-        h('div', { class: 'dim small', text: '⚠️ 本版**还不能一键跳转**到该会话（见方案文档待办）——请用上面的会话 id，或在左侧会话列表里按标题找。' }),
       ),
     )
   }

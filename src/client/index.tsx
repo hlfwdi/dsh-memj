@@ -340,6 +340,16 @@ interface EntryButtonProps {
  */
 const HOT_CHANNEL = 'dsh-memj'
 
+/**
+ * ⭐ **「去会话」跳转的广播频道名**（2026-10-14，第 7 期）。
+ *
+ * ⚠️ **与 `HOT_CHANNEL` 同名但消息类型不同**（`memj:open-session`）——
+ *    刻意复用同一个频道：`BroadcastChannel` 本身按名字隔离，
+ *    再开一个只是多一份资源；而消息靠 `type` 字段区分已经够。
+ * 🔴 **不要改成别的插件的频道名**（同源下同名会串台）。
+ */
+const SESSION_JUMP_CHANNEL = 'dsh-memj'
+
 /** 惰性建一次（`BroadcastChannel` 在旧浏览器可能不存在 ⇒ 整个广播降级为 no-op）。 */
 let hotChannel: BroadcastChannel | null = null
 
@@ -550,6 +560,74 @@ async function fetchReviewOptions(): Promise<readonly SelectOption[]> {
   }
 }
 
+/**
+ * ⭐⭐⭐ **「去会话」跳转的接收端**（2026-10-14，第 7 期）。
+ *
+ * ── 为什么要两半 ──────────────────────────────────────────────────────────
+ * 阅读页是**独立页面**（`/plugins/dsh-memj/`），它**碰不到**主应用的视图状态；
+ * 而"切到某个会话"必须由主应用做。
+ *
+ * 🔴 **不能靠 URL 参数**（实测推翻，见 `src/web/app.js` 的注释）：
+ *    DSH 的 `authorizeIndex` 在 token 校验后**无条件 303 到 `./`**
+ *    ⇒ 任何 query（含 `?session=`）都进不来。
+ *
+ * ⇒ 用 **`BroadcastChannel`**（同源跨页通信）。本项目已有先例：
+ *    主应用 → 插件页那条（`HOT_CHANNEL`，见 `broadcastSession`）。
+ *    本条是**反方向**：插件页 → 主应用。
+ *
+ * ── 关键机制 ──────────────────────────────────────────────────────────────
+ * `uiWorkspace.openSession(target)`：
+ *   · 签名 `openSession(target: SessionTarget): void`（**同步**，不返回 Promise）；
+ *   · `SessionTarget = SessionId | SubagentAddress` ⇒ **直接传 id 字符串**即可；
+ *   · 它就是侧栏点会话走的那条路 ⇒ 与手工点击**行为一致**。
+ *
+ * ⚠️ 服务取法照本项目纪律：`ctx.inject(['uiWorkspace'], cb)` + `scope.get(...)`
+ *    （**不是** `ctx.uiWorkspace` 属性访问 —— 那是 undefined，库内 `4cfbb8d6`）。
+ * @param ctx - 客户端上下文。
+ */
+function installSessionJumpReceiver(ctx: ClientContext): void {
+  ctx.inject(['uiWorkspace'] as never, (scope) => {
+    const ws = scope.get('uiWorkspace') as
+      | { openSession(target: unknown): void }
+      | undefined
+    if (ws === undefined) return
+
+    let channel: BroadcastChannel | null = null
+    const onMessage = (ev: MessageEvent): void => {
+      const d = ev.data as { type?: unknown; sessionId?: unknown } | null
+      if (d === null || typeof d !== 'object') return
+      // ⚠️ 只认自己那一种消息（同频道可能有别的用途）。
+      if (d.type !== 'memj:open-session') return
+      const sessionId = d.sessionId
+      if (typeof sessionId !== 'string' || sessionId === '') return
+      try {
+        // ⭐ 这一行就是"跳会话"本身。
+        ws.openSession(sessionId)
+      } catch (err) {
+        // ⚠️ 会话可能已被删/归档 ⇒ 如实记 log（不静默）。
+        //    ⭐ 用户侧看不到反应是**可接受的降级**：会话列表里也找不到它，
+        //      那本身就说明了"它不在了"。
+        console.warn('[dsh-memj] openSession 失败（会话可能已不存在）：', err)
+      }
+    }
+
+    scope.effect(() => {
+      try {
+        channel = new BroadcastChannel(SESSION_JUMP_CHANNEL)
+        channel.addEventListener('message', onMessage)
+        return () => {
+          try { channel?.removeEventListener('message', onMessage); channel?.close() } catch { /* 忽略 */ }
+          channel = null
+        }
+      } catch {
+        // ⚠️ 旧浏览器没有 `BroadcastChannel` ⇒ 整条跳转降级为"点了没反应"。
+        //    ⭐ 这与"页面里那句如实说明"配合：用户知道本版跳不了。
+        return () => { /* 没建起来就不用清 */ }
+      }
+    }, 'dsh-memj: session jump receiver')
+  })
+}
+
 export const name = 'dsh-memj'
 
 /**
@@ -563,6 +641,22 @@ export const inject = ['slots', 'commandUi', 'sessions'] as const
  * @param ctx - 客户端上下文。
  */
 export function apply(ctx: ClientContext): void {
+  // ── 0. ⭐⭐⭐ 「去会话」跳转的**接收端**（2026-10-14，第 7 期）──
+  //    🔴🔴 **为什么必须在这里做**：阅读页（`/plugins/dsh-memj/`）是**独立页面**，
+  //       它没法直接操作主应用的视图状态；而"切到某个会话"是**主应用**的事。
+  //       ⚠️ 也不能靠 URL 参数 —— 实测 DSH 的 `authorizeIndex` 在 token 校验后
+  //          **无条件 303 到 `./`**，任何 query 都进不来
+  //          （`dsh-client-connection/lib/index.js:403-410`）。
+  //    ⭐ 正确机制（两半，缺一不可）：
+  //       ① 阅读页 `postMessage` 到本频道（见 `src/web/app.js` 的 `gotoSession`）；
+  //       ② 本函数收到后调 **`uiWorkspace.openSession(sessionId)`** ——
+  //          它的签名就是 `openSession(target: SessionTarget)`，
+  //          而 `SessionTarget = SessionId | SubagentAddress` ⇒ **直接传 id 字符串**。
+  //    ⚠️ 频道名**必须用本插件自己的**（`dsh-memj`）—— 同源下同名会串台。
+  //    ⚠️ `BroadcastChannel` 只在**同源、同浏览器、同 profile** 下有效；
+  //       不同浏览器/无痕之间不通（那时点了不会有反应 —— 已验证过的边界）。
+  installSessionJumpReceiver(ctx)
+
   // ── 1. 侧边栏入口按钮 ──────────────────────────────────────────────────────
   // 必须用 `ctx.slots.inject`——slot 声明与本插件的激活顺序不受约束。
   ctx.slots.inject('sidebar.footer.action', function* () {
