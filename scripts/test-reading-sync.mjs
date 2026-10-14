@@ -39,19 +39,30 @@ const check = (cond, name, extra = '') => {
 }
 
 // ── 造假件用的常量 ──
-// 🔴 **必须照真实 API 形状**（本项目在这上面栽过三次）：
-//   · `user/message` 的 data **就是** `UserMessage` ⇒ content 在**顶层**；
-//   · `assistant/message` 的 data 是 `{turn, step, message, stream}`
-//     ⇒ content 在 **`data.message.content`**。
-//   ⚠️ 两者形状不同，写成一个 ⇒ 一边永远取空 ⇒ "凑不齐一问一答"永久成立。
+// 🔴 **必须照【真实 API 形状】**（库内 `62f4b250` 那一族，本项目已栽三次）：
+//   真机 dump 出来的原始 `SessionEvent` 是这样（`readSurface` 给的就是它）：
+//
+//     user/message      => `{ type, seq, data: { content, source, role, id } }`
+//     assistant/message => `{ type, seq, data: { turn, step, message: { content }, … } }`
+//
+//   ⚠️ **content 都不在顶层**；且两者**位置不同**
+//      （`data.content` vs `data.message.content`）。
+//   ⭐ 我第一版按"磁盘日志的形状"写成顶层 `content` ⇒ `question` 恒空
+//     ⇒ `extractTurn` 恒 undefined ⇒ 同步永远判 empty，而**不报错**。
 const text = (t) => ({ type: 'text', text: t })
 const reasoning = (t) => ({ type: 'reasoning', text: t })
 const toolCall = (n) => ({ type: 'tool-call', id: `c${n}`, name: 'bash', arguments: '{"cmd":"ls"}' })
-const userEv = (seq, t) => ({ seq, type: 'user/message', content: [text(t)] })
+const userEv = (seq, t) => ({
+  seq,
+  type: 'user/message',
+  data: { content: [text(t)], source: { kind: 'plugin:dsh-memj' }, role: 'user', id: `u${seq}` },
+  surfaceOp: 'append',
+})
 const asstEv = (seq, blocks) => ({
   seq,
   type: 'assistant/message',
   data: { turn: 1, step: 1, message: { role: 'assistant', content: blocks } },
+  surfaceOp: 'append',
 })
 
 // ══════════════════════════════════════════════════════════════════════════

@@ -471,6 +471,16 @@ export async function createChatEntry(
     createdAt: nowIso,
     updatedAt: nowIso,
     archivedAt: '',
+    /**
+     * 🔴🔴 **`source` 必须写在【封面】上，不只是正文 frontmatter** ——
+     *     真机探针当场抓到：只传给 `writeEntryDoc`（它只写**正文**的 frontmatter）
+     *     ⇒ `cover.source` 是空对象 ⇒ 前端「去会话」按钮拿不到 sessionId
+     *     ⇒ **按钮永远不渲染**（而现象是"没有按钮"，不像报错，极易漏过）。
+     *     ⭐ 判据：**前端读的是封面侧**（`api.ts` 的两个接口都只扫封面、
+     *       不读正文 frontmatter —— 那是为了不读文件）⇒ 封面必须有。
+     *     ⚠️ 这也正是第 2 批把 `source` 加进 `Cover` 类型的原因（当时就为此）。
+     */
+    ...(sessionId !== '' ? { source: { sessionId, from: 'reading-ask' } } : {}),
   }
 
   // ① 正文落盘（`writeEntryDoc` 是唯一入口：它管 path/slug 规范与 frontmatter）。

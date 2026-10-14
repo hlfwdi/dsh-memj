@@ -1,4 +1,4 @@
-/**
+﻿/**
  * dsh-memj —— **「文档内提问」的入口**（2026-10-14，第 4 期）
  *
  * ── 它做什么 ──────────────────────────────────────────────────────────────
@@ -23,9 +23,12 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { appendBinding, createChatEntry, findBinding, type ReadingAnchor } from './reading.ts'
+import { libraryRoot } from './paths.ts'
+import { ensureDir } from './files.ts'
 
 // ══════════════════════════════════════════════════════════════════════════
 // 形状
@@ -174,8 +177,29 @@ export async function askAboutSelection(
 // 运行时装配（建真会话那一步）
 // ══════════════════════════════════════════════════════════════════════════
 
-/** 阅读会话专用工作区的目录名（相对库根）。 */
+/**
+ * ⭐ **阅读会话专用工作区的目录名**（相对库根）。
+ *
+ * 🔴 **必须拼成绝对路径再给 `workspaceRegistry.create()`** ——
+ *    第一版直接传了这个相对路径，隔离实例上当场报
+ *    `Workspace path is not fully qualified: 'reading-sessions'`（真机探针抓到的）。
+ *    ⭐ 官方先例 `dsh-webhook` 对入参就做了 `isAbsolute` 硬校验
+ *    （`lib/index.js:79`）⇒ 那不是可选的。
+ */
 export const READING_WORKSPACE_DIR = 'reading-sessions'
+
+/**
+ * ⭐ **阅读工作区的绝对路径**（`<库根>/reading-sessions`）。
+ *
+ * ⚠️ **放在库根下**（而不是 `os.homedir()` 或临时目录）：
+ *    · 库根本身就是"拷一个目录即迁移"的那个目录 ⇒ 会话跟着库走；
+ *    · ⚠️ 但**它不是 memj 的知识数据**，而是 DSH 的 workspace 注册项
+ *      ⇒ 刻意**不加进 `requiredDirs()`**（那个函数管的是库内数据目录；
+ *      混进去会让"库目录清单"多一项与会话相关的东西）。
+ */
+export function readingWorkspacePath(): string {
+  return join(libraryRoot(), READING_WORKSPACE_DIR)
+}
 
 /**
  * ⭐⭐ **建一个阅读会话**（真实 DSH 会话）。
@@ -220,10 +244,18 @@ export async function createReadingSession(
   },
 ): Promise<{ sessionId: string; chatEntryId: string; created: boolean }> {
   // ①② 工作区 + 建会话（见上方次序说明）。
+  //    🔴 绝对路径（真机探针抓到过 "not fully qualified"）。
+  //    🔴 **目录必须先建** —— 探针第二步抓到
+  //       `ENOENT: no such file or directory, realpath '.../reading-sessions'`：
+  //       `workspaceRegistry.create()` 会 realpath 那个路径 ⇒ 不存在就抛。
+  //       ⭐ 而 `requiredDirs()` **刻意不含它**（那是库内数据目录的清单，
+  //          混进去会让"库目录清单"多一项会话相关的东西）⇒ 只能在这里建。
   const registry = ctx.get('workspaceRegistry') as {
     create(path: string): Promise<{ path: string; attachSession(id: string): Promise<void> }>
   }
-  const workspace = await registry.create(READING_WORKSPACE_DIR)
+  const wsPath = readingWorkspacePath()
+  await ensureDir(wsPath)
+  const workspace = await registry.create(wsPath)
 
   // ⭐ sessionId 带 `reading-` 前缀 —— 一眼看出它是哪来的（排障/列表都受益）。
   const sessionId = `reading-${randomUUID()}`
@@ -270,7 +302,16 @@ export async function createReadingSession(
     handle.agent.followup(
       createUserMessage({
         content: [{ type: 'text', text: renderAskPrompt(input.entryTitle, input.anchor, input.question) }],
-        source: { kind: 'plugin', plugin: 'dsh-memj' },
+        // 🔴🔴 **`kind` 必须是【产出者自己的标识】**，不能是笼统的 `'plugin'`
+        //    —— 0.2.0 的 v4 准入**硬拒**旧形状，抛：
+        //      `format v4 message requires a producer-owned source kind`
+        //    而那个失败**长得完全不像 source 的问题**：`turn/start` 正常开了、
+        //    随即 `turn/end{reason:error}`，**tokenUsage 全 0**、模型一次没调
+        //    ⇒ 表面看像"模型不可用 / 驱动没起来"（真机排查绕了三轮才定位）。
+        //    ⭐ 正确取值 `'plugin:dsh-memj'` **本项目早有定论**（见 `message-source.ts`：
+        //      逐帧解 8 个真实 v4 日志、51 处实测都是它）。
+        //    ⚠️ 库内条目 `441e5db2` 早就记了这个坑 —— **我该先查库再动手**。
+        source: { kind: 'plugin:dsh-memj' },
       }),
     )
   } catch (err) {

@@ -433,7 +433,14 @@ export function apply(ctx: Context, config: MemjConfig = DEFAULT_CONFIG): void {
         entryBody: (id) => doc.bodies.get(id),
         entryTitle: (id) => doc.titles.get(id),
       })
-      readingAsk = readingAskDeps(scoped as unknown as Context, () => {
+      // 🔴🔴 **`readingAsk` 必须用【外层 `ctx`】装配，不能用 `scoped`**（真机踩到）：
+      //     第一版用 `scoped` ⇒ `agents.create()` 建出的 agent **tokenUsage 全 0、
+      //     title 为 null** ⇒ 模型一次都没被调用（`followup` 提交了但轮次从未开始）。
+      //     ⭐ 根因：`scoped` 是 `ctx.inject` 回调的作用域，它随回调结束而失效；
+      //       而 `apiHandler` 那条路用的是**外层 `ctx`**（`ctx.get(n)`）
+      //       ⇒ 两边不是同一个生命周期，用 scoped 建的 agent 没有活的驱动器。
+      //     ⚠️ 只有 `registerDocContext` 必须用 `scoped`（`systemPrompt` 只在那儿）。
+      readingAsk = readingAskDeps(ctx, () => {
         if (docContextRefresh !== undefined) void docContextRefresh()
       })
       diag('reading-ask-registered', config)

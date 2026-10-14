@@ -100,16 +100,31 @@ export function extractTurn(events: readonly unknown[]): SyncTurn | undefined {
   let answer = ''
 
   for (const ev of events) {
+    // 🔴🔴 **`readSurface` 给的是【原始 SessionEvent】，不是消息本身** ——
+    //    真机 dump 出来的形状（**必须按这个取**）：
+    //
+    //      `user/message`      ⇒ content 在 **`data.content`**
+    //      `assistant/message` ⇒ content 在 **`data.message.content`**
+    //
+    //    ⚠️ 两者**不同**，而且都不是顶层 `content`。
+    //    ⭐ 我第一版按"磁盘日志的形状"写（顶层 `content`）⇒ `question` 恒为空
+    //      ⇒ `extractTurn` 恒返回 undefined ⇒ **同步永远判 empty**（不报错）。
+    //    🔴 这是库内 `62f4b250`「夹具要照真实形状」的**第三次重演**，
+    //      而它第 3 条给的正确做法就是：**先把真实形状打出来看一眼**
+    //      （我这次绕了很久才做这一步，代价是三轮真机往返）。
     const e = ev as {
       type?: unknown
-      /** `user/message`：data 本身就是消息。 */
-      content?: ContentBlock[]
-      /** `assistant/message`：data 里嵌着消息。 */
-      data?: { message?: { content?: ContentBlock[] } }
+      /** `user/message` 与 `system/message`：消息在 `data` 里。 */
+      data?: {
+        content?: ContentBlock[]
+        /** `assistant/message`：data 里再嵌一层 `message`。 */
+        message?: { content?: ContentBlock[] }
+      }
     }
     if (e.type === 'user/message') {
-      // ⭐ 提问只取**第一条**（后续的 user 消息可能是注入的上下文，不是人在问）。
-      if (question === '') question = textOfContent(e.content)
+      // ⭐ 提问只取**第一条**（后续的 user 消息是注入的上下文：runtime context、
+      //    热知识……它们也是 `user/message`，但不是人在问）。
+      if (question === '') question = textOfContent(e.data?.content)
       continue
     }
     if (e.type === 'assistant/message') {
@@ -260,7 +275,7 @@ export async function syncSession(
   //    一节，比没有更糟：读者会以为模型没答上来）。
   const turn = extractTurn(fresh)
   if (turn === undefined) {
-    // ⚠️ 但游标**仍然要推进** —— 否则下一轮会把同一批事件反复重抽
+    // ⚠️ 游标**仍然要推进** —— 否则下一轮会把同一批事件反复重抽
     //    （典型场景：用户问了一句、模型还在跑就被中断 ⇒ 永远凑不齐）。
     await deps.saveCursor(sessionId, snap.capturedThroughSeq)
     return { status: 'empty' }

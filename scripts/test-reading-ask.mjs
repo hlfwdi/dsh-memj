@@ -232,5 +232,143 @@ console.log('\n【6】绑定落盘（供 turn-stopping 的第一道门反查）'
   check(miss === undefined, '普通会话反查不到（⇒ 不会被同步）')
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+console.log('\n【7】🔴 source 必须写在【封面】上（真机探针抓到的）')
+// ══════════════════════════════════════════════════════════════════════════
+{
+  // 🔴🔴 **这条守的是一个真机才发现、单测却没覆盖的缺陷**：
+  //     第一版只把 sessionId 传给 `writeEntryDoc`（它只写**正文**的 frontmatter）
+  //     ⇒ `cover.source` 是空对象 ⇒ 前端「去会话」按钮拿不到 sessionId
+  //     ⇒ **按钮永远不渲染**。而现象是"没有按钮"、不是报错 ⇒ 极易漏过。
+  //     ⭐ 判据：**前端读的是封面侧**（`api.ts` 两个接口都只扫封面、不读正文）。
+  //
+  //    ⚠️ 本组要在**有项目的库**上跑（`createChatEntry` 要求源条目有 project 归属）
+  //    ⇒ 临时库里先建一个项目 + 一条源条目。
+  //    ⚠️ `writeFileSync` 是**同步** API（不在 `fs/promises` 里）⇒ 从 `node:fs` 取。
+  const { writeFileSync } = await import('node:fs')
+  const projId = 'reading-probe-proj'
+  const projFile = join(lib, 'projects', `HANDOFF-${projId}.md`)
+  const srcEntryId = '11111111-2222-3333-4444-555555555555'
+  const shortId = srcEntryId.slice(0, 8)
+
+  const fm = [
+    '---',
+    `project: ${projId}`,
+    "title: ''",
+    "desc: '探针用项目'",
+    'themes: []',
+    '---',
+    '',
+    '# 探针项目',
+    '',
+  ].join('\n')
+  // ⭐ 封面块 —— **照真实形状手写**（从 `HANDOFF-ccaa-exam-prep.md` 第 98 行抄的）：
+  //    · 围栏标记是 `<!-- memj:entry`（**不是** `memj:cover` —— 我第一版凭想象写错，
+  //      结果 `scanLibrary` 扫不到 ⇒ "找不到源条目" 的假故障）；
+  //    · 有**闭合标记** `<!-- /memj:entry -->`；
+  //    · `kind: fact` / `ref: entries/…` **都不加引号**（YAML 裸标量）。
+  //    ⚠️ 这正是库内 `62f4b250`「夹具要照真实形状」那一族 —— 正确做法第 3 条：
+  //       **先把真实形状打出来看一眼**，别凭接口名想象。
+  const coverBlock = [
+    '<!-- memj:entry',
+    `id: ${srcEntryId}`,
+    `project: ${projId}`,
+    'theme: []',
+    'global: false',
+    'kind: fact',
+    'tags: probe',
+    'title: 探针源条目',
+    'desc: 给 reading 探针当源条目用',
+    `ref: entries/probe-src-${shortId}.md`,
+    'ext: false',
+    'createdAt: 2026-10-14T00:00:00.000Z',
+    'updatedAt: 2026-10-14T00:00:00.000Z',
+    '-->',
+    '<!-- /memj:entry -->',
+    '',
+  ].join('\n')
+  writeFileSync(projFile, fm + coverBlock, 'utf8')
+  writeFileSync(
+    join(lib, 'entries', `probe-src-${shortId}.md`),
+    '### 探针源条目\n\n这是正文，够长以便测试。\n',
+    'utf8',
+  )
+
+  // 走真的 createChatEntry（它会 scanLibrary + writeEntryDoc + writeProjectDoc）
+  const r = await mod.createChatEntry(
+    srcEntryId,
+    '探针源条目',
+    { blockId: 'probe-blk', index: 0, exact: '探针源条目', prefix: '', suffix: '' },
+    'session-probe-1',
+  )
+  if ('error' in r) {
+    check(false, 'createChatEntry 成功', r.error)
+  } else {
+    // ⭐⭐ 关键断言：**封面**上的 source.sessionId
+    const snap = await mod.scanLibrary()
+    const mine = snap.covers.find((c) => c.cover.id === r.id)
+    check(mine !== undefined, 'chat 条目在 scanLibrary 里（⇒ 列表看得到）')
+    check(mine?.cover.source?.sessionId === 'session-probe-1',
+      '⭐⭐ 封面带 source.sessionId（⇒ 「去会话」按钮有数据可渲染）',
+      JSON.stringify(mine?.cover.source))
+    check(mine?.cover.kind === 'chat', '　⇒ kind 是 chat')
+    // ⭐ 顺带：DTO 层也拿得到（前端真正读的那层）
+    //    ⚠️ **两个参数各有分工，别混**（第一版两个都写错过）：
+    //      · `pathname` = **完整路径但不带 query**（`/plugins/dsh-memj/api/entry`）——
+    //        `handleApi` 靠 `slice(base.length)` 切 route，带了 `?id=` 会切出
+    //        `/entry?id=xxx` ⇒ 路由匹配不上 ⇒ 404「未知的 API 路径」；
+    //      · `params` = `URLSearchParams`（放 `id`）。
+    //    🔴 而**只传 `/entry`**（不带 `/plugins/dsh-memj/api` 前缀）又会切出乱码
+    //       ⇒ 同样是 404，但错误信息是「库里没有这张封面」—— **更容易误判**。
+    const dto = await mod.handleApi(
+      { version: '0', config: mod.DEFAULT_CONFIG, baseUrl: '', pluginId: 'memj' },
+      'GET',
+      '/plugins/dsh-memj/api/entry',
+      '',
+      new URLSearchParams([['id', r.id]]),
+    )
+    const body = JSON.parse(JSON.stringify(dto.body))
+    check(body?.cover?.source?.sessionId === 'session-probe-1',
+      '⭐⭐ API DTO 也带 source.sessionId（前端拿到的就是这份）',
+      JSON.stringify(body?.cover?.source))
+  }
+}
+
+console.log('\n【8】🔴 注入消息的 source.kind 必须是【产出者标识】（真机抓到的）')
+// ══════════════════════════════════════════════════════════════════════════
+{
+  // 🔴🔴 **这条守的是一个让我绕了三轮真机的坑**：
+  //     `followup` 的消息 source 我写成了 0.1.5 时代的旧形状
+  //       `{ kind: 'plugin', plugin: 'dsh-memj' }`        ← ❌ 0.2.0 硬拒
+  //     而 0.2.0 的 v4 准入会抛
+  //       `format v4 message requires a producer-owned source kind`
+  //     🔴 **它的失败现象完全不像 source 问题**：
+  //        · `/reading/ask` 返回 **200**（会话建了、条目建了、绑定写了）；
+  //        · 会话事件里 `turn/start` **正常开了**；
+  //        · 紧接着 `turn/end{reason:error}`、**tokenUsage 全 0**（模型一次没调）；
+  //        · 磁盘日志还**看不到**那条错误（turn 边界不 flush）。
+  //     ⇒ 表面看像"模型不可用 / 驱动没起来"，实际是消息形状非法。
+  //     ⭐ 正确取值本项目早有定论（`message-source.ts`：`plugin:dsh-memj`，
+  //       逐帧解 8 个真实 v4 日志、51 处实测都是它）。
+  //     ⚠️ 库内条目 `441e5db2` 早就记了这个坑 —— **判据是"我该先查库"**。
+  //
+  //    ⭐⭐ **静态反证**：源码里不得再出现旧形状（`kind: 'plugin'` + `plugin:`）。
+  //       它防的是"后人照 0.1.5 的样例又写回去"——而那在 tsc 层**看不出来**
+  //       （`MessageSource` 类型里 `kind: string` 依然成立，只有运行时才校验）。
+  const { readFileSync } = await import('node:fs')
+  const { join: j } = await import('node:path')
+  for (const f of ['reading-ask.ts', 'reading-sync.ts', 'reading.ts']) {
+    const src = readFileSync(j(process.cwd(), 'src', f), 'utf8')
+    // ⚠️ 去掉注释再扫（注释里**应该**能写这个坑的解释）。
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+    check(!/kind:\s*'plugin'/.test(code),
+      `⭐⭐ ${f} 里没有旧形状 kind:'plugin'（0.2.0 会硬拒 ⇒ 整轮失败）`)
+  }
+  // ⭐ 正面断言：真用了正确取值
+  const askSrc = readFileSync(j(process.cwd(), 'src', 'reading-ask.ts'), 'utf8')
+  check(askSrc.includes("kind: 'plugin:dsh-memj'"),
+    "⭐⭐ reading-ask.ts 用了正确取值 kind:'plugin:dsh-memj'")
+}
+
 console.log(`\n═══ 文档内提问·入口与注入：${pass} 通过 / ${fail} 失败 ═══`)
 process.exit(fail === 0 ? 0 : 1)
