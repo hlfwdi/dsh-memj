@@ -82,6 +82,13 @@ function isPlainSafe(value: string): boolean {
   if (/[\n\r\t]/.test(value)) return false
   // 行首指示符（YAML 里这些开头有特殊含义）。
   if (/^[\s\-?:,[\]{}#&*!|>'"%@`]/.test(value)) return false
+  // 🔴 **逗号在任何位置都不能裸写**（2026-10-16 补）：
+  //    本库的数组一律写成**流式**（`renderYamlArray` ⇒ `[a, b]`），
+  //    而在流式序列里 `,` 就是**元素分隔符**。
+  //    ⇒ 一个值里只要含 `,`，裸写会被解析成**两个元素**：
+  //       写 `x,y` → 读回 `["x","y"]` ⇒ 标签被静默劈成两半。
+  //    ⚠️ 旧判据只挡了"行首的逗号"（上一行那个字符类），漏了中间的。
+  if (value.includes(',')) return false
   // `: ` 与 ` #` 会改变标量边界。
   if (/:\s/.test(value)) return false
   if (/\s#/.test(value)) return false
@@ -236,7 +243,27 @@ export function renderCover(cover: Cover): string {
   //    调用方传进来的对象若**根本没有 kind 键**（`undefined`），
   //    `undefined !== ''` 为真，会把 `kind: undefined` 真的写进文档。
   if (isEntryKind(cover.kind)) lines.push(`kind: ${cover.kind}`)
-  if (cover.tags.length > 0) lines.push(`tags: ${cover.tags.map((t) => yamlScalar(t)).join(',')}`)
+  // 🔴🔴 **必须写成 YAML 数组 `[a, b]`，不能写成裸的逗号分隔串 `a,b`**（2026-10-16 修，
+  //    事故：一份项目文档被撑到 **128 MB**、把 DSH 拖崩）。
+  //
+  // 为什么裸写会炸：`tags: a,b` 在 YAML 里是**一个普通标量字符串**，不是数组 ⇒
+  //    读回时 `toStringArray` 走 `typeof value === 'string'` 分支，用 `split(/[,，]/)`
+  //    切 ⇒ **切出来的片段不做转义还原**。于是：
+  //      ① 某个标签需要加引号（以 `@ - : # [ ] { }` 等开头，或含 `: `），
+  //         `yamlScalar` 会 `JSON.stringify` 它 ⇒ 写成 `"@通知"`；
+  //      ② 读回时那对引号**留在标签内容里**（变成 `"@通知"` 这四个字面字符）；
+  //      ③ 下一轮再写：它以 `"` 开头 ⇒ 又判定"不安全" ⇒ **再 stringify 一层**；
+  //      ⇒ 反斜杠 1 → 3 → 7 → 15 …（2ⁿ−1），**每写一次文档就翻一倍**。
+  //     ⚠️ 而 `mutateCover` 每次只改一条封面、却会**重写整份文档的全部封面**
+  //        （`edit.ts` 的 `writeProjectDoc(owner, …, covers, …)`）⇒ 改任意一条都在加轮数。
+  //     ⇒ 攒够约 27 轮（2²⁷ = 134217728，实测坏行 134217756 字符）就炸。
+  //
+  // 写成数组后：YAML 解析器**自己负责反转义**，`toStringArray` 走 `Array.isArray` 分支，
+  //    引号/反斜杠全由解析器还原 ⇒ 往返**收敛**，不再有第 ③ 步。
+  //
+  // ⚠️ 与另两处保持一致：本文件 `theme:` 那行、以及 `store.ts` 的条目 frontmatter
+  //    （那里用的是 `renderYamlArray`，本来就是数组 —— 所以只有封面这行是漏的）。
+  if (cover.tags.length > 0) lines.push(`tags: ${renderYamlArray(cover.tags)}`)
   // ⭐ `title` 是必填字段（决策 98）——即便为空也写出来，
   //    好让"缺 title"在文档里**可见**（由校验报错），而不是静默少一行。
   lines.push(`title: ${yamlScalar(cover.title)}`)
