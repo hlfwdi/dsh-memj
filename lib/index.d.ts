@@ -1531,6 +1531,12 @@ interface SystemPromptScope {
     context(spec: {
       name: string;
       order: number;
+      /**
+       * ⭐ DSH **0.2.1+** 才有的字段：标记"这是操作型上下文"，
+       * 使它在 `suppressRuntimeContext()` / `includeRuntimeContext:false` 时**不被摘掉**。
+       * ⚠️ 旧版本只是忽略它（多传一个不认识的键无害）。
+       */
+      required?: boolean;
       text: (ctx: {
         agent?: {
           session?: {
@@ -6384,6 +6390,20 @@ declare const name = "dsh-memj";
  *
  * ⚠️ **缺任何一个，`ctx.inject` 的回调就永不执行且无报错**——
  * 表现为"插件加载了但工具/命令一个都没有"。见下方 `diag`。
+ *
+ * 🔴🔴 **`webServer` 必须留在这里，且[不能]改成可选**（2026-10-19 核过，别动）：
+ *    `dsh-headless` 明确不挂 HTTP server（其 patch 原话：*"It mounts no Host,
+ *    HTTP server, Web Runtime, or browser plugin"*，`webserver` 行只在
+ *    `dsh-web-app` 的 patch 里）⇒ 在 `--profile headless` 下这条永不满足。
+ *    ⚠️ 后果是**整个 inject 回调不执行**：工具/命令/协议/热知识/主动注入/评分
+ *    **全部不注册、且没有任何报错**。
+ *    ⭐ **这是【有意】的能力边界**：memj 的**知识写入面**（`memj_handoff` 等 8 个工具）
+ *    与**人侧界面**（`/plugins/dsh-memj/` 的十几个页面）是同一个交付物，
+ *    拆开没有意义；而 headless 是"一次性任务"场景，本来就没有人侧界面。
+ *    ⇒ **不要把 `webServer` 改成可选**来"让 memj 在 headless 里能加载"：
+ *      那样加载出来的是一半插件（工具能用、设置页全 404），比干脆不加载更难排查。
+ *    📌 若将来真要让 headless 用 memj 的工具面，正确做法是**再开一份只含工具/命令的
+ *      轻量入口**（另立 `inject` 数组），而不是让现有入口降级。
  */
 declare const inject: string[];
 /**

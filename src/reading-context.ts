@@ -224,6 +224,21 @@ export function registerDocContext(
   scoped.systemPrompt.context({
     name: 'memj:reading-doc',
     order,
+    // 🔴🔴 **`required: true` 必须传**（2026-10-19，DSH 0.2.1 新增字段）。
+    //
+    // ⚠️ **不传的后果**：0.2.1 的 `suppressRuntimeContext()`（`includeRuntimeContext:false`
+    //    也走它）会把**所有没标 `required` 的 context 一律摘掉**。
+    //    而这一条**正是"用户正在读这篇知识"的全文注入**（文档内提问的命脉）——
+    //    被摘掉后模型只会看到一句「用户就某段提了个问题」，**手里没有正文**
+    //    ⇒ 答非所问，且**不报任何错**（表现为"它怎么忽然不知道我在说什么了"）。
+    //
+    // ⭐ **为什么它算 operational context**：它不是"锦上添花的动态信息"，
+    //    而是**这一轮回答所依据的材料本身** —— 与官方 sandbox/approval 同类。
+    //
+    // ⚠️ **旧版本（0.1.5 / 0.2.0）不认识这个字段 ⇒ 原样忽略**，无害。
+    //    类型上本仓的 `SystemPromptScope` 是**手写的最小面**（见文件末尾），
+    //    把 `required` 直接加进那个接口即可，不需要并集断言。
+    required: true,
     text: (c: { agent?: { session?: { id?: string } } }) => {
       try {
         const sessionId = c.agent?.session?.id
@@ -251,6 +266,12 @@ interface SystemPromptScope {
     context(spec: {
       name: string
       order: number
+      /**
+       * ⭐ DSH **0.2.1+** 才有的字段：标记"这是操作型上下文"，
+       * 使它在 `suppressRuntimeContext()` / `includeRuntimeContext:false` 时**不被摘掉**。
+       * ⚠️ 旧版本只是忽略它（多传一个不认识的键无害）。
+       */
+      required?: boolean
       text: (ctx: { agent?: { session?: { id?: string } } }) => string
     }): unknown
   }

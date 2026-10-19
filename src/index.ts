@@ -83,6 +83,20 @@ export const name = 'dsh-memj'
  *
  * ⚠️ **缺任何一个，`ctx.inject` 的回调就永不执行且无报错**——
  * 表现为"插件加载了但工具/命令一个都没有"。见下方 `diag`。
+ *
+ * 🔴🔴 **`webServer` 必须留在这里，且[不能]改成可选**（2026-10-19 核过，别动）：
+ *    `dsh-headless` 明确不挂 HTTP server（其 patch 原话：*"It mounts no Host,
+ *    HTTP server, Web Runtime, or browser plugin"*，`webserver` 行只在
+ *    `dsh-web-app` 的 patch 里）⇒ 在 `--profile headless` 下这条永不满足。
+ *    ⚠️ 后果是**整个 inject 回调不执行**：工具/命令/协议/热知识/主动注入/评分
+ *    **全部不注册、且没有任何报错**。
+ *    ⭐ **这是【有意】的能力边界**：memj 的**知识写入面**（`memj_handoff` 等 8 个工具）
+ *    与**人侧界面**（`/plugins/dsh-memj/` 的十几个页面）是同一个交付物，
+ *    拆开没有意义；而 headless 是"一次性任务"场景，本来就没有人侧界面。
+ *    ⇒ **不要把 `webServer` 改成可选**来"让 memj 在 headless 里能加载"：
+ *      那样加载出来的是一半插件（工具能用、设置页全 404），比干脆不加载更难排查。
+ *    📌 若将来真要让 headless 用 memj 的工具面，正确做法是**再开一份只含工具/命令的
+ *      轻量入口**（另立 `inject` 数组），而不是让现有入口降级。
  */
 export const inject: string[] = ['webServer', 'systemPrompt', 'tools', 'commands']
 
@@ -306,7 +320,27 @@ export function apply(ctx: Context, config: MemjConfig = DEFAULT_CONFIG): void {
     //     ⇒ **改它不破前缀缓存**（协议与工具描述都会破，见方案 §2）。
     //     ⚠️ `text` 必须是**函数**才会每次装配重算；返回常量即"同值不发"。
     try {
-      scoped.systemPrompt.context({
+      // ⭐⭐⭐ **DSH 0.2.1 新增的 `required` 必须显式传**（2026-10-19，对照 0.2.0→0.2.1 查出）。
+      //
+      // 🔴🔴 **不传会怎样**：0.2.1 引入 `suppressRuntimeContext()`（**给 `includeRuntimeContext:false`
+      //    或子作用域用的**）——它会把**所有没标 `required` 的 context 一律摘掉**。
+      //    而本插件这条 context **就是它的全部使用指导**（触发条件 / 挂靠判据 / 归档流程 /
+      //    写作规范指路）⇒ 一旦被摘，**模型仍然有 8 个工具，但再也不知道什么时候该用、
+      //    该填什么字段、以及那套"归错比多建更糟"的判据** —— 失安静默，且表现为
+      //    "memj 忽然不好用了"。
+      //
+      // ⭐ **为什么是 `required: true` 而不是保持可选**：
+      //    它的语义本就是"操作型上下文"（operational context，与官方 sandbox/approval
+      //    那几条同类）—— 不是"锦上添花的动态信息"。一条被抑制就失去意义的指导，
+      //    正是 `required` 存在的理由。
+      //
+      // ⚠️ **为什么用 `as` 而不是直接写字面量**：本仓的类型来自 0.1.5 的
+      //    `dsh-system-prompt`，那里**没有** `required` 字段 ⇒ 直接写会 typecheck 失败。
+      //    而**多传一个旧版本不认识的字段是无害的**（旧版本只读它认识的键）。
+      //    ⇒ 用"并集类型 + 条件展开"让两版共用一份实现，与 `client/index.tsx` 的
+      //      `SessionListStateShape` 同一手法（那里也是跨版本并集）。
+      //    ⚠️ 别改成 `@ts-expect-error` —— 那样在 0.2.1 类型装上后会变成"多余的抑制"。
+      const contextSpec = {
         name: CONTEXT_NAME,
         order: CONTEXT_ORDER,
         // ⭐⭐⭐ **本次新增：走 `promptText` 取覆盖值**（同协议通道）。
@@ -320,8 +354,16 @@ export function apply(ctx: Context, config: MemjConfig = DEFAULT_CONFIG): void {
         //      （用户在【知识类型】页加了类型，模型读到的还是旧表）。
         //    ✅ 做成插槽后：**正文可编辑、目录永远新鲜** —— 两件事不再冲突。
         //    ⚠️ `prompts.ts` 的 `slots` 校验（双向）保证这个插槽不会被误删/写错名字。
+        //
+        // 🔴 **0.2.1 的 `interpolate` 不要关**：正文里的 `{{kindCatalog}}` 在**这里**
+        //    就已经被 `fillKindMarkers()` 填掉了，宿主拿到的文本里没有插槽。
+        //    ⚠️ 而 `context.ts` 顶部早就记着这个坑（`{{}}` 是有主语法、memj 用不了，
+        //    所以类型目录用的是 HTML 注释标记）⇒ **这里不需要改动**。
         text: () => fillKindMarkers(promptText('context:memj:usage-guidance', CONTEXT_TEXT)),
-      })
+        // ⭐ 只在运行时存在、旧版本会忽略（见上面的说明）。
+        required: true,
+      } as Parameters<typeof scoped.systemPrompt.context>[0] & { required?: boolean }
+      scoped.systemPrompt.context(contextSpec)
       diag('context-registered', config)
     } catch (err) {
       diag(`context-THREW ${err instanceof Error ? err.message : String(err)}`, config)
