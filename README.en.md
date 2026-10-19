@@ -688,7 +688,7 @@ one you created yourself.
 #### ⚠️ Upgrading: include the version
 
 ```bash
-dsh plugin --profile web add dsh-memj@0.1.3     # ✅ ask for this version explicitly
+dsh plugin --profile web add dsh-memj@0.1.4     # ✅ ask for this version explicitly
 ```
 
 🔴 **Writing just the package name (`add dsh-memj`) can leave you on an old version**: pnpm
