@@ -1374,7 +1374,7 @@ function attachToc(detailBox, mdWrap, bodyText) {
       //    而窄屏下它是**全屏遮罩**，不收的话**根本看不到跳过去的正文**
       //    （跳转等于没发生）。
       // ⭐ 判据：**"跳完要不要收"取决于"它遮不遮住目标"**，不是统一规定。
-      // ⚠️ 用 `isNarrow()`（与 CSS 断点同一个 900）——**不在 JS 里另写一个数字**。
+      // ⚠️ 用 `isNarrow()`（与 CSS 断点同一个 700）——**不在 JS 里另写一个数字**。
       // ⚠️⚠️ **这里引用的 `setOpen` 定义在本行【之后】**（它在下面那段 `const btn = …` 旁边）
       //    —— 这是**安全的**，因为 `jump` 只在**点击时**执行，那一刻 `setOpen` 早已初始化
       //    （⭐ 已用最小实验确认：闭包内**延迟调用** OK；**同步立即调用**才会
@@ -3778,13 +3778,13 @@ function renderDetailAndRestore(tab, id, render) {
  * 现在是上下结构。我希望的是，打开的时候，默认是全屏的左栏列表，点击某条进入详情页（右栏），
  * 右栏从右侧划入屏幕同样占全屏覆盖，应该有悬浮的半透明收起按钮，点击后收起详情页（右栏）。"*
  *
- * 🔴 **判据用 `matchMedia`，与 CSS 的断点共用同一个数字（900）**——
+ * 🔴 **判据用 `matchMedia`，与 CSS 的断点共用同一个数字（700）**——
  *    ⚠️ **不能在 JS 里另写一个数字**（本项目铁律"实现只留一份"：
  *    两处各写一份，迟早会出现"CSS 认为是窄屏、JS 认为是宽屏"的错位，
  *    表现为**栏滑出去了但按钮没生成**这种半坏状态）。
- * ⚠️ 阈值与 CSS 的 `@media (max-width: 900px)` **必须一致**（改一处就要改两处，见注释）。
+ * ⚠️ 阈值与 CSS 的 `@media (max-width: 700px)` **必须一致**（改一处就要改两处，见注释）。
  */
-const NARROW_QUERY = '(max-width: 900px)'
+const NARROW_QUERY = '(max-width: 700px)'
 function isNarrow() {
   return window.matchMedia(NARROW_QUERY).matches
 }
@@ -3942,7 +3942,7 @@ function attachNarrowSwipe(panel, detail) {
  * ⇒ 所以**变宽就清掉所有打开态**（回到"默认看列表"），这也正是用户要的语义。
  *
  * ⚠️ **用 `resize` 而不是 `matchMedia` 的 `change`**：本函数要处理的不只是
- *    "跨过 900 这条线"，还包括"按钮还没生成"等情况；`resize` 覆盖面更大、
+ *    "跨过 700 这条线"，还包括"按钮还没生成"等情况；`resize` 覆盖面更大、
  *    而且这里做的事很轻（几次属性读写）⇒ 不必为省这点开销引入两套监听。
  */
 function syncNarrowOnResize() {
@@ -7207,7 +7207,7 @@ function bindNarrowEditorButtons() {
  *    （第四十九批加的）。窄屏下左栏是**从右侧滑出的覆盖层**，
  *    再在它里面展开正文块会**极其局促**（半屏宽里塞一个正文区）——
  *    用户明确说不要。
- * ⚠️ **判据用 `isNarrow()`**（与 CSS 断点同一个 900），不在别处另写数字。
+ * ⚠️ **判据用 `isNarrow()`**（与 CSS 断点同一个 700），不在别处另写数字。
  * @returns 是否应当**跳过**详情展开（true = 窄屏，不展开）。
  */
 function skipEntryDetailOnNarrow() {
@@ -9419,7 +9419,7 @@ function renderPromptsJump() {
  * 🔴 **为什么必须分流**（用户要求"窄屏就用现在的设计"）：
  *   · **宽屏**：右栏是**详情区** —— 显示选中那条；卡片本体**不再展开**。
  *   · **窄屏**：**没有右栏** ⇒ 保持原设计：点卡片就地展开它的编辑区。
- *   ⚠️ 判据用 `isNarrow()`（与 CSS 断点共用 900），**不另写数字**。
+ *   ⚠️ 判据用 `isNarrow()`（与 CSS 断点共用 700），**不另写数字**。
  */
 function renderPromptsDetailOrInline() {
   const detail = document.getElementById('prompts-detail')
@@ -9565,7 +9565,7 @@ function promptCard(row) {
   // 🔴 **两种行为按宽度分流**（用户要求"窄屏就用现在的前端设计"）：
   //    · **宽屏**：点一下把这条**选中到右栏**（右栏是唯一的编辑场所）；
   //    · **窄屏**：没有右栏 ⇒ 点一下**就地展开**它的编辑区（原设计）。
-  //    ⚠️ 判据用 `isNarrow()`（与 CSS 断点共用 900，不另写数字）。
+  //    ⚠️ 判据用 `isNarrow()`（与 CSS 断点共用 700，不另写数字）。
   card.classList.add('prompt-card-clickable')
   if (!isNarrow() && it.key === promptState.selected) card.classList.add('prompt-card-active')
   card.addEventListener('click', (e) => {

@@ -264,7 +264,7 @@ main { flex: 1 1 auto; min-height: 0; display: flex; }
         ⇒ 这就是 `.filter-body > .filter-body-inner` 这层包装存在的原因。
 
    ⚠️ **宽屏完全不受影响**：`.filter-toggle` 隐藏、`.filter-body` 永远是展开态
-      （下面的规则只在 `@media (max-width: 900px)` 里改它）。
+      （下面的规则只在 `@media (max-width: 700px)` 里改它）。
    ══════════════════════════════════════════════════════════════════════════ */
 
 /* ⭐ 头部那一行：**宽屏下只是一行计数**（按钮不占位 ⇒ 视觉与改动前一致）。
@@ -307,13 +307,13 @@ main { flex: 1 1 auto; min-height: 0; display: flex; }
    ⭐ 做法：两份**都写在 DOM 里**，由 CSS 按宽度切 —— 不用 JS
      （这是"显示问题"，用断点才与其它窄屏规则同源；也免得缩放时要同步两份文案）。
    ⚠️ **默认**（宽屏）：显示 `.wide-only`、隐藏 `.narrow-only`；
-      **窄屏反过来** —— 那两条规则写在**下面那个已有的 900 块里**
+      **窄屏反过来** —— 那两条规则写在**下面那个已有的 700 块里**
       （⚠️ **不要在这里另起一个 `@media`** —— 那会与紧接着的那个块**嵌套**，
         实测过一次，会让整个文件的括号结构错位）。 */
 .wide-only { display: inline; }
 .narrow-only { display: none; }
 
-@media (max-width: 900px) {
+@media (max-width: 700px) {
   /* ⭐ 两份文案反转（见上一条的说明）。 */
   .wide-only { display: none; }
   .narrow-only { display: inline; }
@@ -1040,7 +1040,7 @@ button.danger:hover { background: var(--hover); }
    ⚠️ **必须同时加 `overflow-x:auto` 与 `flex-wrap:nowrap`** ——
       只加前者而允许换行，仍然会折行（那才是本次的真实症状）。
    ⚠️ 作用域**只到窄屏**：宽屏放得下、保持原来的样子。 */
-@media (max-width: 900px) {
+@media (max-width: 700px) {
   .subtabs {
     flex-wrap: nowrap;
     overflow-x: auto;
@@ -1650,9 +1650,9 @@ footer {
 
 /* ── 窄屏退化：两栏改上下堆叠（§12-75 的【我默认】）────────────────── */
 
-@media (max-width: 900px) {
+@media (max-width: 700px) {
   /* ══════════════════════════════════════════════════════════════════════
-     ⭐⭐⭐ 窄屏（≤900px）：**左右栏 → 全屏两级导航**
+     ⭐⭐⭐ 窄屏（≤700px）：**左右栏 → 全屏两级导航**
      （用户 2026-09-24 要求）
 
      用户原话：*"所有有左右栏排版的页面（项目热知识的项目热知识编辑页另外设计先不动）。
@@ -2341,8 +2341,8 @@ footer {
   box-shadow: inset 3px 0 0 var(--accent);
 }
 
-/* 窄屏（≤900px）：**保持原设计** —— 单列、卡片就地展开、右栏不出现 */
-@media (max-width: 900px) {
+/* 窄屏（≤700px）：**保持原设计** —— 单列、卡片就地展开、右栏不出现 */
+@media (max-width: 700px) {
   .prompt-split {
     display: block;
     overflow: auto;
@@ -2581,7 +2581,7 @@ dialog.ask-dlg:not([open]) { display: none; }
 }
 
 /* 窄屏：弹窗里的两栏改上下（220px 的列表会挤没预览区） */
-@media (max-width: 900px) {
+@media (max-width: 700px) {
   .prompt-dlg { width: 96vw; max-height: 88vh; }
   .prompt-dlg-body { flex-direction: column; }
   .prompt-dlg-list {
@@ -2594,13 +2594,13 @@ dialog.ask-dlg:not([open]) { display: none; }
 }
 
 /* 窄屏：说明表改单列（两列在窄屏会把值挤成一列一个字） */
-@media (max-width: 900px) {
+@media (max-width: 700px) {
   .prompt-meta { grid-template-columns: 1fr; gap: 1px; }
   .prompt-meta-label { margin-top: 4px; }
 }
 
 /* 窄屏：控件行改为竖排（标签在上、控件在下），否则数字框会被挤 */
-@media (max-width: 900px) {
+@media (max-width: 700px) {
   .set-head { padding: 12px 14px 0; }
   .set-scroll { padding: 12px 14px 28px; }
   .set-row { flex-wrap: wrap; }
@@ -2744,7 +2744,7 @@ dialog.ask-dlg:not([open]) { display: none; }
      ⭐ 判据：**并列选择器里只要有一个成员"只在某种条件下适用"，
        整组就该跟着那个条件**（否则另一个成员会被无关的条件改造）。
      ⚠️ 唯一的全局例外是下面那条 `display:none` —— 见它的注释。 */
-@media (max-width: 900px) {
+@media (max-width: 700px) {
   .narrow-back,
   .panel:not(#hot-project-editor, .hot-scroll) > .side > .toc-btn {
   position: absolute;
@@ -2817,7 +2817,7 @@ dialog.ask-dlg:not([open]) { display: none; }
     writing-mode: horizontal-tb;
   }
   /* ⭐ **只在"窄屏 + 通用两栏页 + 详情栏已滑入"时显示**（编辑页不在其列）。
-     ⚠️ 与 JS 的 `isNarrow()`（同为 900px）**是两个必须一致的数字**，改一处要改两处。 */
+     ⚠️ 与 JS 的 `isNarrow()`（同为 700px）**是两个必须一致的数字**，改一处要改两处。 */
   .panel:not(#hot-project-editor, .hot-scroll)[data-narrow-open='1'] > .narrow-back { display: flex; }
   /* ⭐ 目录按钮**跟着面板打开态显隐**（用户要求"只有展开详情页时才显示"）——
      它挂在 `.side` 上、不在 `.detail` 里，所以这里要单独写一条。 */
@@ -3074,7 +3074,7 @@ dialog.ask-dlg:not([open]) { display: none; }
 }
 
 /* ⚠️ 窄屏：卡片左缩进在小屏上很浪费横向空间 ⇒ 收掉。 */
-@media (max-width: 900px) {
+@media (max-width: 700px) {
   .jev-card { margin-left: 0; }
   .jev-row { flex-wrap: wrap; }
 }
@@ -3084,7 +3084,7 @@ dialog.ask-dlg:not([open]) { display: none; }
    **这里不再需要改布局**，只把第 1 行的节名压缩一点，别让"可截断 + 删除"被挤出去。
    🔴 保留本段的理由：**窄屏曾经因为漏给行列而错位过**（删除按钮跑到第 1 行与节名挤在一起）
       ⇒ 留一条显式声明 + 这句注释，提醒后来人**新增元素时要给行列**。 */
-@media (max-width: 900px) {
+@media (max-width: 700px) {
   .tpl-sec { grid-template-columns: minmax(60px, 1fr) auto auto; }
   .tpl-sec-name { grid-column: 1; grid-row: 1; }
   .tpl-sec-trunc { grid-column: 2; grid-row: 1; }
