@@ -403,12 +403,59 @@ export function detectProfile(): { name: string; via: string } {
  * @param registry - 走哪个源。
  * @returns 传给 `node <bin.js>` 的参数数组。
  */
+/**
+ * 🔴 **版本号格式是否合法**（`1.2.3` 或 `1.2.3-rc.1`）。
+ *
+ * ── 为什么必须校验（bili-scroll 的做法，我照抄）────────────────────────
+ * `want` 是从**面板传上来的**（它来自 `/update` 的 `latest`），而 `latest`
+ * 又来自**网络**（镜像 / 假源 / 将来某个坏掉的 registry）。
+ * ⇒ 不校验就把它拼进命令，最坏会得到 `dsh-memj@undefined` 这种**非法包规格**，
+ *   pnpm 会报一句跟根因无关的错（或者更糟：把它当成一个 tag 名去装）。
+ *
+ * ⚠️ **只做"够用"的校验**：本仓版本形如 `0.1.4` / `0.1.5-rc.2`，够用就行，
+ *    不追求完整 semver（不需要处理 `1.2.3+build`，本仓没用过）。
+ * @param v - 待校验的版本号。
+ * @returns 是否形如一个合法版本号。
+ */
+export function isValidVersion(v: string): boolean {
+  return /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(String(v ?? '').trim())
+}
+
+/**
+ * 组装升级命令的参数（**纯函数，可离线断言**）。
+ *
+ * 🔴🔴 **`--registry` 必须写等号形式** —— 空格形式在桌面版的
+ *   `runProfilePnpm` 里会被当成未知选项（它只 filter `startsWith('--registry=')`）。
+ *   Web 端两种都行 ⇒ **统一用等号**，两端都过。
+ *   ⭐ 这条来自 bili-scroll 的真机结论（桌面版报 `Unknown option: 'registry'`）。
+ *
+ * 🔴🔴 **必带明确版本号**（`<包>@<版本>`）：profile 里写的是**精确版本**，
+ *    只给包名时 pnpm 一看"这个名字已经在依赖里了"就跳过，**根本不看有没有新版**
+ *    ⇒ 输出 `Already up to date`、**退出码 0、版本没变**（bili-scroll 实测踩过）。
+ *
+ * ⚠️ **与 bili-scroll 的一处刻意不同**：它在拿不到版本号时会**退回裸包名**
+ *    （注释写"老行为，至少不会更差"）。但那条路**必然导致"显示成功、版本没变"**，
+ *    而这正是这条功能最该避免的失败方式。
+ *    ⇒ 我选择**不退回**：`buildUpgradeArgs` 遇到非法版本号直接抛，
+ *      由 `startUpgrade` 转成一句人话错误（"没有目标版本号，无法升级"）。
+ *    ⭐ 判据：**宁可明确失败，也不要一次"看起来成功"的空操作。**
+ * @param profile - 目标 profile 名。
+ * @param want - 目标版本号（**必须合法**，见 `isValidVersion`）。
+ * @param registry - 走哪个源。
+ * @returns 传给 `node <bin.js>` 的参数数组。
+ * @throws 版本号不合法时（调用方要处理 —— 这是**程序错误**，不是用户输入错）。
+ */
 export function buildUpgradeArgs(profile: string, want: string, registry: string): string[] {
+  const v = String(want ?? '').trim()
+  if (!isValidVersion(v)) {
+    // ⚠️ 抛而不是降级（理由见函数头）。
+    throw new Error(`版本号不合法：「${v}」—— 无法组装升级命令`)
+  }
   return [
     'plugin',
     '--profile', profile,
     'add',
-    `${PKG_NAME}@${want}`,
+    `${PKG_NAME}@${v}`,
     `--registry=${registry}`,
   ]
 }
@@ -620,6 +667,20 @@ export function startUpgrade(
   logFile: string,
 ): { ok: boolean; busy?: boolean; started?: boolean; error?: string; hint?: string } {
   if (upgrading) return { ok: true, busy: true, hint: '正在升级，别重复点' }
+
+  // 🔴🔴 **先校验版本号，再做任何别的事**（2026-10-20 补，照 bili-scroll 的做法）。
+  //    理由见 `buildUpgradeArgs`：`want` 来自网络查到的 `latest`，不校验就会
+  //    拼出 `dsh-memj@undefined` 这类非法包规格。
+  //    ⚠️ **不退回裸包名**（bili-scroll 会退），因为裸包名**必然**是
+  //       "退出码 0、版本没变"——那正是这条功能最该避免的失败方式。
+  if (!isValidVersion(want)) {
+    return {
+      ok: false,
+      error: `没有拿到合法的目标版本号（收到「${want}」）—— 无法升级。`
+        + '请先点「检查更新」拿到最新版本号，再点升级。',
+    }
+  }
+
   // ⚠️ **用 `resolveDshEntry()`**（它同时处理 CLI 与桌面版）——
   //    原来只读 `argv[1]`，在桌面版下必然失败（那时 argv[1] 是 Electron 主进程入口）。
   const entry = resolveDshEntry()

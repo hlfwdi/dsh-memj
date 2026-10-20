@@ -16,6 +16,7 @@ import { entriesDir, libraryRoot, resolveRef } from './paths.ts'
 import {
   appendLogFile,
   checkUpdate,
+  isValidVersion,
   startUpgrade,
   upgradeLogPath,
   upgradeStatus,
@@ -4053,8 +4054,16 @@ export async function handleApi(
       const want = typeof p.version === 'string' ? p.version.trim() : ''
       // 🔴 **必须带明确版本号**：profile 里写的是精确版本，只给包名时
       //    pnpm 会说 "Already up to date" 什么也不做（bili-scroll 实测）。
+      //    ⭐ 而且**要校验格式**：这个值来自 `/update` 的 `latest`（网络数据），
+      //       不校验就会拼出 `dsh-memj@undefined` 这类非法包规格。
       if (want === '') {
         return { status: 400, body: { ok: false, error: '缺少 version（要升到哪个版本）' } }
+      }
+      if (!isValidVersion(want)) {
+        return {
+          status: 400,
+          body: { ok: false, error: `version 不是合法版本号：「${want}」（应形如 0.1.5 或 0.1.5-rc.2）` },
+        }
       }
       const r = startUpgrade(want, upgradeLogPath(libraryRoot()))
       return { status: r.ok ? 200 : 500, body: r }

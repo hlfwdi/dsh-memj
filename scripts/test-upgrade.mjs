@@ -102,6 +102,46 @@ check('⭐⭐ 没有把 --registry 与 url 拆成两个元素',
 check('⭐⭐⭐ 包规格带明确版本号（否则 pnpm 什么都不做）',
   args.includes('dsh-memj@0.1.5'), args.join(' '))
 
+// ⭐ 版本号格式校验（2026-10-20 补，照 bili-scroll 的做法）：
+//    `want` 来自**网络**（`/update` 的 `latest`）⇒ 不校验就会拼出 `dsh-memj@undefined`。
+check('⭐⭐ isValidVersion 认 0.1.4', mod.isValidVersion('0.1.4') === true)
+check('⭐⭐ isValidVersion 认 0.1.5-rc.2（预发布）', mod.isValidVersion('0.1.5-rc.2') === true)
+for (const bad of ['', 'undefined', 'latest', 'v0.1.5', '0.1', '^0.1.5', '0.1.5.6.7.8.9.10']) {
+  check(`⭐⭐ 拒绝非法版本号 ${JSON.stringify(bad)}`, mod.isValidVersion(bad) === false, bad)
+}
+
+// 🔴🔴 **与 bili-scroll 的一处刻意不同，必须有断言守着**：
+//    它在拿不到版本号时**退回裸包名**（`pnpm add dsh-memj`），
+//    而那条路**必然**输出 `Already up to date`、退出码 0、版本没变
+//    —— 正是这条功能最该避免的失败方式。
+//    ⇒ 我们**不退回**：非法版本号直接抛（`startUpgrade` 转成人话错误）。
+let threw = false
+try {
+  mod.buildUpgradeArgs('web', '', 'https://registry.npmmirror.com')
+} catch {
+  threw = true
+}
+check('⭐⭐⭐ 没版本号时【抛错】而不是退回裸包名（避免"显示成功却没升级"）', threw)
+check('⭐⭐ 错误文案说明"无法组装升级命令"',
+  (() => {
+    try {
+      mod.buildUpgradeArgs('web', 'undefined', 'https://x')
+      return false
+    } catch (e) {
+      return /无法组装升级命令/.test(e.message)
+    }
+  })())
+// ⚠️ 反向：**绝不能**在非法版本时拼出裸包名那种规格
+check('⭐⭐ 非法版本号不会产出 `dsh-memj`（裸包名）这种规格',
+  (() => {
+    try {
+      const a = mod.buildUpgradeArgs('web', 'latest', 'https://x')
+      return !a.includes('dsh-memj')
+    } catch {
+      return true // 抛了就不会产出，符合预期
+    }
+  })())
+
 // ══════════════════════════════════════════════════════════════════════════
 // 2. profile 探测（写死 `web` 会升错实例）
 // ══════════════════════════════════════════════════════════════════════════
