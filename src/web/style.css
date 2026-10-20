@@ -537,7 +537,24 @@ table.fm td {
 .md blockquote { border-left: 4px solid var(--border); margin: 1em 0; padding: .2em 1em; color: var(--fg-dim); background: var(--bg-2); }
 .md a { color: var(--accent); text-decoration: none; word-break: break-word; }
 .md a:hover { text-decoration: underline; }
-.md img { max-width: 100%; }
+/* ⭐⭐ 正文图片（2026-10-19）——以前只有 `max-width`，因为**图永远裂**、
+ *    就算写了别的也看不出来。现在真能显示之后补三条：
+ *    · `height:auto`  ⇒ 只限宽不限高，否则宽高比会被压扁；
+ *    · `display:block`+`margin` ⇒ 避免 img 的行内基线在下方留一道白缝；
+ *    · `background`+`min-height` ⇒ **加载中/取不到时给一块可见的牌子**，
+ *      而不是一个 0×0 的空洞（比"什么都不显示"诚实，也更好排查）。
+ *  ⚠️ 不写 `object-fit`：那是给"固定尺寸的容器"用的，这里尺寸由图片自己决定。 */
+.md img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 1em 0;
+  border-radius: 6px;
+  background: var(--bg-2);
+  min-height: 2em;
+}
+/* 裂图时浏览器会画出自己的破图标；把 `alt` 文字放大一点，至少能看出原图讲什么 */
+.md img::after { font-size: .9em; color: var(--fg-dim); }
 .md hr { border: none; border-top: 1px solid var(--border); margin: 2em 0; }
 
 /* ── ⭐⭐ 详情页目录（决策 132）────────────────────────────────────────

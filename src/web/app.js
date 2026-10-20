@@ -420,11 +420,63 @@ function linkifyEntryIds(root) {
 }
 
 /**
+ * ⭐⭐⭐ **把正文里的图片指向能真正取到的地址**（2026-10-19 新增）。
+ *
+ * ── 不修会怎样（真机实测）─────────────────────────────────────────────────
+ * `![](docs/screenshots/01-kb.jpg)` 渲染成 `<img src="docs/screenshots/01-kb.jpg">`,
+ * 而浏览器按**当前页面地址**去解析相对路径 ⇒ `http://…/plugins/dsh-memj/docs/screenshots/01-kb.jpg`
+ * ⇒ **实测 404**（那一页的静态目录只有 app.js / index.html / style.css 三个文件）。
+ * ⭐ 注意它与文档在磁盘上的位置**完全无关** —— 所以"图裂"不是路径写错了，
+ *   而是**渲染器从来没人做过这一步**（`marked` 只负责生成标签，不管地址解析）。
+ *
+ * ── 这里做什么 ────────────────────────────────────────────────────────────
+ * | 图片 `src` 形态 | 处理 |
+ * |---|---|
+ * | `http(s)://…` / `data:` / 协议相对 `//…` | **原样保留**（外链图本来就能显示） |
+ * | 其它（相对路径、`img/x.png`、`./a.png`） | 改写成 `/asset?entry=<id>&path=<原值>` |
+ *
+ * 🔴 **判据是"它是不是绝对地址"，不是"它有没有 .png 后缀"** —— 后者会把
+ *    带查询串的、无扩展名的、CDN 上的全都误伤。
+ *
+ * ⚠️ **为什么必须由服务端配一条 `/asset`，而不是直接拼 `file://`**：
+ *    `file://` 在 `http:` 页面里会被浏览器**直接拒绝**（跨协议），
+ *    且那等于把本机任意路径交给页面去读（安全问题，用户已明确限定范围）。
+ *
+ * @param root - `marked` 刚渲染好的正文容器（原地修改）。
+ * @param entryId - 当前条目 id（`/asset` 靠它决定"能读哪个目录"）。
+ */
+function localizeImages(root, entryId) {
+  if (typeof entryId !== 'string' || entryId === '') return
+  // ⚠️ 绝对地址：有 scheme（`https:`、`data:`、`file:`…）或以 `//` 开头（协议相对）。
+  const ABSOLUTE_RE = /^(?:[a-zA-Z][a-zA-Z0-9+.-]*:|\/\/)/
+  for (const img of root.querySelectorAll('img')) {
+    const src = (img.getAttribute('src') ?? '').trim()
+    if (src === '' || ABSOLUTE_RE.test(src)) continue
+    // ⭐ 用 `getAttribute` 读**原始值**（未解码）——`img.src` 拿到的是浏览器
+    //    已经解析过的**绝对 URL**（还带上了错误的基准），拿它再拼等于把
+    //    "页面地址"烙进结果里，换个部署路径就全废。
+    img.setAttribute(
+      'src',
+      `${API}/asset?entry=${encodeURIComponent(entryId)}&path=${encodeURIComponent(src)}`,
+    )
+    // ⚠️ 取不到时**别让用户对着一个破图标猜**：把 `alt` 提到 `title` 上，
+    //    浏览器悬停就能看见原文写的是什么（`alt` 本身仍由 marked 填）。
+    const alt = (img.getAttribute('alt') ?? '').trim()
+    if (alt !== '') img.setAttribute('title', alt)
+    // 🔴 `onerror` 用**属性字符串**而不是 `addEventListener`：这条 img 是
+    //    `innerHTML` 造出来的，将来整块被 `replaceChildren` 换掉时监听器自然消失；
+    //    而写成属性也让"图裂了"这件事**在 DOM 上可查**（探针与用户都能看见）。
+    img.setAttribute('data-asset-src', src)
+  }
+}
+
+/**
  * 渲染正文：能渲染就渲染，**断网就原样显示**（决策 86：不做降级解析）。
  * @param body - markdown 原文。
+ * @param entryId - 当前条目 id（**可选**：给了才能把相对图片指向 `/asset`）。
  * @returns 承载内容的元素。
  */
-function renderBody(body) {
+function renderBody(body, entryId) {
   const wrap = h('div', { class: 'md' })
   if (setupMarked()) {
     try {
@@ -439,6 +491,10 @@ function renderBody(body) {
       })
       // ⭐⭐ **条目 id 可点**（决策 137）——必须在 `innerHTML` 之后做。
       linkifyEntryIds(wrap)
+      // ⭐⭐⭐ **图片地址本地化**（2026-10-19）——同样必须在 `innerHTML` 之后做，
+      //    而且必须**在 `linkifyEntryIds` 之后**：那个函数会把 `<code>` 换成 `<a>`，
+      //    但它不碰 `img`；两者顺序其实无关，放这里只为"所有后处理挨在一起"。
+      localizeImages(wrap, entryId)
       return wrap
     } catch {
       wrap.replaceChildren()
@@ -1905,7 +1961,7 @@ async function renderEntryDetail(id, opts = {}) {
     box.append(h('div', { class: 'notice err', text: '⚠️ 正文文件不存在（ref 指向的文件读不到）。' }))
     return
   }
-  const md = renderBody(data.body ?? '')
+  const md = renderBody(data.body ?? '', id)
   box.append(md)
   // ⭐ 目录（决策 132）：判据是"正文非空"，正文为空时不显示按钮。
   attachToc(box, md, data.body ?? '')
@@ -2498,6 +2554,12 @@ async function renderProjectDetail(id, opts = {}) {
       ),
     )
   }
+  // ⭐ **不传 entryId**（2026-10-19 图片本地化）：这一页渲染的是**项目 handoff 文档**，
+  //    它不对应任何一条封面 ⇒ 没有 entry id、也就没有"基准目录"可用。
+  //    ⚠️ 于是项目文档里的相对图片**仍然取不到**。这是**已知且如实保留**的边界，
+  //    不是漏改：给它编一个 id 只会让 `/asset` 回 404，反而更难查。
+  //    ⇒ 若将来要支持，正确做法是服务端给 `/project` 也回一个 `assetBase`
+  //      （那需要另一个接口 `/asset?project=<id>&path=`），而不是在前端猜。
   const md = renderBody(data.narrative ?? '')
   // ⭐⭐⭐ **规范块就地编辑**（决策 220，2026-10-12 用户要求）——
   //    用户原话：*"就 memj 存量的项目文档，章节下的章节规范，我希望也变成可编辑的。
@@ -3090,7 +3152,7 @@ async function renderPendingDetail(id) {
           ),
         )
       }
-      const md = renderBody(data.body ?? '')
+      const md = renderBody(data.body ?? '', n.entryId)
       box.append(md)
       // ⭐ 目录（决策 132）——与知识库详情同一条渲染路径，故同样支持目录。
       attachToc(box, md, data.body ?? '')
@@ -8484,7 +8546,7 @@ async function renderHotEntryDetail() {
           : '这条没有正文（或正文为空）。',
       }))
     } else {
-      bodySlot.append(renderBody(body))
+      bodySlot.append(renderBody(body, id))
     }
   } catch (e) {
     // ⚠️ 失败**不静默**：如实说，并保留"收起正文"按钮（否则用户被困在这块里）。

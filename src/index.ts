@@ -571,6 +571,19 @@ export function apply(ctx: Context, config: MemjConfig = DEFAULT_CONFIG): void {
           rawBody,
           url.searchParams,
         )
+        // ⭐⭐ **`raw` 分支：按字节回**（2026-10-19，`/asset` 读图片用）。
+        //    🔴 **必须在 JSON 分支【之前】**：图片是二进制，走 `JSON.stringify`
+        //       会变成 `{"type":"Buffer","data":[…]}` —— HTTP 200、Content-Type 也对，
+        //       但**图片打不开**。这个失败比"路由没注册返回 HTML"更难查（两者都裂图）。
+        if (result.raw !== undefined) {
+          res.writeHead(result.status, {
+            'Content-Type': result.raw.contentType,
+            'Content-Length': String(result.raw.bytes.length),
+            'Cache-Control': result.raw.cacheControl ?? 'no-store',
+          })
+          res.end(result.raw.bytes)
+          return
+        }
         res.writeHead(result.status, {
           'Content-Type': 'application/json; charset=utf-8',
           'Cache-Control': 'no-store',
@@ -602,6 +615,12 @@ export function apply(ctx: Context, config: MemjConfig = DEFAULT_CONFIG): void {
       `${API_BASE}/rebuild`,
       // ⭐ 详情数据源（§8.2：按 id 取，不靠前端拼路径）
       `${API_BASE}/entry`,
+      // ⭐⭐⭐ **正文里的图片**（2026-10-19）——`/asset?entry=<id>&path=<相对路径>`。
+      //    🔴 **漏了这行就静默失败**：请求落到 SPA 兜底、返回 **HTML** ⇒
+      //       浏览器把它当图片 ⇒ 图**全裂**，而服务端**毫无异常**、HTTP 也 200。
+      //       ⚠️ 这是本项目第 N 次踩同一个形状（`/models`、`/archived`、`/jev-status`…），
+      //          靠的仍是 `test-web-api.mjs`【0】那条路由一致性检查当场抓。
+      `${API_BASE}/asset`,
       `${API_BASE}/project`,
       // ⭐ 主题详情（决策 106，与 `/project` 对称）——供主题页右栏
       `${API_BASE}/theme`,
@@ -873,7 +892,10 @@ export type {
 } from './handoff.ts'
 // ⚠️ `handleApi` 一并导出：测试脚本要直接跑**与真实路由同一入口**的处理器
 //    （`scripts/test-web-api.mjs`）。它现在是静态导入，导出即内联进主 chunk。
-export { handleApi } from './api.ts'
+// ⭐⭐ `assetBaseDirOf` / `resolveAssetPath` 一并导出（2026-10-19）：
+//    `scripts/test-asset.mjs` 要**直接验那两个纯函数**（越界判据、扩展名白名单），
+//    不必起服务、也不必造一个真实例。⭐ 与 `handleApi` 同一理由：**测真实入口**。
+export { assetBaseDirOf, handleApi, resolveAssetPath } from './api.ts'
 // ⭐⭐ **封面删改通道**（决策 114）——实现只有一份（`edit.ts`），
 //    LLM 侧（`memj_promote`）与人侧（网页 API）**共用**；
 //    这里导出是为了让测试能直接验"两侧确实调的是同一套实现"。

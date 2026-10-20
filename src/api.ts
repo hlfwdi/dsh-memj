@@ -12,7 +12,9 @@
  * @module dsh-memj/api
  */
 
-import { resolveRef } from './paths.ts'
+import { entriesDir, libraryRoot, resolveRef } from './paths.ts'
+import { dirname, extname, isAbsolute, relative, resolve as resolvePath, sep } from 'node:path'
+import { stat, readFile } from 'node:fs/promises'
 // ⭐⭐⭐ 提示词覆盖（本次新增）：清单 / 详情 / 保存 / 恢复 / 历史。
 import {
   PROMPT_SPECS,
@@ -207,6 +209,16 @@ export interface ApiDeps {
 export interface ApiResult {
   status: number
   body: unknown
+  /**
+   * ⭐⭐ **按字节回的响应**（2026-10-19 新增，`/asset` 用）——给了就**跳过 JSON 序列化**。
+   *
+   * 🔴 **为什么必须加这条路**：图片是二进制，`JSON.stringify(Buffer)` 会把它变成
+   *    `{"type":"Buffer","data":[…]}` 这种 JSON ⇒ 浏览器拿到的是"看起来像图片的文本"。
+   *    ⚠️ 而且这个失败**很隐蔽**：HTTP 200、Content-Type 也改对了，
+   *    只有图片**打不开**（和"路由没注册、返回 HTML"是两种不同的裂法）。
+   * ⚠️ `contentType` 必填（`res.writeHead` 需要）；`body` 字段此时**不再使用**。
+   */
+  raw?: { contentType: string; bytes: Uint8Array; cacheControl?: string }
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -683,6 +695,180 @@ function normalizeKindDefs(raw: unknown): KindDef[] | undefined {
     })
   }
   return out
+}
+
+/**
+ * ⭐⭐ **条目的「图片基准目录」**（2026-10-19 新增）——`/asset` 与 `/entry` 共用这一份判据。
+ *
+ * ── 要解决什么 ───────────────────────────────────────────────────────────
+ * 知识正文里的 `![](docs/screenshots/x.png)` 是**相对路径**，而浏览器解析它时
+ * 用的基准是 **memj 页面自己**（`/plugins/dsh-memj/`）⇒ 与文档在磁盘上的位置无关
+ * ⇒ **所有相对图必然 404**（实测：库内 789 条 + 28 份项目文档正文里没有图片，
+ *   但 ext 外链的 README 有 15 张、大模型大师课有 5 张）。
+ *
+ * ── 基准怎么算（**必须与写入侧同源**）──────────────────────────────────
+ * | 条目类型 | 正文文件在哪 | 基准目录 |
+ * |---|---|---|
+ * | **内部条目**（`ext: false`） | 库根 + `ref` | `ref` 所在目录（通常 `entries/`） |
+ * | **外部引用**（`ext: true`） | `ref` 本身就是绝对路径 | **它所在的目录** |
+ *
+ * ⭐ 两种情况其实是**同一个式子**：`dirname(正文文件绝对路径)`。
+ *   ⇒ 抽成一个函数，`/asset`（读图）与 `/entry`（回 `assetBase`）都调它 ——
+ *   **同一条判据只有一个出处**（本项目吃过"两份判据必然漂移"的亏）。
+ *
+ * @param ref - 封面上的 `ref`。
+ * @param ext - 是否为外部引用。
+ * @returns 基准目录的绝对路径；`ref` 解析不出来时 `undefined`。
+ */
+export function assetBaseDirOf(ref: string, ext: boolean): string | undefined {
+  const abs = resolveRef(ref, ext)
+  if (abs === undefined || abs === '') return undefined
+  return dirname(resolvePath(abs))
+}
+
+/**
+ * 🔴🔴 **允许当作图片读回来的扩展名白名单**（用户 2026-10-19 裁定）。
+ *
+ * ⭐ **为什么是白名单而不是黑名单**：这个接口会**读磁盘上的真实文件**。
+ *   黑名单式的"排除 .js/.html"永远漏（`.mjs`、`.cjs`、`.map`、将来别的新扩展名）
+ *   ⇒ 一个越界漏洞就被放过去了。白名单的失败方向是**安全**的：
+ *   新扩展名**读不出来**，而不是"读出了不该读的东西"。
+ * ⚠️ 刻意**不含 `.svg`**：SVG 里可以内嵌 `<script>`，用 `<img>` 引用虽不执行脚本，
+ *   但同源直接打开该 URL 就会执行 ⇒ 留一个本机 XSS 面，不值得。
+ *   本项目自己的图标是内联在 `index.html` 里的，不走这条路。
+ */
+const ASSET_EXT_ALLOW: ReadonlySet<string> = new Set([
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.avif', '.ico',
+])
+
+/** 扩展名 → MIME。⚠️ 只覆盖白名单里那些（其余根本进不来，见上）。 */
+const ASSET_MIME: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.bmp': 'image/bmp',
+  '.avif': 'image/avif',
+  '.ico': 'image/x-icon',
+}
+
+/** 单张图片的大小上限（与 `index.ts` 的 `MAX_STATIC_BYTES` 同值，免得两处不一致）。 */
+const MAX_ASSET_BYTES = 4 * 1024 * 1024
+
+/**
+ * ⭐⭐⭐ **把「相对图片路径」解析成一个绝对文件路径，并验明它**不会越界**。
+ *
+ * 🔴🔴 **四条安全约束（缺一条这个接口就成了任意文件读取）**：
+ *  ① `rel` 必须是**相对路径**（绝对路径、带盘符、`file:` 一律拒）；
+ *  ② `..` 段一律拒（**先按路径段判，不靠字符串前缀**）——
+ *     注意解码时机：调用方传进来的应是**已 `decodeURIComponent` 的原文**；
+ *  ③ `resolve` 之后再用 `path.relative` **验一次**结果仍在 `base` 内
+ *     （挡掉 Windows 上的 `\\?\`、盘符大小写、以及段判漏掉的花样）；
+ *  ④ 扩展名必须在**白名单**里，且是常规文件（`isFile()`，挡掉目录与设备文件）。
+ *
+ * ⚠️ **为什么段判与 `relative` 判都要留**：段判能给出更清楚的错误（"不许 .."），
+ *   `relative` 判是最后一道兜底 —— 本项目对安全边界一律**纵深防御**，不赌单个判据完备。
+ *
+ * @param baseAbs - 基准目录的绝对路径（来自 `assetBaseDirOf`）。
+ * @param rel - 正文里写的相对路径（未 URL 解码前的语义由调用方保证）。
+ * @returns 绝对路径 + MIME；任何一条约束不过 ⇒ `{ error }`（带可读理由）。
+ */
+export async function resolveAssetPath(
+  baseAbs: string,
+  rel: string,
+): Promise<{ abs: string; contentType: string } | { error: string }> {
+  const cleaned = rel.trim()
+  if (cleaned === '') return { error: '缺少 path' }
+  // ① 绝对路径一律拒（`isAbsolute` 认得出 `/x`、`C:\x`、`\\server\x`）。
+  //    ⚠️ 还要挡 `file:` 之类的 scheme —— 它们不是路径，但会被 resolve 当成相对名。
+  if (isAbsolute(cleaned) || /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(cleaned)) {
+    return { error: 'path 必须是相对路径' }
+  }
+  // ② 段判：任何 `..` 直接拒（**先于**任何字符串拼接）。
+  const segments = cleaned.replace(/\\/g, '/').split('/')
+  if (segments.some((s) => s === '..')) return { error: 'path 不许包含 ..' }
+  if (segments.some((s) => s === '' || s === '.')) {
+    // 允许 `a//b` 这种冗余斜杠，但拒绝空路径段造成的歧义 —— 归一化掉即可。
+  }
+  // ③ 拼出来再用 relative 验一次。
+  const abs = resolvePath(baseAbs, ...segments.filter((s) => s !== '' && s !== '.'))
+  const relCheck = relative(baseAbs, abs)
+  if (relCheck === '' || relCheck.startsWith('..') || isAbsolute(relCheck)) {
+    return { error: 'path 越出了正文所在目录' }
+  }
+  // ④ 扩展名白名单 + 必须是常规文件。
+  const ext = extname(abs).toLowerCase()
+  const contentType = ASSET_MIME[ext]
+  if (contentType === undefined || !ASSET_EXT_ALLOW.has(ext)) {
+    return { error: `不支持的图片扩展名：${ext === '' ? '(无)' : ext}` }
+  }
+  try {
+    const st = await stat(abs)
+    if (!st.isFile()) return { error: '不是一个文件' }
+    if (st.size > MAX_ASSET_BYTES) {
+      return { error: `图片太大（${Math.round(st.size / 1024)} KB，上限 ${MAX_ASSET_BYTES / 1024 / 1024} MB）` }
+    }
+  } catch {
+    return { error: '图片文件不存在' }
+  }
+  return { abs, contentType }
+}
+
+/**
+ * ⭐⭐ **`/asset` 用的封面查找（带短缓存）**——2026-10-19 新增。
+ *
+ * 🔴🔴 **为什么必须有缓存**：`/entry` 的全库扫描实测 **0.95–1.34 秒**
+ *   （840 条封面、28 个项目文档）。一屏 15 张图 ⇒ **15 次扫描 = 15 秒**
+ *   ⇒ 用户会看到"图一张一张慢慢冒出来，界面还卡住"。
+ *
+ * ⭐ **判据：一个请求只为一个字节服务时，它的查找成本必须与"页面上有多少张图"无关。**
+ *
+ * ⚠️ **为什么不缓存"文件字节"而只缓存"id → baseDir"**：
+ *   字节可能是几十 MB（一屏截图就 1.3 MB × 15），而映射只有几十字节；
+ *   且缓存映射**不会让用户看到过期的图**（改图立即生效，改 `ref` 最多晚 60 秒）。
+ *
+ * ⚠️ **过期窗口 60 秒**（有意的）：条目被改 `ref` 后，最多一分钟内旧目录仍可读。
+ *   代价可接受（只是"这张图还能取到"），换来的是**不用为每次写操作挂失效钩子**——
+ *   后者要改 `edit.ts`/`store.ts` 的每条写路径，而漏一条就静默不失效。
+ */
+const ASSET_COVER_CACHE_TTL_MS = 60_000
+
+/** `id → { baseDir, at }`；`at` 是写入时刻（毫秒），用于 TTL 判定。 */
+const assetCoverCache = new Map<string, { baseDir: string; at: number }>()
+
+/**
+ * 按条目 id 取它的**图片基准目录**（带上面的短缓存）。
+ *
+ * ⭐ 命中缓存时**完全不碰磁盘**（连 `scanLibrary` 都不调）——这正是它的意义。
+ * 🔴 **返回的就是 `baseDir` 本身**，不要再交给 `assetBaseDirOf()` 处理一次
+ *    （那会多剥一层目录，图会全裂，而且**裂得很像"文件不存在"**——本项目踩过这型）。
+ * @param id - 条目 id。
+ * @returns 基准目录绝对路径；找不到该封面、或它解析不出目录时 `undefined`。
+ */
+async function assetBaseDirFor(id: string): Promise<string | undefined> {
+  const now = Date.now()
+  const hit = assetCoverCache.get(id)
+  if (hit !== undefined && now - hit.at < ASSET_COVER_CACHE_TTL_MS) return hit.baseDir
+
+  const snapshot = await scanLibrary({ includeArchived: true, includeHistory: true })
+  const found = snapshot.covers.find((c) => c.cover.id === id)
+  if (found === undefined) {
+    assetCoverCache.delete(id)
+    return undefined
+  }
+  const baseDir = assetBaseDirOf(found.cover.ref, found.cover.ext)
+  if (baseDir === undefined) return undefined
+
+  assetCoverCache.set(id, { baseDir, at: now })
+  // ⚠️ 顺手清掉过期项：库有 800+ 条目，长期运行不能让这个 Map 无限长。
+  //    ⭐ 不清也不会错（只是内存），但"只增不减的缓存"是本项目记过的坑。
+  if (assetCoverCache.size > 512) {
+    for (const [k, v] of assetCoverCache) {
+      if (now - v.at >= ASSET_COVER_CACHE_TTL_MS) assetCoverCache.delete(k)
+    }
+  }
+  return baseDir
 }
 
 export async function handleApi(
@@ -1379,6 +1565,55 @@ export async function handleApi(
     }
 
     // ── ⭐ 详情数据源（§8.2：详情数据走「按 id 取」，**不靠前端拼路径**）──
+    // ⭐⭐⭐ **正文里的图片**（2026-10-19 新增）——`/asset?entry=<id>&path=<相对路径>`。
+    //
+    // 🔴 **为什么需要这个接口**：markdown 里的 `![](docs/x.png)` 是相对路径，
+    //    而 memj 页面在 `/plugins/dsh-memj/` ⇒ 浏览器按那个 URL 去取，
+    //    **与文档在磁盘上的位置毫无关系** ⇒ 图必然 404（真机实测确认）。
+    //
+    // ⭐ **三件事一起成立才能显示**：
+    //    ① 前端把相对 `src` 重写成指向本接口（`app.js` 的 `localizeImages()`）；
+    //    ② 本接口按**条目的 ref 所在目录**去磁盘上找那个文件（`assetBaseDirOf`）；
+    //    ③ 还要**允许它被读**（扩展名白名单 + 不许越界，见 `resolveAssetPath`）。
+    //
+    // ⚠️ **为什么用 `entry` 参数而不是让前端传绝对路径**：
+    //    绝对路径等于把"能读哪个目录"的决定权交给浏览器 —— 那正是任意文件读取。
+    //    ⇒ 只认条目 id：**能读的范围由那条条目的 ref 决定**，前端说了不算。
+    if (route === '/asset') {
+      const id = params.get('entry') ?? ''
+      if (id === '') return { status: 400, body: { ok: false, error: '缺少 entry' } }
+      // 🔴⚠️ **必须与 `/entry` 同源：含归档 + 含历史**。用别的取法会出现
+      //    "详情页打得开、但它的图是裂的"——那种不一致比整页打不开更难查。
+      //    ⚠️ 代价：一次全库扫描（实测 ~1 秒），由 `assetBaseDirFor` 的短缓存摊掉。
+      const baseDir = await assetBaseDirFor(id)
+      if (baseDir === undefined) return { status: 404, body: { ok: false, error: '库里没有这张封面' } }
+      const rel = params.get('path') ?? ''
+      const got = await resolveAssetPath(baseDir, rel)
+      if ('error' in got) {
+        // ⚠️ **404 而不是 400**：路径错、文件不在、扩展名不支持 —— 对浏览器来说
+        //    都是"这张图取不到"，而 `<img>` 的 onerror 不区分状态码。
+        //    ⭐ 但错误文案要**说清是哪一类**（本项目：报错不得把多类原因压成一句）。
+        return { status: 404, body: { ok: false, error: got.error } }
+      }
+      try {
+        const bytes = await readFile(got.abs)
+        return {
+          status: 200,
+          body: null,
+          raw: {
+            contentType: got.contentType,
+            bytes,
+            // ⭐ 图片内容由 md 正文决定、正文变了图名通常也变 ⇒ 短缓存即可。
+            //    🔴 **不能用 `no-store`**：一屏十几张图，每次切条目都重新拉一遍
+            //       几十 MB 的截图，界面会明显卡顿。
+            cacheControl: 'private, max-age=300',
+          },
+        }
+      } catch (e) {
+        return { status: 404, body: { ok: false, error: `读取图片失败：${e instanceof Error ? e.message : String(e)}` } }
+      }
+    }
+
     if (route === '/entry') {
       const id = params.get('id') ?? ''
       if (id === '') return { status: 400, body: { ok: false, error: '缺少 id' } }
@@ -1470,6 +1705,21 @@ export async function handleApi(
            * ⚠️ 断链时 `doc === undefined` ⇒ 自然回落成 `''`（见 `missing`）。
            */
           body: doc?.body ?? '',
+          /**
+           * ⭐⭐ **正文里相对图片的基准目录**（2026-10-19 新增，`/asset` 的 A+B 一半）。
+           *
+           * 🔴 **为什么必须由服务端给**：前端拿不到"正文文件在磁盘哪里"这个事实
+           *    （外链条目的 `ref` 是绝对路径，但它指向的可能是**另一个盘/另一个目录**）。
+           *    让前端自己猜基准 = 让它持有一份与后端不同的路径规则 ⇒ 必然漂移。
+           * ⭐ 本项目铁律：**能给人看的列表/数据必须由服务端回结构化条目**。
+           *
+           * ⚠️ **只回目录、不回文件内容**：能否读出某个文件仍由 `/asset` 判
+           *    （白名单 + 不越界）——**前端拿到这个目录并不等于它能读那个目录**。
+           *
+           * ⚠️ 正文里**没有图片时也照常给**：判"有没有图"是前端的活
+           *    （它手上才有正文，见 `localizeImages()`），后端多判一次就是第二份判据。
+           */
+          assetBase: assetBaseDirOf(cover.ref, cover.ext) ?? '',
           /**
            * 文件头（§8.2：详情页上半部渲染）。
            *
