@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+﻿#!/usr/bin/env node
 /**
  * 「文档内提问」的**入口与上下文注入**测试（2026-10-14，第 4 期）。
  *
@@ -20,6 +20,10 @@ import { mkdtempSync, mkdirSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+
+// ⚠️ 【12】那组要读源码（`src/web/app.js` / `src/api.ts`）⇒ 用 `fs/promises` 的 readFile。
+//    本仓模块头只导入了 sync 版本，这里单独取一个，免得改动上方既有导入。
+const { readFile } = await import('node:fs/promises')
 
 const LIBDIR = process.env['MEMJ_LIBDIR'] ?? join(process.cwd(), 'lib')
 const lib = mkdtempSync(join(tmpdir(), 'memj-reading-ask-'))
@@ -469,6 +473,66 @@ console.log('\n【11】🔴 「返回源知识」：源指针由服务端给，�
   // ⑤ 高亮（否则用户不知道"到了哪一段"）。
   check(code.includes('reading-target-flash'),
     '⭐⭐ 目标块会高亮一下（让"到了"这件事可见）')
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ⭐⭐⭐ 【12】工具条的**覆盖面**与**位置**（2026-10-20，用户两个反馈）
+//
+//  用户原话：
+//   ① "为什么有的地方能够出现就此提问，有的地方就没反应呢？"
+//   ② "我希望就此提问的按钮应该出现在选区下方，否则有时候会和浏览器的选择框重叠。"
+// ══════════════════════════════════════════════════════════════════════════
+console.log('\n【12】工具条的覆盖面与位置（两个用户反馈）')
+
+{
+  const code = await readFile(join(process.cwd(), 'src', 'web', 'app.js'), 'utf8')
+
+  // ── ① 覆盖面：块匹配不到时**不得**把整个功能关掉 ──
+  //
+  //  🔴 根因链条（两层，都要开）：
+  //     · 前端：`if (block === null) { hide(); return }` ⇒ 选区在、但没弹条；
+  //     · 后端：`anchor.blockId === '' ⇒ 400` ⇒ 就算弹了也会失败。
+  //  ⭐ 修法：`blockId` 降级为空串（表示"定位不到块"），而不是拒绝。
+  check(code.includes("block === null ? '' : block.dataset.blockId"),
+    '⭐⭐⭐ 块找不到时 blockId 降级为空串，而不是 hide()（否则那段永远不能提问）')
+  const hideOnNullBlock = /if \(block === null\) \{\s*hide\(\);\s*return\s*\}/.test(code)
+  check(!hideOnNullBlock,
+    '⭐⭐⭐ 不再有"block === null ⇒ hide()"那条早退（它就是"有的地方没反应"的根因）')
+
+  // ── ①-b 后端也必须收得下空 blockId ──
+  const apiSrc = await readFile(join(process.cwd(), 'src', 'api.ts'), 'utf8')
+  const askBranch = apiSrc.slice(apiSrc.indexOf("route === '/reading/ask'"))
+  check(/if \(anchor\.exact === ''\)/.test(askBranch),
+    '⭐⭐⭐ 后端只要求 exact（blockId 可空）—— 否则前端降级了也会被 400')
+  check(!/anchor\.blockId === '' \|\| anchor\.exact === ''/.test(askBranch),
+    '⭐⭐ 不再有"blockId 为空 ⇒ 400"（那是第二道门）')
+
+  // ── ①-c 空 blockId **不得**参与复用（否则同篇所有无块提问串到同一个会话）──
+  const readingSrc = await readFile(join(process.cwd(), 'src', 'reading.ts'), 'utf8')
+  const fb = readingSrc.slice(readingSrc.indexOf('export async function findBinding'))
+  check(/if \(blockId === ''\) return undefined/.test(fb),
+    '⭐⭐⭐ 空 blockId 永不复用（否则 A 段的问题会并进 B 段的会话 —— 静默串台）')
+
+  // ── ①-d 行级匹配（17.5% 的块以前永远匹配不上）──
+  check(code.includes('byLine'),
+    '⭐⭐⭐ 有行级匹配表（byLine）—— 块引用/多行表格靠它才找得到 DOM 落点')
+  check(/for \(const line of b\.lines\)/.test(code),
+    '⭐⭐ 遍历服务端给的 lines')
+  check(/for \(const el of unmatched\)/.test(code),
+    '⭐⭐ 整块匹配失败的元素会进第二遍扫描（而不是被丢掉）')
+
+  // ── ② 位置：选区下方 ──
+  check(/rect\.bottom \+ 8/.test(code),
+    '⭐⭐⭐ 工具条落在选区**下方**（用户要求：上方会与浏览器自带的选择框重叠）')
+  check(!/Math\.max\(8, rect\.top - 44\)/.test(code),
+    '⭐⭐ 不再固定放在选区上方（老的 rect.top - 44 已移除）')
+  // ⚠️ 下方也要防出屏 —— 否则靠近底部时按钮在视口外，表现同样是"没反应"。
+  check(/window\.innerHeight - barH/.test(code),
+    '⭐⭐ 靠近视口底部时会翻到上方/贴底（放屏幕外 = 看起来"点了没反应"）')
+
+  // ── ②-b 多行块共享同一个 blockId（点哪一行都是同一个块，这是对的）──
+  check(/同一个 blockId/.test(code),
+    '⭐ 注明了"一个块的多行共用一个 blockId"这个设计（防后人误改成一行一个）')
 }
 
 console.log(`\n═══ 文档内提问·入口与注入：${pass} 通过 / ${fail} 失败 ═══`)

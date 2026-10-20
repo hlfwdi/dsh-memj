@@ -3920,6 +3920,20 @@ export async function handleApi(
         return { status: 400, body: { ok: false, error: '缺少 entryId 或 question' } }
       }
       // ⭐ 锚点四元组：缺字段 ⇒ 400（前端构造不完整，别让后端猜）。
+      //
+      // 🔴🔴 **2026-10-20 改：`blockId` 允许为空**（原来空 ⇒ 400）。
+      //
+      //    用户报："同一篇里有的地方能出现就此提问、有的地方没反应。"
+      //    根因是两层，这是第二层：有些块（块引用 / 多行表格）前端**匹配不到
+      //    `data-block-id`** ⇒ 拿不到 blockId。原来前端干脆不弹工具条，
+      //    而**即便弹了也会被这里 400 掉** —— 两道门都得开。
+      //
+      //    ⭐ 判据：**`exact`（用户选中的原文）才是这个功能的必要信息**，
+      //      `blockId` 只决定"这段讨论归到哪一块"——它是**分类**，不是**前提**。
+      //      ⇒ 缺 blockId 时降级成"一条独立绑定"，而不是拒绝整个请求。
+      //
+      //    ⚠️ **`exact` 仍然必须有**：没有它问答条目就失去"这段是在说哪段"
+      //      ⇒ 后端没法 `makeAnchor`，`renderAskPrompt` 也引不出原文。
       const a = (p.anchor ?? {}) as Record<string, unknown>
       const anchor = {
         blockId: typeof a['blockId'] === 'string' ? a['blockId'] : '',
@@ -3928,8 +3942,8 @@ export async function handleApi(
         prefix: typeof a['prefix'] === 'string' ? a['prefix'] : '',
         suffix: typeof a['suffix'] === 'string' ? a['suffix'] : '',
       }
-      if (anchor.blockId === '' || anchor.exact === '') {
-        return { status: 400, body: { ok: false, error: 'anchor 不完整（缺 blockId 或 exact）' } }
+      if (anchor.exact === '') {
+        return { status: 400, body: { ok: false, error: 'anchor 不完整（缺 exact：用户选中的原文）' } }
       }
       // ⚠️ `readingAskDeps` 需要 ctx ⇒ 由 `index.ts` 通过 deps 传进来
       //    （`handleApi` 的既有签名不带 ctx，见该函数的 `deps` 形状）。

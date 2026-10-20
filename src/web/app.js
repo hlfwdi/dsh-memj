@@ -881,12 +881,34 @@ async function copySessionId(sessionId, why) {
  */
 function markReadingBlocks(md, blocks) {
   const norm = (s) => String(s ?? '').replace(/\s+/g, ' ').trim()
+  // ⭐ 整块匹配表（老路径，先试）：`plain` → blockId
   const byPlain = new Map()
+  // ⭐⭐ 行级匹配表（2026-10-20 新增，覆盖 `plain` 匹不上的那些块）
+  const byLine = new Map()
   for (const b of blocks) {
-    if (typeof b?.plain === 'string' && b.plain !== '') byPlain.set(norm(b.plain), b.blockId)
+    if (typeof b?.plain === 'string' && b.plain !== '') {
+      const k = norm(b.plain)
+      if (!byPlain.has(k)) byPlain.set(k, b.blockId)
+    }
+    if (Array.isArray(b?.lines)) {
+      for (const line of b.lines) {
+        if (typeof line !== 'string') continue
+        const k = norm(line)
+        if (k === '' || byLine.has(k)) continue
+        byLine.set(k, b.blockId)
+      }
+    }
   }
-  const sel = 'p, li, h1, h2, h3, h4, blockquote, td, th'
+  // ⭐⭐⭐ **选择器扩到所有"可能是叶子文本"的元素**（2026-10-20）。
+  //    🔴 原来只有 `p, li, h1..h4, blockquote, td, th`，**少了块引用里的 `<p>`**？
+  //       不 —— `<p>` 本来就在。漏的是**多行表格/块引用/列表**这类
+  //       "一个块对应 DOM 里好几个元素"的情形，靠下面的行级匹配解决。
+  //    ⚠️ 补上 `dt, dd, strong, em` 等没有意义（它们不承载块语义），
+  //       但 `h5, h6`、`figcaption` 补上成本为零。
+  const sel = 'p, li, h1, h2, h3, h4, h5, h6, blockquote, td, th, figcaption, dt, dd'
   let hit = 0
+  // 先整块、再逐行 —— 整块命中时**不必**再看行（省一遍扫描，且语义更准）。
+  const unmatched = []
   for (const el of md.querySelectorAll(sel)) {
     // ⚠️ 嵌在 `pre`（代码块）里的不算 —— 与后端"跳过围栏"的口径对齐。
     if (el.closest('pre') !== null) continue
@@ -895,6 +917,26 @@ function markReadingBlocks(md, blocks) {
     let t = el.textContent ?? ''
     for (const mk of el.querySelectorAll('.reading-mark')) t = t.replace(mk.textContent ?? '', '')
     const id = byPlain.get(norm(t))
+    if (id === undefined) { unmatched.push(el); continue }
+    el.dataset.blockId = id
+    hit += 1
+  }
+  // ⭐⭐⭐ **第二遍：逐行匹配**（这是 17.5% 的块以前永远匹配不上的原因）。
+  //
+  //  🔴🔴 **为什么需要这一遍**（实测 5816 个块里 1018 个中招）：
+  //      `plain` 里**保留了 markdown 的结构记号**，而浏览器不显示它们：
+  //        · 块引用 ⇒ `plain` 是 `"正文\n>\n> ⚠️ 前提…"`，DOM 是
+  //          `<p>` + `<blockquote><p>` ⇒ **`>` 不在 textContent 里**，整块永不相等；
+  //        · 多行表格 ⇒ `plain` 是整张表，DOM 里一个 `<td>` 一个元素。
+  //      ⇒ 用户看到的现象：**同一篇里有的段能提问、有的段没反应**。
+  //  ⭐ 判据：**拿一段含结构记号的文本去比一个不含它的 DOM，必然失败**
+  //     —— 所以要比的是"叶子行"，不是"整块"。
+  //  ⚠️ 一个块的多行会命中多个 DOM 元素 ⇒ **它们都打同一个 blockId**，
+  //     这是对的：锚点按块算，用户点哪一行都是同一个块。
+  for (const el of unmatched) {
+    let t = el.textContent ?? ''
+    for (const mk of el.querySelectorAll('.reading-mark')) t = t.replace(mk.textContent ?? '', '')
+    const id = byLine.get(norm(t))
     if (id === undefined) continue
     el.dataset.blockId = id
     hit += 1
@@ -1007,12 +1049,24 @@ function attachAskToolbar(box, md, entryId, body) {
     const range = sel.getRangeAt(0)
     // 🔴 **必须判选区在不在本正文里**（`selectionchange` 是文档级的）。
     if (!md.contains(range.commonAncestorContainer)) { hide(); return }
-    // ⭐ 找到选区所在的块（`data-block-id` 由 `markReadingBlocks` 打好）。
+    // ⭐⭐ 找到选区所在的块（`data-block-id` 由 `markReadingBlocks` 打好）。
+    //
+    //  🔴🔴 **2026-10-20 改：块找不到也【照常弹】**（原来是 `hide(); return`）。
+    //
+    //     用户报的现象：同一篇里"有的地方能出现就此提问、有的地方没反应"。
+    //     根因是块匹配的覆盖不全（见 `markReadingBlocks` 的第二遍扫描）——
+    //     **但那不该让整段失去提问能力**：用户已经选中了文字，那个选区
+    //     本身就是充足的信息，缺一个 `blockId` 只影响"这段讨论归到哪一块"。
+    //     ⇒ ⭐ 判据：**增强能力缺失时应当降级，而不是静默把功能关掉**
+    //       （本项目记过同族：抑制门命中面过宽 ⇒ 功能被悄悄关掉一大块）。
+    //
+    //     `blockId: ''` 的语义是"这个选区定位不到块"——后端据此新建一条
+    //     **独立**的绑定（而不是并进某个已有的段落讨论）。见 `reading.ts` 的
+    //     `findBindingByChatEntry` / 绑定写入：空 blockId 不与任何块冲突。
     const el = range.startContainer.nodeType === Node.ELEMENT_NODE
       ? range.startContainer
       : range.startContainer.parentElement
     const block = el?.closest?.('[data-block-id]') ?? null
-    if (block === null) { hide(); return }
     // ⭐ 锚点四元组：`blockId` **直接取 DOM 上那个**（由服务端算好、经
     //    `markReadingBlocks` 写上）—— 🔴 **绝不在这里重算**（见 `readingHashTextUnused`
     //    的红线：前端只有渲染后的文本，算出来与后端对不上）。
@@ -1020,16 +1074,30 @@ function attachAskToolbar(box, md, entryId, body) {
     //    —— 与 `makeAnchor(blockText, fullText, …)` 的语义一致。
     const at = body.indexOf(text)
     pending = {
-      blockId: block.dataset.blockId,
+      blockId: block === null ? '' : block.dataset.blockId,
       index: 0,
       exact: text,
       prefix: at < 0 ? '' : body.slice(Math.max(0, at - READING_CONTEXT_CHARS), at),
       suffix: at < 0 ? '' : body.slice(at + text.length, at + text.length + READING_CONTEXT_CHARS),
     }
-    // ⭐ 位置：选区上方居中（`fixed` ⇒ 视口坐标）。
+    // ⭐⭐ 位置：**选区下方**居中（2026-10-20 用户要求改）。
+    //
+    //  🔴 **原来是选区上方**（`rect.top - 44`），用户报：
+    //     *"我希望就此提问的按钮应该出现在选区下方，否则有时候会和浏览器的选择框重叠。"*
+    //     ⭐ 那个"选择框"是浏览器自带的选区操作菜单（移动端/部分浏览器会在
+    //        选区上方弹出"复制/翻译…"）⇒ 固定放在上方必然打架。
+    //  ⚠️ **下方也要防出屏**：靠近视口底部时翻到上方（否则按钮点在屏幕外，
+    //     看起来就是"没反应"——那正是本项目记过的"看着在、点不到"）。
     const rect = range.getBoundingClientRect()
     bar.classList.remove('hidden')
-    const top = Math.max(8, rect.top - 44)
+    // ⚠️ 先用当前尺寸估高度（`hidden` 刚移除时可能是 0）⇒ 取 `offsetHeight` 或 40 兜底。
+    const barH = bar.offsetHeight > 0 ? bar.offsetHeight : 40
+    const below = rect.bottom + 8
+    const above = rect.top - barH - 8
+    // 下方放不下、且上方放得下 ⇒ 翻到上方；两处都放不下 ⇒ 贴着视口底边。
+    const top = below + barH <= window.innerHeight - 8
+      ? below
+      : (above >= 8 ? above : Math.max(8, window.innerHeight - barH - 8))
     bar.style.top = `${top}px`
     bar.style.left = `${Math.max(8, Math.min(window.innerWidth - 140, rect.left + rect.width / 2 - 60))}px`
   }

@@ -244,14 +244,29 @@ export async function appendBinding(binding: ReadingBinding): Promise<void> {
 
 /**
  * ⭐ **按「源条目 + 段落」查绑定**（复用的判据）。
+ *
+ * 🔴🔴 **`blockId === ''` 时【永不复用】**（2026-10-20 加）。
+ *
+ *    背景：`blockId` 现在允许为空（那些前端匹配不到块的选区，见 `api.ts`
+ *    的 `/reading/ask`）。若这里照常按 `entryId + ''` 去 `find`，
+ *    **同一篇里所有"定位不到块"的提问会命中同一条绑定**
+ *    ⇒ 用户在 A 段问一句、又在 B 段问一句 ⇒ 第二句被并进第一个会话里，
+ *      而且 `renderAskPrompt` 引的还是 A 段的原文。
+ *    ⭐ 那种串台是**静默的**（会话建出来了、也回答了，只是答的是另一段）。
+ *
+ *    ⇒ 判据：**空 blockId 表示"没有归类信息"，它不该被当成一个真实的键值。**
+ *      语义上正确的做法是"每条都算新段落" —— 宁可多开一个会话，也不要串台。
+ *      ⚠️ 本项目既有的偏置：**误合并会污染用户数据，多开一个只是多一个会话。**
  * @param entryId - 源条目 id。
- * @param blockId - 段落 blockId。
+ * @param blockId - 段落 blockId（**空串 = 不复用**）。
  * @returns 已有绑定；没有 ⇒ `undefined`。
  */
 export async function findBinding(
   entryId: string,
   blockId: string,
 ): Promise<ReadingBinding | undefined> {
+  // ⭐ 空 blockId 不是真实的块 ⇒ 不参与复用（理由见上面的注释）。
+  if (blockId === '') return undefined
   const all = await loadBindings()
   return all.find((b) => b.entryId === entryId && b.anchor.blockId === blockId)
 }
@@ -339,6 +354,111 @@ export interface ReadingBlock {
   plain: string
   /** 该块在正文里的序号（0 起）。 */
   index: number
+  /**
+   * ⭐⭐⭐ **这一块在浏览器里会渲染成哪些「叶子文本」**（2026-10-20 新增）。
+   *
+   * ── 🔴🔴 为什么需要它（实测 5816 个块里 17.5% 因此**永远匹配不上**）──
+   * 原来前端只拿 `plain` 与**单个** DOM 元素的 `textContent` 做字面比对。
+   * 而 `plain` 里**保留了 markdown 的结构记号**，浏览器却不显示它们：
+   *
+   * | `plain` 实际长这样 | 浏览器 DOM | 结果 |
+   * |---|---|---|
+   * | `第 20 集说过：不能只看谁闲…` | `<p>` | ✅ 匹配 |
+   * | `而这条请求…\n>\n> ⚠️ 前提是…` | `<p>` + `<blockquote><p>` | ❌ **`>` 不在 textContent 里** |
+   * | `\| 部分 \| token 数 \|…`（多行） | 一个 `<td>` 一个元素 | ❌ 整表拼不成一个元素 |
+   *
+   * ⭐ 所以**不是"少配了几种"，是"拿一段含结构记号的文本去比一个不含它的 DOM"**。
+   * ⇒ 正确做法：**服务端把这一块拆成若干「叶子行」**（每行 = 未来某个 DOM 叶子
+   * 元素的 textContent），前端逐行去 DOM 里找，找到哪行就给那个元素打 id。
+   *
+   * ⚠️ **`plain` 仍然保留**（既有绑定、既有测试、以及"整块匹配"那条快路径都靠它）
+   * —— 这个字段只增不改，老数据与老调用方零影响。
+   */
+  lines: string[]
+}
+
+/**
+ * ⭐⭐ **把一块 markdown 拆成"将来会是 DOM 叶子元素"的若干行纯文本**。
+ *
+ * 拆法对着**浏览器渲染结果**来，不是对着 markdown 语法来 ——
+ * 这是本函数唯一要遵守的规矩（漂移的表现是"标记又不显示"，
+ * 且**不报任何错**，所以每一步都写了它对应的 DOM 形态）。
+ *
+ * | markdown 形态 | 拆成几行 | 浏览器里是 |
+ * |---|---|---|
+ * | 普通段落（可含软换行） | **1 行**（换行折成空格） | 一个 `<p>` |
+ * | `> 引用`（含 `>` 续行） | **每段文本 1 行**（去掉 `>`） | `<blockquote>` 里的 `<p>` |
+ * | `\| a \| b \|` 表格 | **每个单元格 1 行**（去掉 `\|` 与分隔行） | `<td>` / `<th>` |
+ * | `- x` / `1. x` 列表 | **每项 1 行**（去掉项目符号） | `<li>` |
+ * | 标题 `## x` | 1 行（去掉 `#`） | `<h1>`–`<h4>` |
+ *
+ * 🔴 **表格的分隔行（`\|---\|---\|`）必须丢掉** —— 它不是文本，浏览器里根本
+ *    不存在对应元素；留着会让"整表"那条判据永远拼不齐。
+ *
+ * ⚠️ **行内代码/粗体/链接仍走 `stripInlineMarkdown`** —— 与 `plain` 同一套剥法，
+ *    否则同一个块里两个字段的口径会分家。
+ * @param block - 一块 markdown 原文（已 `trim`）。
+ * @returns 纯文本行（已 trim、空行已丢）。
+ */
+export function blockLeafLines(block: string): string[] {
+  const out: string[] = []
+  const push = (s: string) => {
+    const t = s.replace(/\s+/g, ' ').trim()
+    if (t !== '') out.push(t)
+  }
+
+  // ── 表格：每个数据行拆成单元格 ──
+  if (/^\s*\|/.test(block)) {
+    const rows = block.split('\n').filter((l) => l.trim().startsWith('|'))
+    for (const row of rows) {
+      // ⚠️ 分隔行：`|---|---|` 或 `|:--:|--:|`，全部由 `-`/`:`/`|`/空白组成。
+      if (/^\s*\|[\s:|-]+\|?\s*$/.test(row) && row.includes('-')) continue
+      const cells = row.trim().replace(/^\|/, '').replace(/\|$/, '').split('|')
+      for (const cell of cells) {
+        const t = stripInlineMarkdown(cell)
+        // ⚠️ 单元格为空是合法的（GFM 允许），但**不要 push 空串**——
+        //    空串会匹配到 DOM 里所有空元素（`byPlain` 里就是被这样排除掉的）。
+        if (t !== '') push(t)
+      }
+    }
+    return out
+  }
+
+  // ── 块引用：去掉 `>` 后按"空引用行"分段 ──
+  if (/^\s*>/.test(block)) {
+    // ⚠️ 用 `cur` 而不是 `segs[last]` —— 本仓开了 `noUncheckedIndexedAccess`，
+    //    下标访问的类型是 `T | undefined`（而且这里本来就该用"当前段"这个概念）。
+    let cur: string[] = []
+    const flush = () => {
+      if (cur.length > 0) push(stripInlineMarkdown(cur.join('\n')))
+      cur = []
+    }
+    for (const line of block.split('\n')) {
+      const s = line.replace(/^\s*>\s?/, '')
+      // ⚠️ 引用里的"空行"在 markdown 里写作单独的 `>` 或 `> `，
+      //    去掉 `>` 后就是空串 ⇒ 这里把它当**段落分隔**处理
+      //    （浏览器渲染成两个相邻的 `<p>`，正是两个可匹配的叶子）。
+      if (s.trim() === '') { flush(); continue }
+      cur.push(s)
+    }
+    flush()
+    // ⚠️ 引用块里可能嵌了列表（`> - x`）⇒ 这一步没拆它。
+    //    **刻意不拆**：那种形态极罕见，而多拆一层就要多一份"与浏览器对齐"的责任，
+    //    拆错的表现是静默不匹配（本函数存在的理由就是避免这个）。
+    return out
+  }
+
+  // ── 列表：每项一行 ──
+  const lines = block.split('\n')
+  const isList = lines.length > 0 && lines.every((l) => /^\s*(?:[-*+]|\d+\.)\s+/.test(l))
+  if (isList) {
+    for (const l of lines) push(stripInlineMarkdown(l))
+    return out
+  }
+
+  // ── 其它（标题 / 普通段落 / 单行）：整块一行，软换行折成空格 ──
+  push(stripInlineMarkdown(block))
+  return out
 }
 
 /**
@@ -383,7 +503,7 @@ export function extractReadingBlocks(body: string): ReadingBlock[] {
       //    （实测：原文 `1mpx8by` vs 剥标记 `191ccmm`），段落标记照样不显示。
       //    ⭐ **`plain` 只服务一件事：给前端匹配 DOM**（浏览器里没有 `**`）。
       //    两个字段各司其职，别拿错。
-      out.push({ blockId: hashText(c), plain, index })
+      out.push({ blockId: hashText(c), plain, index, lines: blockLeafLines(c) })
       index += 1
     }
   }
