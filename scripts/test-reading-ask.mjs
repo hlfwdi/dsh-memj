@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env node
+#!/usr/bin/env node
 /**
  * 「文档内提问」的**入口与上下文注入**测试（2026-10-14，第 4 期）。
  *
@@ -533,6 +533,68 @@ console.log('\n【12】工具条的覆盖面与位置（两个用户反馈）')
   // ── ②-b 多行块共享同一个 blockId（点哪一行都是同一个块，这是对的）──
   check(/同一个 blockId/.test(code),
     '⭐ 注明了"一个块的多行共用一个 blockId"这个设计（防后人误改成一行一个）')
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ⭐⭐⭐ 【13】外链走「右侧栏内置浏览器」（2026-10-20，用户要求）
+//
+//  用户原话：*"详情页里的外部链接，能不能默认开右边栏的浏览器，
+//            开个新标签页去打开，而不是 memj 标签页内跳转。"*
+//
+//  🔴 **这条通路有一个真实的能力缺口，必须保住降级**（真机实测到的）：
+//     本机这个 profile 的客户端 bundle **没有加载**
+//     `@deepseek-ai/dsh-client-ui-sidebar-browser`（权威判据：`window.__DSH_BOOT__.entries`
+//     的 id 清单里没有它）⇒ `openTab('browser', …)` 抛
+//     `sidebarRight: no tab type is registered as "browser"`。
+//     ⭐ 所以这些断言的重点不是"能开右侧栏"，而是**开不了时也不能让点击石沉大海**。
+// ══════════════════════════════════════════════════════════════════════════
+console.log('\n【13】外链走右侧栏浏览器（含能力缺席时的降级）')
+
+{
+  const appCode = await readFile(join(process.cwd(), 'src', 'web', 'app.js'), 'utf8')
+  const cliCode = await readFile(join(process.cwd(), 'src', 'client', 'index.tsx'), 'utf8')
+
+  // ── 插件页那一半 ──
+  check(appCode.includes('function externalizeLinks'),
+    '⭐⭐ 有 externalizeLinks（把正文外链接管成"右侧栏打开"）')
+  check(/function openExternalInSidebar/.test(appCode),
+    '⭐⭐ 有 openExternalInSidebar（发广播 + 等回执）')
+  check(appCode.includes('memj:open-external'),
+    '⭐⭐ 消息类型 memj:open-external（与 client 半边对齐）')
+  check(appCode.includes('memj:browser-open-failed'),
+    '⭐⭐ 认失败回执 —— 否则无法降级')
+
+  // 🔴 关键：**只接管纯左键**（带修饰键/中键要留给浏览器默认行为）
+  check(/e\.button !== 0 \|\| e\.metaKey \|\| e\.ctrlKey \|\| e\.shiftKey \|\| e\.altKey/.test(appCode),
+    '⭐⭐⭐ 只接管纯左键（中键/Ctrl+点击仍走浏览器默认 = 用户能自己开新标签）')
+
+  // 🔴 关键：**必须保留 href**（右键复制链接、无 JS 时都还要能用）
+  check(!/removeAttribute\(['"]href['"]\)/.test(appCode),
+    '⭐⭐ 不删 href（右键"复制链接地址"/无 JS 场景还要能用）')
+
+  // 🔴 关键：**降级必须真的开新标签页**，不是只弹个 toast
+  check(/window\.open\(url, '_blank', 'noopener'\)/.test(appCode),
+    '⭐⭐⭐ 降级时真的 window.open 开新标签页（只弹 toast = 用户还是没看到页面）')
+
+  // ── client 那一半 ──
+  check(cliCode.includes('function installBrowserOpenReceiver'),
+    '⭐⭐ client 半边有 installBrowserOpenReceiver')
+  check(/openTab\(\s*'browser'/.test(cliCode),
+    '⭐⭐ 调的是 openTab(\'browser\', …) 而不是自己实现一个浏览器')
+  check(cliCode.includes("params: { url }"),
+    '⭐⭐ 地址经 params.url 传给内置浏览器（官方契约：SidebarRightTabParamsMap.browser.url）')
+
+  // 🔴 **只放 http(s) 过去** —— 内置浏览器的允许表只认这两种
+  check(/\/\^https\?:\\\/\\\/\/i\.test\(url\)/.test(cliCode),
+    '⭐⭐ 只放行 http(s)（javascript:/file:/data: 一律不进内置浏览器）')
+
+  // 🔴 注册在 apply 里（不注册 = 永远收不到广播）
+  check(/installBrowserOpenReceiver\(ctx\)/.test(cliCode),
+    '⭐⭐⭐ apply() 里真的调了 installBrowserOpenReceiver（漏了它整条通路是死的）')
+
+  // ── 只接管外链，不误伤站内链接 ──
+  check(/if \(!\/\^https\?:\\\/\\\/\/i\.test\(href\)\) continue/.test(appCode),
+    '⭐⭐⭐ 站内 #/kb/ 与 mailto: 不被接管（否则"点条目链接会去开浏览器"）')
 }
 
 console.log(`\n═══ 文档内提问·入口与注入：${pass} 通过 / ${fail} 失败 ═══`)

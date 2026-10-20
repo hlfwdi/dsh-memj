@@ -628,6 +628,95 @@ function installSessionJumpReceiver(ctx: ClientContext): void {
   })
 }
 
+/**
+ * ⭐⭐⭐ **在右侧栏的内置浏览器里打开一个外链**（2026-10-20，用户要求）。
+ *
+ * ── 用户要什么 ────────────────────────────────────────────────────────────
+ * *"详情页里的外部链接，能不能默认开右边栏的浏览器，开个新标签页去打开，
+ *   而不是 memj 标签页内跳转。"*
+ *
+ * ── 为什么必须绕一圈（插件页 → client 半边 → openTab）────────────────────
+ * `openTab` 是**主应用 client 侧**的服务（`ctx.sidebarRight`）。而 memj 的页面
+ * 跑在 `/plugins/dsh-memj/` 的 **iframe / 独立标签页**里 —— 它**拿不到**那个
+ * `ctx`（那是 DSH 主应用的上下文，插件页里根本没有 cordis）。
+ * ⇒ 与「去会话」同一个套路：**BroadcastChannel** 把意图送回主应用执行。
+ *   ⭐ 本项目已有现成通路（`installSessionJumpReceiver`），这里只是加一种消息。
+ *
+ * ── 内置浏览器能不能打开这些外链（读 `url.d.ts` 核实）───────────────────
+ * `parseBrowserAddress()` 的拒绝理由里有 `'application-origin'`，注释写明
+ * *"current DSH document origin, blocked for HTTPS"* ⇒ **只拦 DSH 自己**。
+ * 而 memj 的外部链接全是 `https:` 的第三方站点 ⇒ **放行**。
+ * ⚠️ 反过来：**memj 自己的页打不开**（http + 同源）—— 所以这条通路只能用于外链，
+ *    不能用它来"在右侧栏打开 memj"（那件事有另一套：注册自己的页类型）。
+ *
+ * ── 失败边界（都不静默）──────────────────────────────────────────────────
+ * | 情况 | 表现 | 处理 |
+ * |---|---|---|
+ * | 没有在屏会话 | `openTab` **抛错** | `catch` + 回一条广播，插件页 toast 说明并**退回新标签页** |
+ * | 该实例没有 `sidebarRight`（旧版本） | `ctx.inject` 回调**永不执行** | 同上（插件页等不到回执 ⇒ 超时后自己开新标签页） |
+ * | 该实例没有内置 `browser` 页类型 | `openTab` 抛 `unknown kind` | 同上 |
+ * ⭐ 判据：**外部能力不可用时必须降级到"新标签页"，不能让点击毫无反应**
+ *    （那是本项目反复记过的"看着在、点不到"）。
+ *
+ * @param ctx - 客户端上下文。
+ */
+function installBrowserOpenReceiver(ctx: ClientContext): void {
+  ctx.inject(['sidebarRight'] as never, (scope) => {
+    const nav = scope.get('sidebarRight') as
+      | { openTab(kind: string, options?: { params?: { url?: string } }): void; mounted?: { get(): unknown } }
+      | undefined
+    if (nav === undefined) return
+
+    let channel: BroadcastChannel | null = null
+
+    /** 回一条"没开成"，让插件页能降级（否则点击看起来石沉大海）。 */
+    const replyFailed = (url: string, why: string): void => {
+      try {
+        channel?.postMessage({ type: 'memj:browser-open-failed', url, why })
+      } catch {
+        /* 回执发不出去也不该影响别的 */
+      }
+    }
+
+    const onMessage = (ev: MessageEvent): void => {
+      const d = ev.data as { type?: unknown; url?: unknown } | null
+      if (d === null || typeof d !== 'object') return
+      if (d.type !== 'memj:open-external') return
+      const url = d.url
+      if (typeof url !== 'string' || url === '') return
+      // 🔴 **只放 http(s) 过去** —— 与内置浏览器的允许表对齐（它只认这两种协议）。
+      //    别的 scheme（`javascript:`、`file:`、`data:`）既不安全、也会被它拒。
+      if (!/^https?:\/\//i.test(url)) { replyFailed(url, '只支持 http(s) 链接'); return }
+      try {
+        // ⭐ 这就是"在右侧栏开新标签页"本身。
+        //    ⚠️ 不传 `placement`：用默认放置（落在活动停靠窗格）——
+        //      用户说的是"开个新标签页"，而**不传 `revealIfOpened:false`**
+        //      意味着同一地址会复用已有标签，这正是浏览器的既有语义。
+        nav.openTab('browser', { params: { url } })
+      } catch (err) {
+        // ⚠️ **没有在屏会话**（`mounted` 为空）是最常见的失败：插件页可能在
+        //    一个没选会话的窗口里被打开。如实回报，让插件页退回新标签页。
+        console.warn('[dsh-memj] 右侧栏浏览器打开失败：', err)
+        replyFailed(url, err instanceof Error ? err.message : String(err))
+      }
+    }
+
+    scope.effect(() => {
+      try {
+        channel = new BroadcastChannel(SESSION_JUMP_CHANNEL)
+        channel.addEventListener('message', onMessage)
+        return () => {
+          try { channel?.removeEventListener('message', onMessage); channel?.close() } catch { /* 忽略 */ }
+          channel = null
+        }
+      } catch {
+        // ⚠️ 没有 BroadcastChannel ⇒ 插件页等不到回执 ⇒ 超时后自己开新标签页。
+        return () => { /* 没建起来就不用清 */ }
+      }
+    }, 'dsh-memj: browser open receiver')
+  })
+}
+
 export const name = 'dsh-memj'
 
 /**
@@ -656,6 +745,16 @@ export function apply(ctx: ClientContext): void {
   //    ⚠️ `BroadcastChannel` 只在**同源、同浏览器、同 profile** 下有效；
   //       不同浏览器/无痕之间不通（那时点了不会有反应 —— 已验证过的边界）。
   installSessionJumpReceiver(ctx)
+
+  // ── 0b. ⭐⭐⭐ **右侧栏浏览器打开外链**的接收端（2026-10-20）──
+  //    用户要求：详情页里的外部链接默认在**右边栏的浏览器**里开新标签页，
+  //    而不是在 memj 页面内跳转。
+  //    ⚠️ 与上面那条**共用同一个频道**（`dsh-memj`）但**消息类型不同** ——
+  //      `BroadcastChannel` 按频道名隔离，同频道要自己按 `type` 分流
+  //      （本项目既有约定，见 `SESSION_JUMP_CHANNEL` 的注释）。
+  //    🔴 **能力缺席时必须让插件页能降级**：这里若装不上（旧版本没有
+  //      `sidebarRight`），插件页等不到回执 ⇒ 超时后自己开新标签页。
+  installBrowserOpenReceiver(ctx)
 
   // ── 1. 侧边栏入口按钮 ──────────────────────────────────────────────────────
   // 必须用 `ctx.slots.inject`——slot 声明与本插件的激活顺序不受约束。

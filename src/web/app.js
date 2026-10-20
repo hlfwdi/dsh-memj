@@ -495,6 +495,11 @@ function renderBody(body, entryId) {
       //    而且必须**在 `linkifyEntryIds` 之后**：那个函数会把 `<code>` 换成 `<a>`，
       //    但它不碰 `img`；两者顺序其实无关，放这里只为"所有后处理挨在一起"。
       localizeImages(wrap, entryId)
+      // ⭐⭐⭐ **外链改走右侧栏浏览器**（2026-10-20，用户要求）。
+      //    ⚠️ 必须排在 `linkifyEntryIds` **之后**：那个函数新建的 `<a href="#/kb/…">`
+      //      是**站内**链接，本函数只认 `http(s)` ⇒ 不会误伤（顺序其实无关，
+      //      但排在后面能让"站内点击"那条路径先绑定完，读起来更清楚）。
+      externalizeLinks(wrap)
       return wrap
     } catch {
       wrap.replaceChildren()
@@ -843,6 +848,108 @@ function gotoSession(sessionId, opts = {}) {
     }
   } catch (e) {
     toast(`跳转失败：${e.message}`, true)
+  }
+}
+
+/**
+ * ⭐⭐⭐ **在右侧栏的内置浏览器里打开外链**（2026-10-20，用户要求）。
+ *
+ * ── 用户要什么 ────────────────────────────────────────────────────────────
+ * *"详情页里的外部链接，能不能默认开右边栏的浏览器，开个新标签页去打开，
+ *   而不是 memj 标签页内跳转。"*
+ *
+ * ── 机制（与 `gotoSession` 同一条通路，只是消息类型不同）───────────────
+ * 本页（iframe 或独立标签页）**拿不到** `ctx.sidebarRight`（那是主应用的 cordis 上下文）
+ * ⇒ 发广播，由 `src/client/index.tsx` 的 `installBrowserOpenReceiver` 收，
+ *    它再调 `nav.openTab('browser', { params: { url } })`。
+ *
+ * 🔴🔴 **必须能降级**：这条通路在下列情况**收不到任何回执**——
+ *   · 主应用没有在屏会话（`openTab` 抛错，client 半边会回一条 failed）；
+ *   · 这个 DSH 版本没有 `sidebarRight` 服务（`ctx.inject` 回调**永不执行**，连 failed 都回不来）；
+ *   · 不在主应用的浏览器里（独立标签页 + 不同浏览器 / 无痕）；
+ * ⇒ ⭐ 所以本函数是**先等回执、超时再自己开新标签页**，
+ *   而不是"发完就当成功"。⚠️ 否则用户点了会**毫无反应** ——
+ *   那正是本项目反复记过的"看着在、点不到"。
+ *
+ * @param {string} url - 要打开的地址（调用方已保证是 http(s)）。
+ * @returns {Promise<void>}
+ */
+async function openExternalInSidebar(url) {
+  // ⚠️ 没有 BroadcastChannel ⇒ 直接走新标签页（不假装右侧栏能开）。
+  if (typeof BroadcastChannel !== 'function') {
+    window.open(url, '_blank', 'noopener')
+    toast('已在浏览器新标签页打开（本环境不支持右侧栏打开）')
+    return
+  }
+  const ch = new BroadcastChannel('dsh-memj')
+  // ⭐ 用一个 Promise 等回执：成功（**没有消息**也算成功）或失败（client 回报）。
+  //  🔴 判据：**没有回执 ≠ 失败** —— client 半边开成功后**没有理由再回一条**
+  //     （多一次广播只是噪音）。所以"没收到 failed"就按成功处理。
+  const failed = await new Promise((resolve) => {
+    let settled = false
+    const onMsg = (ev) => {
+      const d = ev.data
+      if (d === null || typeof d !== 'object') return
+      if (d.type !== 'memj:browser-open-failed') return
+      if (typeof d.url === 'string' && d.url !== url) return
+      if (settled) return
+      settled = true
+      resolve(typeof d.why === 'string' ? d.why : '未知原因')
+    }
+    ch.addEventListener('message', onMsg)
+    // ⚠️ 等 600ms：足够一次同源广播往返，又短到用户感觉不到卡顿。
+    setTimeout(() => {
+      if (settled) return
+      settled = true
+      resolve(null)
+    }, 600)
+    try {
+      ch.postMessage({ type: 'memj:open-external', url })
+    } catch (e) {
+      if (!settled) { settled = true; resolve(e instanceof Error ? e.message : String(e)) }
+    }
+  })
+  try { ch.close() } catch { /* 忽略 */ }
+  if (failed === null) {
+    // ⭐ 成功（或主应用没回话）—— 都不再打扰用户。
+    return
+  }
+  // 🔴 主应用明确说开不了 ⇒ **退回新标签页**，并如实说明原因。
+  window.open(url, '_blank', 'noopener')
+  toast(`右侧栏打不开（${failed}）⇒ 已改为新标签页打开`)
+}
+
+/**
+ * ⭐ **把正文里的外链改成"右侧栏打开"**（2026-10-20）。
+ *
+ * 只处理**真的外链**（`http(s):`）——
+ *  · `#/kb/…` 这种站内锚点由 `linkifyEntryIds` 产生，且**不该**被这里接管
+ *    （它们是 memj 自己的导航，点了应当在本页跳）；
+ *  · `mailto:` / 其它 scheme 原样留给浏览器。
+ *
+ * ⚠️ **保留 `href`**（不删）：中键点击、右键"在新标签页打开"、
+ *    以及**没有 JS 时**都还要能用 —— 我们只接管**左键单击**。
+ * ⭐ 这也是本项目对"接管点击"的一贯做法（见 `linkifyEntryIds` 里同一条纪律）。
+ * @param {HTMLElement} root - 已渲染好的正文容器（原地修改）。
+ */
+function externalizeLinks(root) {
+  for (const a of root.querySelectorAll('a[href]')) {
+    const href = a.getAttribute('href') ?? ''
+    // ⚠️ 只接管 http(s) 外链；站内 `#/…`、`mailto:`、相对路径都不动。
+    if (!/^https?:\/\//i.test(href)) continue
+    // ⚠️ 已经处理过的不重复绑定（重画时同一元素可能被再次传进来）。
+    if (a.dataset.sidebarLink === '1') continue
+    a.dataset.sidebarLink = '1'
+    // ⭐ 标记"这是外链"——CSS 可以据此加一个 ↗ 提示（可选，不影响行为）。
+    a.classList.add('external-link')
+    a.addEventListener('click', (e) => {
+      // 🔴 **只接管"纯左键"**：带修饰键 / 中键的点击交给浏览器默认行为
+      //    （用户可能就是想开新窗口 / 后台标签）。
+      if (e.defaultPrevented) return
+      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+      e.preventDefault()
+      void openExternalInSidebar(href)
+    })
   }
 }
 

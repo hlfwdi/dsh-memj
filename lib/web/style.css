@@ -1080,6 +1080,17 @@ button.danger:hover { background: var(--hover); }
 }
 .md a.entry-link:hover { text-decoration-style: solid; }
 
+/* ⭐⭐ **外链**（2026-10-20）：点了会走「右侧栏内置浏览器」而不是本页跳转。
+ *  ⚠️ 加一个淡淡的 ↗ 尾巴 —— 用户要能**分辨**"这个点了会离开本页"。
+ *  没有它，外链与站内条目链接看起来完全一样（都是蓝色下划线）。 */
+.md a.external-link::after {
+  content: '↗';
+  font-size: .85em;
+  margin-left: .15em;
+  opacity: .65;
+}
+.md a.external-link:hover::after { opacity: 1; }
+
 /* ⭐ 提名时间：**小字、不用标签**、放在标签下面、按钮上面（决策 130，用户要求）。
  *   ⚠️ 视觉权重**必须明显弱于标签**——它是补充信息，不该抢标题与标签的注意力。
  *   🔴 实测教训：第一版写 11px，而同处标签是 11.5px ⇒ **只差 0.5px、肉眼分不出**
