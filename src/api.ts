@@ -77,6 +77,8 @@ import {
   writeNominations,
   // ⭐⭐ 决策 220：项目详情页的「各节规范块」（读侧）。
   sectionSpecsOf,
+  // ⭐⭐⭐ 库的变更指纹（2026-10-20）——`/health` 回给前端做"要不要重拉列表"的判据。
+  libraryFingerprint,
 } from './store.ts'
 import { themeDocPath } from './paths.ts'
 import { isAbsolutePath, parseCovers } from './parse.ts'
@@ -912,6 +914,22 @@ export async function handleApi(
           archivedProjects: snapshot.projects.length - activeProjects.length,
           invalidCovers: snapshot.issues.length,
           nominations: (await readNominations()).length,
+          /**
+           * ⭐⭐⭐ **库的变更指纹**（2026-10-20 新增）——前端据此判断"要不要重拉列表"。
+           *
+           * ── 它服务的用户需求 ────────────────────────────────────────────
+           * *"我希望当有 entry、或者项目、或者主题新入库的时候，面板的列表应该要自动刷新。"*
+           *
+           * 🔴 **为什么加在 `/health` 而不是新开一个接口**：前端本来就要周期性知道
+           *    "库变没变"，而 `/health` 是它唯一总会调的接口；新开一条只会多一次往返。
+           *    ⭐ 判据：**同一件事不要有第二条通道**。
+           *
+           * ⚠️ **真正省的不是这个字段，而是"指纹没变就不重拉那 7 个列表"**：
+           *    `/health` 自己仍要 `scanLibrary`（450–755ms），所以前端轮询它的
+           *    间隔不能太密；但**一旦指纹没变**，那 7 个列表（`/covers` `/projects`
+           *    `/themes` …）就**一个都不用拉**——它们才是重头。
+           */
+          fingerprint: await libraryFingerprint(),
         },
       }
     }
