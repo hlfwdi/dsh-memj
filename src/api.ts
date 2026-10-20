@@ -13,6 +13,13 @@
  */
 
 import { entriesDir, libraryRoot, resolveRef } from './paths.ts'
+import {
+  appendLogFile,
+  checkUpdate,
+  startUpgrade,
+  upgradeLogPath,
+  upgradeStatus,
+} from './upgrade.ts'
 import { dirname, extname, isAbsolute, relative, resolve as resolvePath, sep } from 'node:path'
 import { stat, readFile } from 'node:fs/promises'
 // ⭐⭐⭐ 提示词覆盖（本次新增）：清单 / 详情 / 保存 / 恢复 / 历史。
@@ -4017,6 +4024,49 @@ export async function handleApi(
       if (doc === undefined) return { status: 200, body: { ok: true, entryId, blocks: [] } }
       const blocks = extractReadingBlocks(doc.body)
       return { status: 200, body: { ok: true, entryId, blocks } }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // ⭐⭐⭐ **面板内升级**（2026-10-20，用户要求）
+    //
+    //  用户原话：*"我希望在面板上加升级方案，应该参考 bili-scroll 本地我的分支
+    //              版本的面板内升级方案…… 提示入口可以放在头部记忆库基础信息的右边。"*
+    //  ⭐ 照 `@jojoman2024/dsh-bili-scroll@0.1.9` 的判据抄（见 `upgrade.ts` 的模块头）。
+    // ══════════════════════════════════════════════════════════════════════
+    if (route === '/update') {
+      // ⚠️ 只读操作，**GET**（前端头部会自动预热一次；也允许手动点"检查更新"）。
+      if (method !== 'GET') return { status: 405, body: { ok: false, error: '该接口只接受 GET' } }
+      // ⚠️ **永远不抛**（`checkUpdate` 内部已 catch）—— 网络失败也要给前端一个能显示的对象，
+      //    否则头部会因为没有数据而**什么都不显示**，用户以为没这个功能。
+      const r = await checkUpdate()
+      return { status: 200, body: r }
+    }
+
+    if (route === '/upgrade') {
+      if (method !== 'POST') return { status: 405, body: { ok: false, error: '该接口只接受 POST' } }
+      let p: { version?: unknown } = {}
+      try {
+        p = JSON.parse(rawBody) as typeof p
+      } catch {
+        return { status: 400, body: { ok: false, error: '请求体不是合法 JSON' } }
+      }
+      const want = typeof p.version === 'string' ? p.version.trim() : ''
+      // 🔴 **必须带明确版本号**：profile 里写的是精确版本，只给包名时
+      //    pnpm 会说 "Already up to date" 什么也不做（bili-scroll 实测）。
+      if (want === '') {
+        return { status: 400, body: { ok: false, error: '缺少 version（要升到哪个版本）' } }
+      }
+      const r = startUpgrade(want, upgradeLogPath(libraryRoot()))
+      return { status: r.ok ? 200 : 500, body: r }
+    }
+
+    if (route === '/upgrade/status') {
+      if (method !== 'GET') return { status: 405, body: { ok: false, error: '该接口只接受 GET' } }
+      const st = upgradeStatus(upgradeLogPath(libraryRoot()))
+      // ⚠️ 顺手把内存日志落盘一次（很小），让"重启后还能查上次升级为什么失败"成立。
+      //    判据：**只存内存的状态，重启后界面会撒谎**（本项目记过这条）。
+      if (st.log !== '') appendLogFile(st.logFile, st.log)
+      return { status: 200, body: { ok: true, ...st } }
     }
 
     return { status: 404, body: { ok: false, error: `未知的 API 路径：${route}` } }

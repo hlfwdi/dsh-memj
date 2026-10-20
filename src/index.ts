@@ -724,6 +724,13 @@ export function apply(ctx: Context, config: MemjConfig = DEFAULT_CONFIG): void {
       //      原文 `1mpx8by` vs 渲染后 `191ccmm`）。
       //    ⚠️ 同样是"两份清单"的坑：漏注册 ⇒ 块清单拿不到 ⇒ **标记与工具条全废**。
       `${API_BASE}/reading/blocks`,
+      // ⭐⭐⭐ **面板内升级**（2026-10-20，用户要求）——查新版 / 执行升级 / 看进度。
+      //    🔴 **漏注册 ⇒ 请求落到 SPA 兜底、返回 HTML** ⇒ 前端 JSON.parse 失败
+      //       ⇒ 头部的「检测到有新版本」永远不出现，而服务端**毫无异常**。
+      //       这是本项目第 N 次踩同一个形状（`/models`、`/archived`、`/asset`…）。
+      `${API_BASE}/update`,
+      `${API_BASE}/upgrade`,
+      `${API_BASE}/upgrade/status`,
       // ⚠️ 探针路由**不在这里**注册——它有自己的 handler，见下面单独的
       //    `webServer.register`。🔴 我第一版**两处都注册了** ⇒
       //    `duplicate exact route` ⇒ **整个插件 apply 抛错、实例起不来**
@@ -788,6 +795,11 @@ export * from './store.ts'
 //    ⚠️ 它被 `api.ts`（`/api/reading/*`）与后续的 `sync.ts` 静态 import
 //    ⇒ 与 `store.ts`/`edit.ts` 同批导出（那两条也是这个理由）。
 export * from './reading.ts'
+// ⭐⭐⭐ **面板内升级**（2026-10-20）：`cmpVer` / `buildUpgradeArgs` / `detectProfile`
+//    全是**纯函数** ⇒ `scripts/test-upgrade.mjs` 要直接调它们做离线断言
+//    （版本比较的边界、`--registry=` 的等号形式、profile 探测）。
+//    ⚠️ `startUpgrade` 会真的 spawn 一个子进程 ⇒ 测试**不要**调它。
+export * from './upgrade.ts'
 // ⭐⭐⭐ 「文档内提问」的**轮末同步**（2026-10-14）：turn/end ⇒ readSurface ⇒ 按游标取增量
 //    ⇒ 只取 text block ⇒ 追加进 chat 条目。
 //    ⚠️ 它被 `index.ts` 的 `apply()` 静态 import（挂 session/event 监听）

@@ -98,6 +98,61 @@ h1 { margin: 0; font-size: 17px; font-weight: 650; }
 
 .stat { color: var(--fg-dim); font-size: 12px; font-variant-numeric: tabular-nums; }
 
+/* ⭐⭐⭐ 面板内升级的头部入口（2026-10-20，用户要求：放"基础信息的右边"）。
+ *  ⚠️ 参照 bili-scroll 顶栏那个「检测到有新版本」胶囊：
+ *    · **只在真有新版时才有内容**（空着就完全不占视觉重量 —— 但它仍是 flex 项，
+ *      所以 `.upd-slot:empty { display:none }` 是必需的，否则 `gap` 会多留一道缝）；
+ *    · 深底白字（与官方主按钮同色系），因为它是**需要你动手**的提示，
+ *      不该和灰色的 `.stat` 混在一起。 */
+.upd-slot { display: inline-flex; align-items: center; }
+.upd-slot:empty { display: none; }
+
+/* ⚠️ `.brand` 是 `align-items: baseline` —— 胶囊按钮没有文字基线对齐的概念，
+ *    会被拉到行底。这里单独给它 `align-self: center` 盖掉。 */
+.upd-badge {
+  align-self: center;
+  appearance: none;
+  border: none;
+  cursor: pointer;
+  /* 与官方品牌主色一致（近黑；暗色主题下由 --accent 令牌接管） */
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.upd-badge:hover { opacity: .88; }
+.upd-badge:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ── 升级弹窗 ─────────────────────────────────────────────────────────────
+ * ⚠️ 给原生 `dialog` 写 display 时必须同时处理 `:not([open])`，
+ *    否则关闭后会从"居中模态"变成"左上角普通块"（本项目踩过）。 */
+dialog.upd-dlg { border: 1px solid var(--border); border-radius: 10px; padding: 0; max-width: 620px; width: calc(100% - 40px); background: var(--bg); color: var(--fg); }
+dialog.upd-dlg:not([open]) { display: none; }
+dialog.upd-dlg::backdrop { background: rgba(0, 0, 0, .38); }
+.upd-body { padding: 18px 20px 16px; display: flex; flex-direction: column; gap: 10px; }
+.upd-title { margin: 0; font-size: 15px; font-weight: 650; }
+.upd-line { font-size: 14px; }
+.upd-log-title { margin-top: 4px; }
+.upd-log {
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 11.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.upd-foot { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; flex-wrap: wrap; }
+
 .tabs { display: flex; gap: 2px; padding: 0 14px; }
 
 /* 标签栏 + 右侧设置齿轮同处一行（决策 97）。 */
@@ -269,6 +324,12 @@ main { flex: 1 1 auto; min-height: 0; display: flex; }
      它在窄屏会折成两三行、把页头撑高。
      🔴 **是"隐藏"不是"删除"**：那是桌面端信息，宽屏照旧显示。 */
   .brand .stat { display: none; }
+  /* ⚠️ **升级徽章不跟着 `.stat` 一起藏**（它是"要你动手"的提示，不是概况数字）——
+   *    但窄屏要**缩短文案**：长胶囊会把标题挤成一团。
+   *    ⚠️ 只缩字号与内边距，**不改 `textContent`**（改文案要动 JS，两处必然漂移）。 */
+  .brand { gap: 8px; }
+  .brand .upd-slot { margin-left: auto; }
+  .upd-badge { font-size: 11px; padding: 1px 8px; max-width: 46vw; overflow: hidden; text-overflow: ellipsis; }
   .brand { gap: 0; padding: 10px 14px 6px; }
   /* ② **一级标签横向可滑**；🔴 **齿轮不参与滑动** ⇒ 滑动只加在 `.tabs` 上，
         不能加在共同父 `.tabbar` 上（那样齿轮会被一起滚走）。 */
